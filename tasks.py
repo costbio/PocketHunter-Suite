@@ -516,11 +516,12 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
         'python', POCKETHUNTER_CLI,
         'cluster_pockets',
         '--infile', pockets_csv_path_abs,
-        '--outfolder', os.path.abspath(output_clusters_dir), 
+        '--outfolder', os.path.abspath(output_clusters_dir),
         '--min_prob', str(min_prob),
-        '--method', clustering_method
+        '--method', clustering_method,
+        '--overwrite'
     ]
-    
+
     if clustering_method == 'dbscan' and dbscan_hierarchical:
         command.append('--hierarchical')
     

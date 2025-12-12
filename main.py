@@ -28,79 +28,164 @@ st.set_page_config(
     }
 )
 
-# Custom CSS for modern design
+# Custom CSS for theme-compatible design with molecular dynamics aesthetic
 st.markdown("""
 <style>
+    /* Molecular dynamics color palette - adapts to theme */
+    :root {
+        --pocket-primary: #2E7D32;
+        --pocket-secondary: #1565C0;
+        --pocket-accent: #F57C00;
+        --success-bg: rgba(46, 125, 50, 0.15);
+        --error-bg: rgba(198, 40, 40, 0.15);
+        --info-bg: rgba(21, 101, 192, 0.15);
+        --border-opacity: 0.2;
+    }
+
+    /* Main header - molecular structure inspired */
     .main-header {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
+        background: linear-gradient(135deg,
+            var(--pocket-primary) 0%,
+            var(--pocket-secondary) 50%,
+            var(--pocket-accent) 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
         margin-bottom: 2rem;
         color: white;
         text-align: center;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.1);
     }
+
+    /* Metric cards - theme adaptive with subtle molecular grid pattern */
     .metric-card {
-        background: white;
+        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.5);
+        backdrop-filter: blur(10px);
         padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        border-left: 4px solid #667eea;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        border-left: 4px solid var(--pocket-primary);
+        border-top: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), var(--border-opacity));
         margin: 1rem 0;
-    }
-    .status-success {
-        background: linear-gradient(90deg, #56ab2f 0%, #a8e6cf 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-    }
-    .status-error {
-        background: linear-gradient(90deg, #ff416c 0%, #ff4b2b 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-    }
-    .status-info {
-        background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-    }
-    .upload-area {
-        border: 2px dashed #667eea;
-        border-radius: 10px;
-        padding: 2rem;
-        text-align: center;
-        background: #f8f9fa;
-        margin: 1rem 0;
-    }
-    .stButton > button {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 25px;
-        padding: 0.5rem 2rem;
-        font-weight: bold;
         transition: all 0.3s ease;
     }
-    .stButton > button:hover {
+
+    .metric-card:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     }
-    .sidebar .sidebar-content {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+
+    /* Status indicators - theme adaptive */
+    .status-success {
+        background: var(--success-bg);
+        border: 1px solid rgba(46, 125, 50, 0.3);
+        color: var(--text-color);
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border-left: 4px solid #2E7D32;
     }
+
+    .status-error {
+        background: var(--error-bg);
+        border: 1px solid rgba(198, 40, 40, 0.3);
+        color: var(--text-color);
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border-left: 4px solid #C62828;
+    }
+
+    .status-info {
+        background: var(--info-bg);
+        border: 1px solid rgba(21, 101, 192, 0.3);
+        color: var(--text-color);
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border-left: 4px solid #1565C0;
+    }
+
+    /* Upload area - molecular pocket visualization inspired */
+    .upload-area {
+        border: 2px dashed var(--pocket-primary);
+        border-radius: 12px;
+        padding: 2rem;
+        text-align: center;
+        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3);
+        margin: 1rem 0;
+        transition: all 0.3s ease;
+    }
+
+    .upload-area:hover {
+        border-color: var(--pocket-accent);
+        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.5);
+    }
+
+    /* Job ID display - monospace with molecular theme */
     .job-id-display {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg,
+            var(--pocket-primary) 0%,
+            var(--pocket-secondary) 100%);
         color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 5px;
-        font-family: monospace;
+        padding: 0.75rem 1.25rem;
+        border-radius: 8px;
+        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
         font-size: 0.9rem;
         margin: 0.5rem 0;
         display: inline-block;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        letter-spacing: 0.5px;
+    }
+
+    /* Enhanced metrics for molecular data */
+    .stMetric {
+        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3);
+        padding: 0.5rem;
+        border-radius: 8px;
+        border: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), 0.1);
+    }
+
+    /* Navigation menu theme compatibility */
+    nav[data-testid="stHorizontalBlock"] {
+        background: transparent !important;
+    }
+
+    /* Option menu container - theme adaptive */
+    [class*="nav-link"] {
+        color: var(--text-color) !important;
+        background-color: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3) !important;
+        border: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), 0.1) !important;
+        transition: all 0.3s ease !important;
+    }
+
+    [class*="nav-link"]:hover {
+        background-color: rgba(var(--pocket-primary), 0.1) !important;
+        border-color: var(--pocket-primary) !important;
+    }
+
+    /* Selected nav link - visible in both themes */
+    [class*="nav-link-selected"] {
+        background: linear-gradient(135deg, var(--pocket-primary) 0%, var(--pocket-secondary) 100%) !important;
+        color: white !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    }
+
+    /* Nav icons - theme adaptive */
+    [class*="nav-link"] svg {
+        color: var(--text-color) !important;
+        opacity: 0.7;
+    }
+
+    [class*="nav-link-selected"] svg {
+        color: white !important;
+        opacity: 1;
+    }
+
+    /* Menu container background */
+    .css-1544g2n, [data-testid="stVerticalBlock"] > div:first-child {
+        background: transparent !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -144,26 +229,30 @@ pages = {
     "Task Monitor": "task_monitor_app.py"
 }
 
-# Horizontal menu
+# Horizontal menu - styles handled by CSS for theme compatibility
 selected = option_menu(
-    None, 
-    list(pages.keys()), 
-    icons=['file-earmark-arrow-down', 'search', 'diagram-3', 'flask', 'activity'], 
-    menu_icon="cast", 
-    default_index=0, 
+    None,
+    list(pages.keys()),
+    icons=['file-earmark-arrow-down', 'search', 'diagram-3', 'flask', 'activity'],
+    menu_icon="cast",
+    default_index=0,
     orientation="horizontal",
     styles={
-        "container": {"padding": "0!important", "background-color": "#fafafa"},
-        "icon": {"color": "#667eea", "font-size": "18px"}, 
-        "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px", "--hover-color": "#667eea"},
-        "nav-link-selected": {"background-color": "#667eea"},
+        "container": {"padding": "0!important", "background-color": "transparent"},
+        "icon": {"font-size": "18px"},
+        "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px"},
+        "nav-link-selected": {},
     }
 )
 
 # Get the corresponding file
 selected_file = pages[selected]
 
+# Get the directory where main.py is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+selected_file_path = os.path.join(BASE_DIR, selected_file)
+
 # Execute the selected file
-with open(selected_file) as f:
+with open(selected_file_path) as f:
     code = f.read()
     exec(code) 

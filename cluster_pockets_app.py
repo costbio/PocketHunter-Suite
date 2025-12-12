@@ -201,17 +201,21 @@ with col2:
         options=["dbscan", "hierarchical"],
         index=0,
         key="cluster_method",
-        help="Method for clustering detected pockets"
+        help="DBSCAN: Density-based clustering optimized for molecular pockets | Hierarchical: Tree-based clustering with distance threshold"
     )
 
-# Advanced options
-st.markdown("#### Advanced Options")
-dbscan_hierarchical = st.checkbox(
-    "DBSCAN + Hierarchical Clustering",
-    value=True,
-    key="cluster_dbscan_hierarchical",
-    help="Apply hierarchical clustering within DBSCAN clusters for finer resolution"
-)
+# Advanced options - only show for DBSCAN
+if clustering_method == "dbscan":
+    st.markdown("#### Advanced Options")
+    dbscan_hierarchical = st.checkbox(
+        "Enable Hierarchical Refinement",
+        value=True,
+        key="cluster_dbscan_hierarchical",
+        help="Apply hierarchical sub-clustering within each DBSCAN cluster for finer pocket grouping"
+    )
+else:
+    # For hierarchical method, this option doesn't apply
+    dbscan_hierarchical = False
 
 # Run button
 st.markdown("---")
