@@ -393,7 +393,13 @@ if show_progress:
     # Show warning if task is taking too long (only for running tasks)
     if task_state == 'PROGRESS' and progress_percent < 50 and 'elapsed' in progress_info and progress_info['elapsed'] > 300:  # 5 minutes
         st.warning("⚠️ Task is taking longer than expected. This might indicate an issue with the input files or system resources.")
-    
+
+    # Auto-refresh logic for running tasks - keep UI updating
+    if task_state in ['PROGRESS', 'PENDING']:
+        import time
+        time.sleep(2)  # Wait 2 seconds between updates
+        st.rerun()
+
     # IMMEDIATE completion detection - check if task is ready and update status
 if st.session_state.cluster_task_id and task and task.ready():
     if task.successful():
@@ -511,12 +517,6 @@ elif st.session_state.cluster_job_id and st.session_state.cluster_status != 'com
                 st.write("**No active task ID**")
                 st.write(f"**Session Status:** {st.session_state.cluster_status}")
                 st.write(f"**Job ID:** {st.session_state.cluster_job_id}")
-        
-        # Auto-refresh logic for running tasks
-        if st.session_state.cluster_task_id and task_state == 'PROGRESS':
-            import time
-            time.sleep(0.1)  # Very short sleep for quick detection
-            st.rerun()
 
 # Handle completed tasks that don't have task_id anymore
 elif st.session_state.cluster_status == 'completed' and st.session_state.cluster_job_id:
