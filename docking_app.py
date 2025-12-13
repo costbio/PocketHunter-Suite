@@ -170,15 +170,23 @@ with st.sidebar:
 # Main content area
 st.markdown("### 🎯 Job Configuration")
 
-# Generate job ID
-job_id = f"docking_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+# Generate job ID once and store in session state
+if 'docking_display_job_id' not in st.session_state:
+    st.session_state.docking_display_job_id = f"docking_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+job_id = st.session_state.docking_display_job_id
 
-# Display job ID
-st.markdown(f"""
-<div class="job-id-display">
-    <strong>🎯 Job ID:</strong> {job_id}
-</div>
-""", unsafe_allow_html=True)
+# Display job ID with reset button
+col_id, col_reset = st.columns([4, 1])
+with col_id:
+    st.markdown(f"""
+    <div class="job-id-display">
+        <strong>🎯 Job ID:</strong> {job_id}
+    </div>
+    """, unsafe_allow_html=True)
+with col_reset:
+    if st.button("🔄 New Job", help="Generate a new job ID for a fresh docking configuration"):
+        st.session_state.docking_display_job_id = f"docking_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
+        st.rerun()
 
 st.info("💡 **Save this Job ID** - you can use it to monitor progress in the Task Monitor page!")
 
