@@ -8,14 +8,16 @@ import uuid
 import zipfile
 from tasks import run_detect_pockets_task
 from celery_app import celery_app
+from config import Config
+from security import handle_file_upload_secure, SecurityError, FileValidator
+from logging_config import setup_logging
 
-# Base directories
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
+# Use Config for directories
+UPLOAD_DIR = str(Config.UPLOAD_DIR)
+RESULTS_DIR = str(Config.RESULTS_DIR)
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
+# Setup logging
+logger = setup_logging(__name__)
 
 # Session state initialization
 if 'detect_job_id' not in st.session_state:
@@ -26,21 +28,18 @@ if 'detect_status' not in st.session_state:
     st.session_state.detect_status = 'idle'
 
 # Helper functions
-def handle_file_upload(uploaded_file, job_id, filename_prefix=""):
-    if uploaded_file is not None:
-        job_upload_dir = os.path.join(UPLOAD_DIR, job_id)
-        os.makedirs(job_upload_dir, exist_ok=True)
-        
-        target_filename = filename_prefix + uploaded_file.name
-        filepath = os.path.join(job_upload_dir, target_filename)
-        
-        with open(filepath, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        return filepath
-    return None
+# Note: Using secure upload handler from security.py
 
 def extract_zip_to_directory(zip_path, extract_dir):
-    """Extract ZIP file to directory and return list of PDB files"""
+    """Extract ZIP file to directory and return list of PDB files (WITH SECURITY VALIDATION)"""
+    from pathlib import Path
+    # Validate ZIP before extraction
+    try:
+        FileValidator.validate_zip_file(Path(zip_path))
+        logger.info(f"ZIP file validated: {zip_path}")
+    except SecurityError as e:
+        logger.error(f"ZIP validation failed: {e}")
+        raise
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_dir)
     
@@ -156,8 +155,15 @@ if st.button("🚀 Start Pocket Detection", type="primary", use_container_width=
         job_id = f"detect_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         extract_dir = os.path.join(UPLOAD_DIR, job_id, "extracted_pdbs")
         os.makedirs(extract_dir, exist_ok=True)
-        
-        zip_path = handle_file_upload(pdb_zip, job_id, "pdbs_")
+
+        # Upload and validate ZIP file
+        try:
+            zip_path = handle_file_upload_secure(pdb_zip, job_id, "pdbs_")
+            logger.info(f"ZIP file uploaded for job {job_id}")
+        except SecurityError as e:
+            st.error(f"❌ File upload failed: {e}")
+            logger.error(f"Security error during ZIP upload for job {job_id}: {e}")
+            st.stop()
         if zip_path:
             pdb_files = extract_zip_to_directory(zip_path, extract_dir)
             if pdb_files:

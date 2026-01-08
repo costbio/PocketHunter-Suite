@@ -9,14 +9,16 @@ import json
 import uuid
 from tasks import run_cluster_pockets_task
 from celery_app import celery_app
+from config import Config
+from security import handle_file_upload_secure, SecurityError
+from logging_config import setup_logging
 
-# Base directories
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
+# Use Config for directories
+UPLOAD_DIR = str(Config.UPLOAD_DIR)
+RESULTS_DIR = str(Config.RESULTS_DIR)
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
+# Setup logging
+logger = setup_logging(__name__)
 
 # Session state initialization
 if 'cluster_job_id' not in st.session_state:
@@ -96,18 +98,7 @@ if not st.session_state.cluster_job_id:
 
 
 # Helper functions
-def handle_file_upload(uploaded_file, job_id, filename_prefix=""):
-    if uploaded_file is not None:
-        job_upload_dir = os.path.join(UPLOAD_DIR, job_id)
-        os.makedirs(job_upload_dir, exist_ok=True)
-        
-        target_filename = filename_prefix + uploaded_file.name
-        filepath = os.path.join(job_upload_dir, target_filename)
-        
-        with open(filepath, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        return filepath
-    return None
+# Note: Using secure upload handler from security.py
 
 def update_job_status(job_id, status, step=None, task_id=None, result_info=None):
     status_file = os.path.join(RESULTS_DIR, f'{job_id}_status.json')
@@ -236,9 +227,15 @@ if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width
             st.stop()
     
     elif pockets_csv:
-        # Upload pockets.csv
+        # Upload pockets.csv with security validation
         job_id = f"cluster_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        csv_path = handle_file_upload(pockets_csv, job_id, "pockets_")
+        try:
+            csv_path = handle_file_upload_secure(pockets_csv, job_id, "pockets_")
+            logger.info(f"CSV file uploaded for job {job_id}")
+        except SecurityError as e:
+            st.error(f"❌ File upload failed: {e}")
+            logger.error(f"Security error during CSV upload for job {job_id}: {e}")
+            st.stop()
         if csv_path:
             pockets_csv_path = csv_path
             input_source = "Uploaded pockets.csv"

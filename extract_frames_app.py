@@ -7,14 +7,16 @@ import json
 import uuid
 from tasks import run_extract_to_pdb_task
 from celery_app import celery_app
+from config import Config
+from security import handle_file_upload_secure, SecurityError
+from logging_config import setup_logging
 
-# Base directories
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
+# Use Config for directories
+UPLOAD_DIR = str(Config.UPLOAD_DIR)
+RESULTS_DIR = str(Config.RESULTS_DIR)
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
+# Setup logging
+logger = setup_logging(__name__)
 
 # Session state initialization
 if 'extract_job_id' not in st.session_state:
@@ -25,18 +27,7 @@ if 'extract_status' not in st.session_state:
     st.session_state.extract_status = 'idle'
 
 # Helper functions
-def handle_file_upload(uploaded_file, job_id, filename_prefix=""):
-    if uploaded_file is not None:
-        job_upload_dir = os.path.join(UPLOAD_DIR, job_id)
-        os.makedirs(job_upload_dir, exist_ok=True)
-        
-        target_filename = filename_prefix + uploaded_file.name
-        filepath = os.path.join(job_upload_dir, target_filename)
-        
-        with open(filepath, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        return filepath
-    return None
+# Note: Using secure upload handler from security.py instead of local function
 
 def update_job_status(job_id, status, step=None, task_id=None, result_info=None):
     status_file = os.path.join(RESULTS_DIR, f'{job_id}_status.json')
@@ -155,11 +146,21 @@ if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=
         # Generate unique job ID
         job_id = f"extract_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         st.session_state.extract_job_id = job_id
-        
-        # Handle file uploads
-        xtc_path = handle_file_upload(xtc_file, job_id, "trajectory_")
-        topology_path = handle_file_upload(topology_file, job_id, "topology_")
-        
+
+        # Handle file uploads with security validation
+        try:
+            xtc_path = handle_file_upload_secure(xtc_file, job_id, "trajectory_")
+            topology_path = handle_file_upload_secure(topology_file, job_id, "topology_")
+            logger.info(f"Files uploaded successfully for job {job_id}")
+        except SecurityError as e:
+            st.error(f"❌ File upload failed: {e}")
+            logger.error(f"Security error during upload for job {job_id}: {e}")
+            st.stop()
+        except Exception as e:
+            st.error(f"❌ Unexpected error during file upload: {e}")
+            logger.error(f"Upload error for job {job_id}: {e}", exc_info=True)
+            st.stop()
+
         if xtc_path and topology_path:
             # Update status
             update_job_status(job_id, 'submitted', 'Initializing frame extraction')

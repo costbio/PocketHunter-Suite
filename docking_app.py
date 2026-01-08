@@ -11,8 +11,19 @@ import shutil
 import uuid
 import glob
 import subprocess
+from pathlib import Path
 from tasks import run_docking_task
 from celery_app import celery_app
+from config import Config
+from security import FileValidator, SecurityError
+from logging_config import setup_logging
+
+# Use Config for directories
+RESULTS_DIR = str(Config.RESULTS_DIR)
+UPLOAD_DIR = str(Config.UPLOAD_DIR)
+
+# Setup logging
+logger = setup_logging(__name__)
 
 # Page configuration is handled by main.py
 
@@ -202,7 +213,7 @@ cluster_job_id = st.text_input(
 
 if cluster_job_id:
     # Construct path to cluster representatives file
-    representatives_file = os.path.join("results", cluster_job_id, "pocket_clusters", "cluster_representatives.csv")
+    representatives_file = os.path.join(RESULTS_DIR, cluster_job_id, "pocket_clusters", "cluster_representatives.csv")
     
     if os.path.exists(representatives_file):
         st.success(f"✅ Found cluster job: {cluster_job_id}")
@@ -316,7 +327,7 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     # Create temporary directory for ligands
-    ligand_temp_dir = os.path.join("uploads", "ligands_temp")
+    ligand_temp_dir = os.path.join(UPLOAD_DIR, "ligands_temp")
     os.makedirs(ligand_temp_dir, exist_ok=True)
     
     # Process uploaded files
@@ -324,8 +335,22 @@ if uploaded_files:
     
     for uploaded_file in uploaded_files:
         if uploaded_file.name.endswith('.zip'):
-            # Extract ZIP file
-            with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
+            # Save and validate ZIP file before extraction
+            zip_temp_path = Path(ligand_temp_dir) / uploaded_file.name
+            with open(zip_temp_path, 'wb') as f:
+                f.write(uploaded_file.getbuffer())
+
+            # Validate ZIP for security threats
+            try:
+                FileValidator.validate_zip_file(zip_temp_path)
+                logger.info(f"ZIP file validated: {uploaded_file.name}")
+            except SecurityError as e:
+                st.error(f"❌ ZIP file validation failed for {uploaded_file.name}: {e}")
+                logger.error(f"ZIP validation failed: {e}")
+                continue  # Skip this file
+
+            # Safe to extract
+            with zipfile.ZipFile(zip_temp_path, 'r') as zip_ref:
                 zip_ref.extractall(ligand_temp_dir)
                 # Find PDBQT files in extracted content
                 for root, dirs, files in os.walk(ligand_temp_dir):
@@ -374,7 +399,7 @@ if uploaded_files:
             if 'selected_pdbs' in locals() and selected_pdbs:
                 # Create filtered representatives file with only selected PDBs
                 selected_df = pd.DataFrame(selected_pdbs)
-                filtered_reps_file = os.path.join("uploads", f"filtered_reps_{job_id}.csv")
+                filtered_reps_file = os.path.join(UPLOAD_DIR, f"filtered_reps_{job_id}.csv")
                 selected_df.to_csv(filtered_reps_file, index=False)
                 
                 # Start docking task with all parameters
