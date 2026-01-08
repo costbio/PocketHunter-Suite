@@ -7,12 +7,10 @@ import time
 import json
 import glob
 from celery_app import celery_app
+from config import Config
 
-# Base directories
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
-
-os.makedirs(RESULTS_DIR, exist_ok=True)
+# Use Config for directories
+RESULTS_DIR = str(Config.RESULTS_DIR)
 
 # Helper functions
 def get_all_job_statuses():
@@ -70,8 +68,32 @@ def get_job_type(job_id):
         return 'Detect Pockets'
     elif job_id.startswith('cluster'):
         return 'Cluster Pockets'
+    elif job_id.startswith('dock'):
+        return 'Molecular Docking'
     else:
         return 'Unknown'
+
+def get_related_jobs(job_id, all_jobs):
+    """Get jobs related to the given job ID (upstream and downstream)"""
+    related = set([job_id])
+
+    # Find the job data
+    job_data = next((j for j in all_jobs if j.get('job_id') == job_id), None)
+    if not job_data:
+        return related
+
+    # Extract base timestamp from job_id (format: type_YYYYMMDD_HHMMSS_hash)
+    parts = job_id.split('_')
+    if len(parts) >= 3:
+        timestamp = f"{parts[1]}_{parts[2]}"  # YYYYMMDD_HHMMSS
+
+        # Find jobs with same timestamp (they're from the same pipeline run)
+        for job in all_jobs:
+            other_id = job.get('job_id', '')
+            if timestamp in other_id:
+                related.add(other_id)
+
+    return related
 
 # Main UI
 st.markdown("""
@@ -81,15 +103,49 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Auto-refresh toggle
-auto_refresh = st.checkbox("🔄 Auto-refresh (every 5 seconds)", value=True)
+# Controls row
+col1, col2 = st.columns([3, 1])
+with col1:
+    auto_refresh = st.checkbox("🔄 Auto-refresh (every 5 seconds)", value=True)
+with col2:
+    show_all = st.checkbox("Show all jobs", value=False, help="Show all jobs instead of only cached ones")
+
+# Search section
+st.markdown("### 🔍 Search Jobs")
+search_job_id = st.text_input(
+    "Search by Job ID (shows related jobs too):",
+    placeholder="e.g., cluster_20251213_011228_4c51c6a5",
+    help="Enter a job ID to find it and all related pipeline jobs"
+)
 
 # Get all jobs
-jobs = get_all_job_statuses()
+all_jobs = get_all_job_statuses()
 
-if not jobs:
-    st.info("No tasks found. Start a new task in one of the other tabs to see it here.")
+# Filter jobs based on search or cached status
+if search_job_id:
+    # Smart search: show the searched job and all related jobs
+    related_job_ids = get_related_jobs(search_job_id, all_jobs)
+    jobs = [job for job in all_jobs if job.get('job_id', '') in related_job_ids]
+
+    if not jobs:
+        st.warning(f"❌ Job ID '{search_job_id}' not found.")
+    else:
+        st.success(f"✅ Found {len(jobs)} related job(s)")
+elif show_all:
+    # Show all jobs
+    jobs = all_jobs
 else:
+    # Show only cached jobs (jobs from current session)
+    cached_job_ids = st.session_state.get('cached_job_ids', {})
+    cached_ids_list = list(cached_job_ids.values())
+    jobs = [job for job in all_jobs if job.get('job_id', '') in cached_ids_list]
+
+    if not jobs and cached_ids_list:
+        st.info("💡 No cached jobs found in results directory. They may have been deleted.")
+    elif not cached_ids_list:
+        st.info("💡 No cached jobs yet. Run tasks in other steps to see them here, or check 'Show all jobs' to view everything.")
+
+if jobs:
     # Create DataFrame for display
     job_data = []
     for job in jobs:
@@ -141,24 +197,34 @@ else:
     
     # Display summary metrics
     st.markdown("### 📈 Summary")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
     with col1:
-        total_jobs = len(df)
-        st.metric("Total Tasks", total_jobs)
-    
+        # Show current view mode
+        if search_job_id:
+            st.metric("View Mode", "Search")
+        elif show_all:
+            st.metric("View Mode", "All Jobs")
+        else:
+            cached_count = len(st.session_state.get('cached_job_ids', {}).values())
+            st.metric("Cached Jobs", cached_count)
+
     with col2:
-        running_jobs = len(df[df['Status'].isin(['running', 'submitted'])])
-        st.metric("Running Tasks", running_jobs)
-    
+        total_jobs = len(df)
+        st.metric("Showing", total_jobs)
+
     with col3:
-        completed_jobs = len(df[df['Status'] == 'completed'])
-        st.metric("Completed Tasks", completed_jobs)
-    
+        running_jobs = len(df[df['Status'].isin(['running', 'submitted'])])
+        st.metric("Running", running_jobs)
+
     with col4:
+        completed_jobs = len(df[df['Status'] == 'completed'])
+        st.metric("Completed", completed_jobs)
+
+    with col5:
         failed_jobs = len(df[df['Status'] == 'failed'])
-        st.metric("Failed Tasks", failed_jobs)
+        st.metric("Failed", failed_jobs)
     
     # Display tasks table
     st.markdown("### 📋 Task Details")
