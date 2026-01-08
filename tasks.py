@@ -1,19 +1,22 @@
 import subprocess
 import os
 import uuid
-import shutil 
+import shutil
 import json
-from celery_app import celery_app 
+from celery_app import celery_app
 import time
 from datetime import datetime
 import pandas as pd
+from config import Config
+from logging_config import setup_logging
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-POCKETHUNTER_DIR = os.path.join(BASE_DIR, 'PocketHunter')
-POCKETHUNTER_CLI = os.path.join(POCKETHUNTER_DIR, 'pockethunter.py')
-RESULTS_DIR = os.path.join(BASE_DIR, 'results')
+# Use Config for all paths
+POCKETHUNTER_DIR = str(Config.POCKETHUNTER_DIR)
+POCKETHUNTER_CLI = str(Config.POCKETHUNTER_CLI)
+RESULTS_DIR = str(Config.RESULTS_DIR)
 
-os.makedirs(RESULTS_DIR, exist_ok=True)
+# Setup logging
+logger = setup_logging(__name__)
 
 @celery_app.task(bind=True)
 def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=4, min_prob=0.5, clustering_method='dbscan'):
@@ -114,8 +117,9 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
                 try:
                     df = pd.read_csv(pockets_csv)
                     results_overview['pockets_detected'] = len(df)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Could not read pockets.csv: {e}")
+                    results_overview['pockets_detected'] = 0
             
             clustered_csv = os.path.join(output_folder_job, 'pocket_clusters', 'pockets_clustered.csv')
             if os.path.exists(clustered_csv):
@@ -123,8 +127,9 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
                 try:
                     df = pd.read_csv(clustered_csv)
                     results_overview['clusters_found'] = df['cluster_id'].nunique() if 'cluster_id' in df.columns else 0
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Could not read clustered CSV: {e}")
+                    results_overview['clusters_found'] = 0
             
             reps_csv = os.path.join(output_folder_job, 'pocket_clusters', 'cluster_representatives.csv')
             if os.path.exists(reps_csv):
@@ -132,8 +137,9 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
                 try:
                     df = pd.read_csv(reps_csv)
                     results_overview['representatives'] = len(df)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Could not read representatives CSV: {e}")
+                    results_overview['representatives'] = 0
             
             self.update_state(state='SUCCESS', meta=results_overview)
             return results_overview
@@ -438,7 +444,8 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
                 try:
                     df = pd.read_csv(pockets_csv_abs)
                     pockets_detected = len(df)
-                except:
+                except Exception as e:
+                    logger.warning(f"Could not read pockets CSV for detect task: {e}")
                     pockets_detected = 0
             
             # Final success update
