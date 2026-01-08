@@ -245,14 +245,27 @@ selected = option_menu(
     }
 )
 
-# Get the corresponding file
-selected_file = pages[selected]
+# Get the corresponding file and import it safely
+import importlib
 
-# Get the directory where main.py is located
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-selected_file_path = os.path.join(BASE_DIR, selected_file)
+# Map page names to module names (without .py extension)
+PAGE_MODULES = {
+    "Step 1: Extract Frames": "extract_frames_app",
+    "Step 2: Detect Pockets": "detect_pockets_app",
+    "Step 3: Cluster Pockets": "cluster_pockets_app",
+    "Step 4: Molecular Docking": "docking_app",
+    "Task Monitor": "task_monitor_app"
+}
 
-# Execute the selected file
-with open(selected_file_path) as f:
-    code = f.read()
-    exec(code) 
+# Import and execute the selected module
+if selected in PAGE_MODULES:
+    module_name = PAGE_MODULES[selected]
+    try:
+        # Import the module dynamically (SAFE - no exec())
+        importlib.import_module(module_name)
+    except ImportError as e:
+        st.error(f"Failed to load page '{selected}': {e}")
+        st.stop()
+else:
+    st.error(f"Unknown page: {selected}")
+    st.stop() 
