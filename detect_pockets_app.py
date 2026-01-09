@@ -1,6 +1,8 @@
 import streamlit as st
 import os
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 import time
 import json
@@ -11,6 +13,9 @@ from celery_app import celery_app
 from config import Config
 from security import handle_file_upload_secure, SecurityError, FileValidator
 from logging_config import setup_logging
+import py3Dmol
+import streamlit.components.v1 as components
+from pathlib import Path
 
 # Use Config for directories
 UPLOAD_DIR = str(Config.UPLOAD_DIR)
@@ -18,6 +23,137 @@ RESULTS_DIR = str(Config.RESULTS_DIR)
 
 # Setup logging
 logger = setup_logging(__name__)
+
+# Custom CSS for enhanced UI
+st.markdown("""
+<style>
+    .detect-header {
+        background: linear-gradient(135deg, #66BB6A 0%, #43A047 50%, #2E7D32 100%);
+        padding: 2rem;
+        border-radius: 20px;
+        margin-bottom: 2rem;
+        color: white;
+        text-align: center;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+
+    .detect-header h1 {
+        margin: 0;
+        font-size: 2.5rem;
+        font-weight: 700;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .detect-card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        padding: 2rem;
+        border-radius: 15px;
+        box-shadow: 0 8px 32px rgba(31, 38, 135, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        margin: 1.5rem 0;
+        transition: all 0.3s ease;
+    }
+
+    .detect-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 48px rgba(31, 38, 135, 0.2);
+    }
+
+    .metric-card {
+        background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+    }
+
+    .metric-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    }
+
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #2E7D32;
+        margin: 0.5rem 0;
+    }
+
+    .metric-label {
+        font-size: 0.9rem;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .job-id-display {
+        background: linear-gradient(135deg, #66BB6A 0%, #43A047 100%);
+        color: white;
+        padding: 1.2rem;
+        border-radius: 15px;
+        font-family: 'Courier New', monospace;
+        font-size: 1.1rem;
+        text-align: center;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 20px rgba(102, 187, 106, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .pocket-badge {
+        display: inline-block;
+        padding: 0.4rem 1rem;
+        border-radius: 25px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .pocket-high {
+        background: linear-gradient(135deg, #66BB6A 0%, #43A047 100%);
+        color: white;
+    }
+
+    .pocket-medium {
+        background: linear-gradient(135deg, #FDD835 0%, #FBC02D 100%);
+        color: white;
+    }
+
+    .pocket-low {
+        background: linear-gradient(135deg, #FF7043 0%, #F4511E 100%);
+        color: white;
+    }
+
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        background-color: #E8F5E9;
+        border-radius: 10px;
+        padding: 0 24px;
+        font-weight: 600;
+    }
+
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #66BB6A 0%, #43A047 100%);
+        color: white;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Header
+st.markdown("""
+<div class="detect-header">
+    <h1>🔍 Step 2: Pocket Detection</h1>
+    <p style="font-size: 1.2rem; margin-top: 0.5rem;">Identify ligand-binding pockets in protein structures</p>
+</div>
+""", unsafe_allow_html=True)
 
 # Session state initialization
 if 'detect_job_id' not in st.session_state:
@@ -27,12 +163,13 @@ if 'detect_task_id' not in st.session_state:
 if 'detect_status' not in st.session_state:
     st.session_state.detect_status = 'idle'
 
-# Helper functions
-# Note: Using secure upload handler from security.py
+# Initialize cached_job_ids if not exists
+if 'cached_job_ids' not in st.session_state:
+    st.session_state.cached_job_ids = {}
 
+# Helper functions
 def extract_zip_to_directory(zip_path, extract_dir):
     """Extract ZIP file to directory and return list of PDB files (WITH SECURITY VALIDATION)"""
-    from pathlib import Path
     # Validate ZIP before extraction
     try:
         FileValidator.validate_zip_file(Path(zip_path))
@@ -40,16 +177,17 @@ def extract_zip_to_directory(zip_path, extract_dir):
     except SecurityError as e:
         logger.error(f"ZIP validation failed: {e}")
         raise
+
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_dir)
-    
+
     # Find all PDB files
     pdb_files = []
     for root, dirs, files in os.walk(extract_dir):
         for file in files:
             if file.endswith('.pdb'):
                 pdb_files.append(os.path.join(root, file))
-    
+
     return pdb_files
 
 def update_job_status(job_id, status, step=None, task_id=None, result_info=None):
@@ -61,7 +199,7 @@ def update_job_status(job_id, status, step=None, task_id=None, result_info=None)
                 current_status = json.load(f)
             except json.JSONDecodeError:
                 current_status = {}
-    
+
     current_status['status'] = status
     if step:
         current_status['step'] = step
@@ -70,439 +208,548 @@ def update_job_status(job_id, status, step=None, task_id=None, result_info=None)
     if result_info:
         current_status['result_info'] = result_info
     current_status['last_updated'] = datetime.now().isoformat()
-    
+
     with open(status_file, 'w') as f:
         json.dump(current_status, f, indent=4)
 
-# Main UI
-st.markdown("""
-<div class="metric-card">
-    <h2>🔍 Step 2: Detect Pockets</h2>
-    <p>Detect potential ligand-binding pockets from PDB structure files</p>
-</div>
-""", unsafe_allow_html=True)
-
-# Display current job ID if exists
-if st.session_state.detect_job_id:
-    st.markdown(f"""
-    <div class="job-id-display">
-        🔑 Current Job ID: {st.session_state.detect_job_id}
-    </div>
-    """, unsafe_allow_html=True)
-    st.info("💡 Copy this Job ID to use in Step 3: Cluster Pockets")
-
-# Input options
-st.markdown("### 📁 Input Options")
-
-# Option 1: Use previous step results
-st.markdown("#### Option 1: Use Previous Step Results")
-# Use cached job ID if available
-cached_extract_id = st.session_state.cached_job_ids.get('extract', '')
-extract_job_id = st.text_input(
-    "Enter Job ID from Step 1 (Extract Frames):",
-    value=cached_extract_id,
-    key="detect_extract_job_id",
-    help="Enter the Job ID from the previous frame extraction step"
-)
-
-# Option 2: Upload PDB files
-st.markdown("#### Option 2: Upload PDB Files")
-pdb_zip = st.file_uploader(
-    "Upload PDB Files (as ZIP archive)",
-    type=['zip'],
-    key="detect_pdb_zip",
-    help="Upload a ZIP file containing PDB structure files"
-)
-
-# Option 3: Manual path
-st.markdown("#### Option 3: Manual Directory Path")
-manual_pdb_path = st.text_input(
-    "Enter path to PDB directory on server:",
-    key="detect_manual_path",
-    help="Enter the full path to a directory containing PDB files"
-)
-
-# Parameters
-st.markdown("### ⚙️ Detection Parameters")
-
-num_threads = st.number_input(
-    "Number of Threads",
-    min_value=1,
-    value=4,
-    key="detect_threads",
-    help="Number of CPU threads to use for pocket detection"
-)
-
-# Run button
-st.markdown("---")
-if st.button("🚀 Start Pocket Detection", type="primary", use_container_width=True):
-    # Determine input source
-    input_pdb_path = None
-    input_source = None
-    
-    if extract_job_id:
-        # Use results from previous step
-        extract_output_dir = os.path.join(RESULTS_DIR, extract_job_id, "pdbs")
-        if os.path.exists(extract_output_dir) and os.listdir(extract_output_dir):
-            input_pdb_path = extract_output_dir
-            input_source = f"Step 1 results (Job ID: {extract_job_id})"
-        else:
-            st.error(f"PDB files not found for Job ID: {extract_job_id}")
-            st.stop()
-    
-    elif pdb_zip:
-        # Extract uploaded ZIP
-        job_id = f"detect_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        extract_dir = os.path.join(UPLOAD_DIR, job_id, "extracted_pdbs")
-        os.makedirs(extract_dir, exist_ok=True)
-
-        # Upload and validate ZIP file
-        try:
-            zip_path = handle_file_upload_secure(pdb_zip, job_id, "pdbs_")
-            logger.info(f"ZIP file uploaded for job {job_id}")
-        except SecurityError as e:
-            st.error(f"❌ File upload failed: {e}")
-            logger.error(f"Security error during ZIP upload for job {job_id}: {e}")
-            st.stop()
-        if zip_path:
-            pdb_files = extract_zip_to_directory(zip_path, extract_dir)
-            if pdb_files:
-                input_pdb_path = extract_dir
-                input_source = f"Uploaded ZIP ({len(pdb_files)} PDB files)"
-            else:
-                st.error("No PDB files found in uploaded ZIP")
-                st.stop()
-    
-    elif manual_pdb_path and os.path.exists(manual_pdb_path):
-        input_pdb_path = manual_pdb_path
-        input_source = f"Manual path: {manual_pdb_path}"
-    
-    else:
-        st.error("Please provide input PDB files using one of the three options above.")
-        st.stop()
-    
-    if input_pdb_path:
-        # Generate unique job ID
-        job_id = f"detect_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-        st.session_state.detect_job_id = job_id
-        
-        # Update status
-        update_job_status(job_id, 'submitted', 'Initializing pocket detection')
-        st.session_state.detect_status = 'running'
-        
-        # Start the detection
-        with st.spinner("Starting pocket detection..."):
-            task = run_detect_pockets_task.delay(
-                input_pdb_path_abs=os.path.abspath(input_pdb_path),
-                job_id=job_id,
-                numthreads=num_threads
-            )
-            st.session_state.detect_task_id = task.id
-            update_job_status(job_id, 'running', 'Pocket detection started', task_id=task.id)
-            
-        st.success(f"Pocket detection started! Job ID: {job_id}")
-        st.info(f"Input source: {input_source}")
-        st.info("Monitor progress below or in the Task Monitor tab.")
-
-# Status monitoring
-if st.session_state.detect_task_id:
-    st.markdown("### 📊 Detection Status")
-    
+def show_molecule_3d(pdb_path, width=800, height=600, style="cartoon"):
+    """Display 3D molecular structure using py3Dmol"""
     try:
-        task = celery_app.AsyncResult(st.session_state.detect_task_id)
+        with open(pdb_path, 'r') as f:
+            pdb_data = f.read()
+
+        view = py3Dmol.view(width=width, height=height)
+        view.addModel(pdb_data, 'pdb')
+
+        if style == "cartoon":
+            view.setStyle({'cartoon': {'color': 'spectrum'}})
+        elif style == "surface":
+            view.setStyle({'surface': {'opacity': 0.7, 'color': 'spectrum'}})
+        elif style == "stick":
+            view.setStyle({'stick': {'colorscheme': 'spectrum'}})
+
+        view.zoomTo()
+        view.spin(False)
+
+        html = f"""
+        <div style="border-radius: 15px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
+            {view._make_html()}
+        </div>
+        """
+        components.html(html, height=height+50, scrolling=False)
     except Exception as e:
-        st.error(f"Error checking task status: {str(e)}")
-        st.session_state.detect_task_id = None
-        st.session_state.detect_status = 'failed'
-        st.stop()
-    
-    # BULLETPROOF: ALWAYS show progress bar if there's any task activity - NEVER let it disappear!
-    show_progress = False
-    progress_info = {}
-    current_step = "Processing..."
-    progress_percent = 0
-    status = "Running..."
-    task_state = "UNKNOWN"
-    
-    # Check if we have a task ID
-    if st.session_state.detect_task_id:
-        show_progress = True
-        task = celery_app.AsyncResult(st.session_state.detect_task_id)
-        progress_info = task.info or {}
-        current_step = progress_info.get('current_step', 'Processing...')
-        progress_percent = progress_info.get('progress', 0)
-        status = progress_info.get('status', 'Running...')
-        task_state = task.state
-    
-    # Check if status is running (fallback)
-    elif st.session_state.detect_status == 'running':
-        show_progress = True
-        progress_percent = 50  # Default to 50% if we don't know
-        status = "Running..."
-        task_state = "PROGRESS"
-    
-    # Check if we have a job ID and status is completed (show results with progress bar)
-    elif st.session_state.detect_job_id and st.session_state.detect_status == 'completed':
-        show_progress = True
-        progress_percent = 100
-        current_step = "Pocket detection completed successfully!"
-        status = "Completed"
-        task_state = "SUCCESS"
-    
-    # If we should show progress, ALWAYS show it
-    if show_progress:
-        # Status indicator based on task state
-        if task_state == 'PENDING':
-            st.markdown('<div class="status-info">⏳ Pocket detection is queued and waiting to start...</div>', unsafe_allow_html=True)
-            # Set initial progress for pending tasks
-            progress_percent = 0
-            current_step = "Waiting to start..."
-            status = "Queued..."
-        elif task_state == 'PROGRESS':
-            st.markdown(f'<div class="status-info">🔄 Pocket detection is running: {current_step}</div>', unsafe_allow_html=True)
-        elif task_state == 'SUCCESS':
-            st.markdown('<div class="status-success">✅ Pocket detection completed successfully!</div>', unsafe_allow_html=True)
-            # Keep progress at 100% for completed tasks
-            progress_percent = 100
-            current_step = "Pocket detection completed successfully!"
-            status = "Completed"
-        elif task_state == 'FAILURE':
-            st.markdown('<div class="status-error">❌ Pocket detection failed!</div>', unsafe_allow_html=True)
-            # Keep progress visible even for failed tasks
-            current_step = "Task failed"
-            status = "Failed"
-        else:
-            st.markdown(f'<div class="status-info">🔄 Pocket detection status: {task_state}</div>', unsafe_allow_html=True)
-        
-        # ALWAYS show the progress bar - NEVER disappears!
-        st.markdown("### 📊 Progress")
-        progress_bar = st.progress(progress_percent / 100)
-        
-        # Progress details in columns - always visible
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Progress", f"{progress_percent:.1f}%")
-        
-        with col2:
-            if 'elapsed' in progress_info:
-                elapsed = progress_info['elapsed']
-                st.metric("Elapsed Time", f"{elapsed:.1f}s")
+        st.error(f"Error loading 3D structure: {e}")
+        logger.error(f"Error in show_molecule_3d: {e}", exc_info=True)
+
+# Create tabs for different views
+tab_setup, tab_progress, tab_results = st.tabs(["🚀 Setup & Launch", "📊 Progress", "🎯 Results & Analysis"])
+
+with tab_setup:
+    st.markdown("### 📁 Input Configuration")
+
+    # Display current job ID if exists
+    if st.session_state.detect_job_id:
+        st.markdown(f"""
+        <div class="job-id-display">
+            🔑 Current Job ID: {st.session_state.detect_job_id}
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Input options in columns
+    st.markdown("#### Select Input Source")
+
+    input_col1, input_col2 = st.columns(2)
+
+    with input_col1:
+        st.markdown("**Option 1: Use Previous Step**")
+        cached_extract_id = st.session_state.cached_job_ids.get('extract', '')
+        extract_job_id = st.text_input(
+            "Job ID from Step 1:",
+            value=cached_extract_id,
+            key="detect_extract_job_id",
+            help="Enter the Job ID from frame extraction"
+        )
+
+    with input_col2:
+        st.markdown("**Option 2: Upload PDB ZIP**")
+        pdb_zip = st.file_uploader(
+            "Upload PDB Files:",
+            type=['zip'],
+            key="detect_pdb_zip",
+            help="Upload ZIP containing PDB files"
+        )
+
+    st.markdown("#### ⚙️ Detection Parameters")
+
+    param_col1, param_col2 = st.columns(2)
+
+    with param_col1:
+        num_threads = st.number_input(
+            "Number of Threads",
+            min_value=1,
+            max_value=16,
+            value=4,
+            key="detect_threads",
+            help="CPU threads for pocket detection"
+        )
+
+    with param_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.info("💡 Using P2Rank for pocket prediction")
+
+    # Run button
+    st.markdown("---")
+    if st.button("🚀 Start Pocket Detection", type="primary", use_container_width=True):
+        # Determine input source
+        input_pdb_path = None
+        input_source = None
+
+        if extract_job_id:
+            extract_output_dir = os.path.join(RESULTS_DIR, extract_job_id, "pdbs")
+            if os.path.exists(extract_output_dir) and os.listdir(extract_output_dir):
+                input_pdb_path = extract_output_dir
+                input_source = f"Step 1 results (Job ID: {extract_job_id})"
             else:
-                st.metric("Status", status)
-        
-        with col3:
-            st.metric("Current Step", current_step[:20] + "..." if len(current_step) > 20 else current_step)
-        
-        # Show detailed status - always visible
-        st.write(f"**Status:** {status}")
-        
-        # Show warning if task is taking too long (only for running tasks)
-        if task_state == 'PROGRESS' and progress_percent < 50 and 'elapsed' in progress_info and progress_info['elapsed'] > 300:  # 5 minutes
-            st.warning("⚠️ Task is taking longer than expected. This might indicate an issue with the input files or system resources.")
-        
-        # Check if task is actually completed and show results
-        if st.session_state.detect_task_id and task.ready() and task.successful():
-            st.session_state.detect_status = 'completed'
-            st.session_state.cached_job_ids['detect'] = st.session_state.detect_job_id
-            
-            # Display results
-            result = task.result
-            if result:
-                st.markdown("### 📈 Results")
-                
-                # Display summary metrics
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Pockets Detected", result.get('pockets_detected', 'N/A'))
-                
-                with col2:
-                    st.metric("Output Directory", os.path.basename(result.get('pockets_output_dir', 'N/A')))
-                
-                with col3:
-                    st.metric("Processing Time", f"{result.get('processing_time', 0):.1f}s")
-                
-                st.success("✅ Pocket detection complete! Use this Job ID in Step 3: Cluster Pockets")
-                
-                # Show job ID prominently
-                st.markdown(f"""
-                <div class="job-id-display">
-                    🔑 Job ID: {st.session_state.detect_job_id}
-                </div>
-                """, unsafe_allow_html=True)
-                st.info("💡 Copy this Job ID to use in Step 3: Cluster Pockets")
-        
-        # Add action buttons - always visible when there's a task
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("❌ Cancel Task", key="cancel_detect_task"):
-                try:
-                    if st.session_state.detect_task_id:
-                        task = celery_app.AsyncResult(st.session_state.detect_task_id)
-                        task.revoke(terminate=True)
-                    st.session_state.detect_task_id = None
-                    st.session_state.detect_status = 'cancelled'
-                    st.success("Task cancelled successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error cancelling task: {str(e)}")
-        
-        with col2:
-            if st.button("🔍 Check Task Status", key="check_task_status"):
-                if st.session_state.detect_task_id:
-                    task = celery_app.AsyncResult(st.session_state.detect_task_id)
-                    st.write(f"**Current Task State:** {task.state}")
-                    st.write(f"**Task Ready:** {task.ready()}")
-                    if task.ready():
-                        st.write(f"**Task Result:** {task.result}")
+                st.error(f"PDB files not found for Job ID: {extract_job_id}")
+                st.stop()
+
+        elif pdb_zip:
+            job_id = f"detect_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            extract_dir = os.path.join(UPLOAD_DIR, job_id, "extracted_pdbs")
+            os.makedirs(extract_dir, exist_ok=True)
+
+            try:
+                zip_path = handle_file_upload_secure(pdb_zip, job_id, "pdbs_")
+                logger.info(f"ZIP file uploaded for job {job_id}")
+            except SecurityError as e:
+                st.error(f"❌ File upload failed: {e}")
+                logger.error(f"Security error during ZIP upload: {e}")
+                st.stop()
+
+            if zip_path:
+                pdb_files = extract_zip_to_directory(zip_path, extract_dir)
+                if pdb_files:
+                    input_pdb_path = extract_dir
+                    input_source = f"Uploaded ZIP ({len(pdb_files)} PDB files)"
                 else:
-                    st.write("**No active task ID**")
-                st.rerun()
-        
-        # Show debug info in an expander - always visible
-        with st.expander("🔍 Debug Information"):
-            st.json(progress_info)
-            if st.session_state.detect_task_id:
-                task = celery_app.AsyncResult(st.session_state.detect_task_id)
-                st.write(f"**Task State:** {task.state}")
-                st.write(f"**Task ID:** {st.session_state.detect_task_id}")
-                st.write(f"**Task Ready:** {task.ready()}")
-                if task.ready():
-                    st.write(f"**Task Result:** {task.result}")
-            else:
-                st.write("**No active task ID**")
-                st.write(f"**Session Status:** {st.session_state.detect_status}")
-                st.write(f"**Job ID:** {st.session_state.detect_job_id}")
+                    st.error("No PDB files found in ZIP")
+                    st.stop()
 
-# Handle completed tasks that don't have task_id anymore
-elif st.session_state.detect_status == 'completed' and st.session_state.detect_job_id:
-    # Show progress bar for completed tasks too - NEVER let it disappear!
-    st.markdown('<div class="status-success">✅ Pocket detection completed successfully!</div>', unsafe_allow_html=True)
-    
-    # Show progress bar at 100% for completed tasks
-    st.markdown("### 📊 Progress")
-    progress_bar = st.progress(1.0)  # 100%
-    
-    # Progress details in columns - always visible
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Progress", "100.0%")
-    
-    with col2:
-        st.metric("Status", "Completed")
-    
-    with col3:
-        st.metric("Current Step", "Pocket detection completed successfully!")
-    
-    # Display results from output files
-    output_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pockets")
-    if os.path.exists(output_dir):
-        pockets_csv = os.path.join(output_dir, "pockets.csv")
-        if os.path.exists(pockets_csv):
-            st.markdown("### 📈 Results")
-            
-            # Display summary metrics
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Output Directory", os.path.basename(output_dir))
-            
-            with col2:
-                st.metric("Pockets CSV", "Found")
-            
-            with col3:
-                st.metric("Status", "Completed")
-            
-            st.success("✅ Pocket detection complete! Use this Job ID in Step 3: Cluster Pockets")
-            
-            # Show job ID prominently
-            st.markdown(f"""
-            <div class="job-id-display">
-                🔑 Job ID: {st.session_state.detect_job_id}
-            </div>
-            """, unsafe_allow_html=True)
-            st.info("💡 Copy this Job ID to use in Step 3: Cluster Pockets")
+        else:
+            st.error("Please provide input using one of the options above.")
+            st.stop()
 
-# Debug section to understand what's happening
-with st.expander("🐛 Debug Session State"):
-    st.write("**Session State Debug Info:**")
-    st.write(f"detect_task_id: {st.session_state.get('detect_task_id', 'None')}")
-    st.write(f"detect_status: {st.session_state.get('detect_status', 'None')}")
-    st.write(f"detect_job_id: {st.session_state.get('detect_job_id', 'None')}")
-    st.write(f"cached_job_ids: {st.session_state.get('cached_job_ids', {})}")
-    
-    # Check if we have any task activity
-    has_task_id = bool(st.session_state.get('detect_task_id'))
-    has_running_status = st.session_state.get('detect_status') == 'running'
-    has_completed_status = st.session_state.get('detect_status') == 'completed'
-    has_job_id = bool(st.session_state.get('detect_job_id'))
-    
-    st.write("**Progress Bar Logic:**")
-    st.write(f"Has task ID: {has_task_id}")
-    st.write(f"Has running status: {has_running_status}")
-    st.write(f"Has completed status: {has_completed_status}")
-    st.write(f"Has job ID: {has_job_id}")
-    
-    # Show what condition would trigger progress bar
-    condition1 = has_task_id
-    condition2 = has_running_status
-    condition3 = has_job_id and has_completed_status
-    
-    st.write("**Progress Bar Conditions:**")
-    st.write(f"Condition 1 (task_id): {condition1}")
-    st.write(f"Condition 2 (running): {condition2}")
-    st.write(f"Condition 3 (completed): {condition3}")
-    st.write(f"Should show progress: {condition1 or condition2 or condition3}")
+        if input_pdb_path:
+            # Generate unique job ID
+            job_id = f"detect_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+            st.session_state.detect_job_id = job_id
 
-# Auto-refresh with completion check - more responsive for quick tasks
-if st.session_state.detect_status == 'running':
-    # Check if task is ready to avoid unnecessary refreshes
+            # Update status
+            update_job_status(job_id, 'submitted', 'Initializing pocket detection')
+            st.session_state.detect_status = 'running'
+
+            # Start the detection
+            with st.spinner("Starting pocket detection..."):
+                task = run_detect_pockets_task.delay(
+                    input_pdb_path_abs=os.path.abspath(input_pdb_path),
+                    job_id=job_id,
+                    numthreads=num_threads
+                )
+                st.session_state.detect_task_id = task.id
+                update_job_status(job_id, 'running', 'Pocket detection started', task_id=task.id)
+
+            st.success(f"✅ Detection started! Job ID: `{job_id}`")
+            st.info(f"📂 Input: {input_source}")
+            st.info("💡 Switch to the Progress tab to monitor execution")
+            time.sleep(2)
+            st.rerun()
+
+with tab_progress:
+    st.markdown("### 📊 Detection Progress")
+
     if st.session_state.detect_task_id:
         try:
             task = celery_app.AsyncResult(st.session_state.detect_task_id)
-            
-            # Check if task is completed
-            if task.ready():
-                # Task is done, update status and refresh immediately
-                st.session_state.detect_status = 'completed'
-                st.rerun()
-            else:
-                # Task still running, check for completion more aggressively
-                # For quick tasks, check more frequently
-                time.sleep(0.2)  # Very responsive for quick tasks
-                st.rerun()
-                
-        except Exception as e:
-            # Fallback: Check if task is actually completed by looking at output files
-            if st.session_state.detect_job_id:
-                output_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pockets")
-                if os.path.exists(output_dir):
-                    pockets_csv = os.path.join(output_dir, "pockets.csv")
-                    if os.path.exists(pockets_csv):
-                        # Task completed but state wasn't updated
-                        st.session_state.detect_status = 'completed'
-                        st.session_state.cached_job_ids['detect'] = st.session_state.detect_job_id
-                        # Don't clear task_id so status section stays visible
-                        st.rerun()
-            
-            # Fallback refresh - very quick for error recovery
-            time.sleep(0.5)
-            st.rerun()
-    else:
-        # No task ID, check for completion via output files
-        if st.session_state.detect_job_id:
-            output_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pockets")
-            if os.path.exists(output_dir):
-                pockets_csv = os.path.join(output_dir, "pockets.csv")
-                if os.path.exists(pockets_csv):
-                    # Task completed but no task_id - update status
-                    st.session_state.detect_status = 'completed'
-                    st.session_state.cached_job_ids['detect'] = st.session_state.detect_job_id
+
+            if task.state == 'PENDING':
+                st.info("⏳ Task is pending in queue...")
+                st.progress(0)
+                if st.button("🔄 Refresh"):
                     st.rerun()
-        
-        # No task ID, refresh less frequently
-        time.sleep(1)
-        st.rerun() 
+
+            elif task.state == 'PROGRESS':
+                progress_info = task.info or {}
+                progress = progress_info.get('progress', 0)
+                current_step = progress_info.get('current_step', 'Processing...')
+                status_msg = progress_info.get('status', 'Running...')
+
+                st.info(f"🔄 {current_step}")
+                st.progress(progress / 100)
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Progress", f"{progress:.1f}%")
+                with col2:
+                    st.metric("Status", status_msg)
+                with col3:
+                    if 'elapsed' in progress_info:
+                        st.metric("Elapsed", f"{progress_info['elapsed']:.1f}s")
+
+                time.sleep(2)
+                st.rerun()
+
+            elif task.state == 'SUCCESS':
+                st.success("✅ Detection completed successfully!")
+                st.progress(1.0)
+
+                result = task.result
+                if result:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Pockets Detected", result.get('pockets_detected', 'N/A'))
+                    with col2:
+                        st.metric("Processing Time", f"{result.get('processing_time', 0):.1f}s")
+                    with col3:
+                        st.metric("Status", "Complete")
+
+                st.session_state.detect_status = 'completed'
+                st.session_state.cached_job_ids['detect'] = st.session_state.detect_job_id
+                st.info("💡 Switch to the Results & Analysis tab to explore detected pockets!")
+
+            elif task.state == 'FAILURE':
+                st.error("❌ Detection failed!")
+                error_msg = str(task.info) if task.info else 'Unknown error'
+                st.error(f"Error: {error_msg}")
+
+        except Exception as e:
+            st.error(f"Error checking task status: {e}")
+            logger.error(f"Task status error: {e}", exc_info=True)
+    else:
+        st.info("ℹ️ No active detection job. Start a new job in the Setup & Launch tab.")
+
+with tab_results:
+    st.markdown("### 🎯 Detection Results")
+
+    # Option to load existing results
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        load_job_id = st.text_input(
+            "Enter Detection Job ID:",
+            value=st.session_state.detect_job_id if st.session_state.detect_job_id else "",
+            placeholder="e.g., detect_20250815_143022_a1b2c3d4",
+            help="Enter a detection job ID to view results"
+        )
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔍 Load Results", use_container_width=True):
+            if load_job_id:
+                st.session_state.detect_job_id = load_job_id
+                st.rerun()
+
+    if st.session_state.detect_job_id:
+        # Check if results exist
+        pockets_output_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pockets")
+        pockets_csv_file = os.path.join(pockets_output_dir, "pockets.csv")
+
+        if os.path.exists(pockets_csv_file):
+            try:
+                df_pockets = pd.read_csv(pockets_csv_file)
+
+                # Display overview metrics
+                st.markdown("#### 📊 Detection Overview")
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Total Pockets</div>
+                        <div class="metric-value">{len(df_pockets)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Avg Probability</div>
+                        <div class="metric-value">{df_pockets['probability'].mean():.3f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col3:
+                    high_conf = len(df_pockets[df_pockets['probability'] >= 0.7])
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">High Confidence</div>
+                        <div class="metric-value">{high_conf}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col4:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Best Probability</div>
+                        <div class="metric-value">{df_pockets['probability'].max():.3f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Create sub-tabs for different analyses
+                results_tab1, results_tab2, results_tab3, results_tab4 = st.tabs([
+                    "📋 Pocket Table",
+                    "📈 Distribution Analysis",
+                    "🔬 3D Viewer",
+                    "💾 Download"
+                ])
+
+                with results_tab1:
+                    st.markdown("#### 🏆 Detected Pockets")
+
+                    # Sort and display
+                    df_display = df_pockets.sort_values('probability', ascending=False)
+
+                    # Add confidence badges
+                    def get_confidence_badge(prob):
+                        if prob >= 0.7:
+                            return "🟢 High"
+                        elif prob >= 0.4:
+                            return "🟡 Medium"
+                        else:
+                            return "🔴 Low"
+
+                    df_display['Confidence'] = df_display['probability'].apply(get_confidence_badge)
+
+                    # Filter controls
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        min_prob_filter = st.slider(
+                            "Minimum Probability:",
+                            0.0, 1.0, 0.0, 0.05,
+                            help="Filter pockets by minimum probability"
+                        )
+                    with col2:
+                        confidence_filter = st.multiselect(
+                            "Filter by Confidence:",
+                            options=['🟢 High', '🟡 Medium', '🔴 Low'],
+                            default=['🟢 High', '🟡 Medium', '🔴 Low']
+                        )
+
+                    # Apply filters
+                    df_filtered = df_display[df_display['probability'] >= min_prob_filter]
+                    if confidence_filter:
+                        df_filtered = df_filtered[df_filtered['Confidence'].isin(confidence_filter)]
+
+                    st.dataframe(
+                        df_filtered[['File name', 'rank', 'probability', 'residues', 'Confidence']],
+                        use_container_width=True,
+                        height=400
+                    )
+
+                    st.info(f"📊 Showing {len(df_filtered)} of {len(df_pockets)} pockets")
+
+                    # Selection for 3D viewing
+                    if len(df_filtered) > 0:
+                        st.markdown("---")
+                        st.markdown("**Select a pocket to view in 3D:**")
+                        selected_idx = st.selectbox(
+                            "Choose pocket:",
+                            df_filtered.index,
+                            format_func=lambda x: f"{df_filtered.loc[x, 'File name']} - Rank {df_filtered.loc[x, 'rank']} (Prob: {df_filtered.loc[x, 'probability']:.3f})"
+                        )
+                        if selected_idx is not None:
+                            st.session_state.selected_pocket = df_filtered.loc[selected_idx].to_dict()
+                            st.info("✅ Pocket selected! Switch to the 3D Viewer tab to visualize it.")
+
+                with results_tab2:
+                    st.markdown("#### 📈 Statistical Analysis")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        # Probability distribution
+                        fig_hist = px.histogram(
+                            df_pockets,
+                            x='probability',
+                            title='Probability Distribution',
+                            nbins=30,
+                            color_discrete_sequence=['#66BB6A']
+                        )
+                        fig_hist.update_layout(
+                            xaxis_title="Binding Probability",
+                            yaxis_title="Number of Pockets",
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                    with col2:
+                        # Residue count distribution
+                        fig_residues = px.box(
+                            df_pockets,
+                            y='residues',
+                            title='Residue Count Distribution',
+                            color_discrete_sequence=['#43A047']
+                        )
+                        fig_residues.update_layout(
+                            yaxis_title="Number of Residues",
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig_residues, use_container_width=True)
+
+                    # Scatter plot
+                    st.markdown("#### 🎯 Probability vs Size")
+                    fig_scatter = px.scatter(
+                        df_pockets,
+                        x='residues',
+                        y='probability',
+                        size='probability',
+                        color='probability',
+                        title='Pocket Probability vs Size',
+                        labels={'residues': 'Number of Residues', 'probability': 'Binding Probability'},
+                        color_continuous_scale='Greens',
+                        hover_data=['File name', 'rank']
+                    )
+                    fig_scatter.update_traces(marker=dict(line=dict(width=1, color='DarkGreen')))
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+
+                    # Statistics
+                    st.markdown("#### 📊 Statistical Summary")
+                    stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
+                    with stats_col1:
+                        st.metric("Mean Probability", f"{df_pockets['probability'].mean():.3f}")
+                    with stats_col2:
+                        st.metric("Median Probability", f"{df_pockets['probability'].median():.3f}")
+                    with stats_col3:
+                        st.metric("Std Dev", f"{df_pockets['probability'].std():.3f}")
+                    with stats_col4:
+                        high_conf = len(df_pockets[df_pockets['probability'] >= 0.7])
+                        st.metric("High Confidence (≥0.7)", high_conf)
+
+                with results_tab3:
+                    st.markdown("### 🔬 3D Pocket Viewer")
+
+                    if 'selected_pocket' in st.session_state and st.session_state.selected_pocket:
+                        pocket = st.session_state.selected_pocket
+
+                        st.markdown(f"""
+                        <div class="detect-card">
+                            <h4>🎯 Selected Pocket</h4>
+                            <p><strong>File:</strong> {pocket.get('File name', 'N/A')}</p>
+                            <p><strong>Rank:</strong> #{pocket.get('rank', 'N/A')}</p>
+                            <p><strong>Probability:</strong> <span class="pocket-badge pocket-high">
+                                {pocket.get('probability', 0):.3f}
+                            </span></p>
+                            <p><strong>Residues:</strong> {pocket.get('residues', 0)}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        # Visualization controls
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            viz_style = st.selectbox(
+                                "Visualization Style:",
+                                ["cartoon", "surface", "stick"],
+                                help="Choose how to display the pocket"
+                            )
+                        with col2:
+                            st.markdown("<br>", unsafe_allow_html=True)
+
+                        # Load and display the structure
+                        pdb_filename = pocket.get('File name')
+                        if pdb_filename:
+                            # Try to find the PDB file in the pdbs directory
+                            pdbs_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pdbs")
+                            pdb_path = os.path.join(pdbs_dir, pdb_filename)
+
+                            if os.path.exists(pdb_path):
+                                show_molecule_3d(pdb_path, style=viz_style)
+                            else:
+                                st.warning(f"⚠️ PDB file not found: {pdb_path}")
+                                st.info("💡 The PDB file may have been moved or deleted.")
+                        else:
+                            st.error("No PDB file information in pocket data")
+
+                    else:
+                        st.info("ℹ️ No pocket selected. Go to the Pocket Table tab and select a pocket to view.")
+
+                        # Demo: show first high-confidence pocket
+                        high_conf_pockets = df_pockets[df_pockets['probability'] >= 0.7]
+                        if len(high_conf_pockets) > 0:
+                            st.markdown("#### 📺 Preview: Highest Confidence Pocket")
+                            first_pocket = high_conf_pockets.iloc[0]
+                            pdb_filename = first_pocket['File name']
+                            pdbs_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pdbs")
+                            pdb_path = os.path.join(pdbs_dir, pdb_filename)
+                            if os.path.exists(pdb_path):
+                                show_molecule_3d(pdb_path, width=600, height=400)
+
+                with results_tab4:
+                    st.markdown("#### 💾 Download Results")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown("**📄 Data Files**")
+
+                        # CSV download
+                        csv_data = df_pockets.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download All Pockets (CSV)",
+                            data=csv_data,
+                            file_name=f"pockets_{st.session_state.detect_job_id}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+
+                        # High confidence only
+                        df_high_conf = df_pockets[df_pockets['probability'] >= 0.7]
+                        if len(df_high_conf) > 0:
+                            hc_csv = df_high_conf.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Download High Confidence (CSV)",
+                                data=hc_csv,
+                                file_name=f"high_confidence_pockets_{st.session_state.detect_job_id}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+
+                    with col2:
+                        st.markdown("**📦 Structure Files**")
+
+                        # Create ZIP with PDB files
+                        if st.button("🔄 Generate PDB Archive", use_container_width=True):
+                            with st.spinner("Creating archive..."):
+                                pdbs_dir = os.path.join(RESULTS_DIR, st.session_state.detect_job_id, "pdbs")
+                                zip_path = os.path.join(pockets_output_dir, 'pockets_pdbs.zip')
+                                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                                    for pdb_file in Path(pdbs_dir).glob('*.pdb'):
+                                        zipf.write(pdb_file, pdb_file.name)
+                                st.success("✅ Archive created!")
+
+                        # Download ZIP
+                        zip_path = os.path.join(pockets_output_dir, 'pockets_pdbs.zip')
+                        if os.path.exists(zip_path):
+                            with open(zip_path, 'rb') as f:
+                                st.download_button(
+                                    label="📥 Download All PDB Files (ZIP)",
+                                    data=f.read(),
+                                    file_name=f"pockets_pdbs_{st.session_state.detect_job_id}.zip",
+                                    mime="application/zip",
+                                    use_container_width=True
+                                )
+
+                    st.markdown("---")
+                    st.info("💡 Use this Job ID in Step 3: Cluster Pockets to group similar pockets")
+
+            except Exception as e:
+                st.error(f"Error loading results: {e}")
+                logger.error(f"Results loading error: {e}", exc_info=True)
+        else:
+            st.info("ℹ️ No results found for this job ID. Make sure detection has completed successfully.")
+    else:
+        st.info("ℹ️ No job selected. Start a new job or enter a job ID above.")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666;'>
+    <p>🔍 Pocket Detection powered by P2Rank | Part of the PocketHunter Suite</p>
+    <p style='font-size: 0.85rem; margin-top: 0.5rem;'>
+        💡 Tip: High-confidence pockets (≥0.7) are recommended for further analysis
+    </p>
+</div>
+""", unsafe_allow_html=True)

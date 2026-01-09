@@ -1,0 +1,143 @@
+ 
+ -------------- celery@bogrum-pc v5.5.1 (immunity)
+--- ***** ----- 
+-- ******* ---- Linux-6.14.0-36-generic-x86_64-with-glibc2.39 2025-12-13 14:43:42
+- *** --- * --- 
+- ** ---------- [config]
+- ** ---------- .> app:         pockethunter_tasks:0x758ca37a7770
+- ** ---------- .> transport:   redis://localhost:6379/0
+- ** ---------- .> results:     redis://localhost:6379/0
+- *** --- * --- .> concurrency: 4 (prefork)
+-- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+--- ***** ----- 
+ -------------- [queues]
+                .> celery           exchange=celery(direct) key=celery
+                
+
+[tasks]
+  . tasks.run_cluster_pockets_task
+  . tasks.run_detect_pockets_task
+  . tasks.run_docking_task
+  . tasks.run_extract_to_pdb_task
+  . tasks.run_pockethunter_pipeline
+
+[2025-12-13 14:43:43,073: INFO/MainProcess] Connected to redis://localhost:6379/0
+[2025-12-13 14:43:43,082: INFO/MainProcess] mingle: searching for neighbors
+[2025-12-13 14:43:44,110: INFO/MainProcess] mingle: all alone
+[2025-12-13 14:43:44,145: INFO/MainProcess] celery@bogrum-pc ready.
+[2025-12-13 14:44:30,119: INFO/MainProcess] Task tasks.run_docking_task[87a44842-5566-4854-840b-788ae8a75a15] received
+[2025-12-13 14:44:35,584: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.10s.
+[2025-12-13 14:44:35,583: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.10s.
+[2025-12-13 14:45:22,672: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_144429_723c6172/trajectory_test_data_10.pdbqt
+[2025-12-13 14:45:22,726: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 14:45:22,726: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 14:45:22,741: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 14:45:25,261: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.52s/it]
+[2025-12-13 14:45:25,261: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.52s/it]
+[2025-12-13 14:45:25,311: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 14:45:25,311: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 14:46:12,934: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_144429_723c6172/trajectory_test_data_20.pdbqt
+[2025-12-13 14:46:12,977: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.04s.
+[2025-12-13 14:46:12,977: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.04s.
+[2025-12-13 14:46:12,985: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 14:46:15,770: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.79s/it]
+[2025-12-13 14:46:15,771: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.79s/it]
+[2025-12-13 14:46:15,877: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.10s.
+[2025-12-13 14:46:15,876: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.10s.
+[2025-12-13 14:47:02,446: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_144429_723c6172/trajectory_test_data_90.pdbqt
+[2025-12-13 14:47:02,504: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 14:47:02,503: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 14:47:02,511: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 14:47:04,891: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.38s/it]
+[2025-12-13 14:47:04,891: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.38s/it]
+[2025-12-13 14:47:04,900: INFO/ForkPoolWorker-1] Task tasks.run_docking_task[87a44842-5566-4854-840b-788ae8a75a15] succeeded in 154.77708466400054s: {'status': 'completed', 'docking_output_dir': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_144429_723c6172', 'docking_results_file': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_144429_723c6172/docking_results.csv', 'total_docking_poses': 30, 'unique_ligands': 1, 'unique_receptors': 3, 'best_affinity': -4.8, 'processing_time': 154.77145385742188, 'num_poses': 10, 'exhaustiveness': 8}
+[2025-12-13 15:20:46,438: INFO/MainProcess] Task tasks.run_extract_to_pdb_task[2955b4dc-86f3-4dd9-855d-cf9aec8d2d7e] received
+[2025-12-13 15:20:52,983: INFO/ForkPoolWorker-1] Task tasks.run_extract_to_pdb_task[2955b4dc-86f3-4dd9-855d-cf9aec8d2d7e] succeeded in 6.5405640810004115s: {'status': 'completed', 'output_folder': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/extract_20251213_152046_732f577b', 'pdb_output_dir': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/extract_20251213_152046_732f577b/pdbs', 'frames_extracted': 13, 'processing_time': 5.527308464050293, 'stdout': '', 'stderr': '2025-12-13 15:20:49 - pockethunter - INFO - Extracting frames from XTC file: /home/bogrum/workspace/my_projects/PocketHunter-Suite/uploads/extract_20251213_152046_732f577b/trajectory_test_data.xtc
+2025-12-13 15:20:49 - pockethunter - INFO - Starting XTC to PDB extraction for /home/bogrum/workspace/my_projects/PocketHunter-Suite/uploads/extract_20251213_152046_732f577b/trajectory_test_data.xtc
+2025-12-13 15:20:49 - pockethunter - INFO - Total frames to extract: 13
+2025-12-13 15:20:49 - pockethunter - INFO - Extraction progress: 1/13 frames (7.7%)
+2025-12-13 15:20:50 - pockethunter - INFO - Extraction progress: 2/13 frames (15.4%)
+2025-12-13 15:20:50 - pockethunter -...', ...}
+[2025-12-13 15:20:58,563: INFO/MainProcess] Task tasks.run_detect_pockets_task[4d97e62c-2615-4210-8d2d-916232585d0f] received
+[2025-12-13 15:21:17,610: INFO/ForkPoolWorker-1] Task tasks.run_detect_pockets_task[4d97e62c-2615-4210-8d2d-916232585d0f] succeeded in 19.044390872000804s: {'status': 'completed', 'pockets_output_dir_abs': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/detect_20251213_152058_16a1cc12/pockets', 'pockets_csv_abs': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/detect_20251213_152058_16a1cc12/pockets/pockets.csv', 'pockets_detected': 137, 'processing_time': 19.018167734146118, 'stdout': '', 'stderr': '2025-12-13 15:21:01 - pockethunter - INFO - Starting P2Rank with 4 threads
+2025-12-13 15:21:01 - pockethunter - INFO - Executing command: /home/bogrum/workspace/my_projects/PocketHunter-Suite/PocketHunter/tools/p2rank/prank predict /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/extract_20251213_152046_732f577b/pdbs/pdb_list.ds -o /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/detect_20251213_152058_16a1cc12/pockets/p2rank_output -threads 4
+2025-12-13 15:21:16 - pockethunter - INFO - P2Rank completed successfully. Output written to...'}
+[2025-12-13 15:21:27,620: INFO/MainProcess] Task tasks.run_cluster_pockets_task[c879376d-ede9-46bb-86df-df1c10825076] received
+[2025-12-13 15:21:43,652: WARNING/ForkPoolWorker-1] Debug: Found CSV files in /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters: ['/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/cluster_2_hierarchical.csv', '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/pockets_clustered.csv', '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/cluster_representatives.csv']
+[2025-12-13 15:21:43,653: WARNING/ForkPoolWorker-1] Debug: Looking for clustered_pockets_csv_abs: /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/pockets_clustered.csv
+[2025-12-13 15:21:43,653: WARNING/ForkPoolWorker-1] Debug: Looking for representatives_csv_abs: /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/cluster_representatives.csv
+[2025-12-13 15:21:43,653: WARNING/ForkPoolWorker-1] Debug: clustered_pockets_csv_abs exists: True
+[2025-12-13 15:21:43,653: WARNING/ForkPoolWorker-1] Debug: representatives_csv_abs exists: True
+[2025-12-13 15:21:43,688: INFO/ForkPoolWorker-1] Task tasks.run_cluster_pockets_task[c879376d-ede9-46bb-86df-df1c10825076] succeeded in 16.066695296000034s: {'status': 'completed', 'clusters_output_dir_abs': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters', 'clustered_pockets_csv_abs': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/pockets_clustered.csv', 'representatives_csv_abs': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/cluster_20251213_152127_9f01f456/pocket_clusters/cluster_representatives.csv', 'total_pockets': 14, 'clusters_found': 8, 'representatives': 8, 'processing_time': 16.02652907371521, 'stdout': '', 'stderr': '2025-12-13 15:21:30 - pockethunter - INFO - Binarizing the pocket data frame.
+2025-12-13 15:21:30 - pockethunter - INFO - Clustering using the DBSCAN algorithm.
+2025-12-13 15:21:30 - pockethunter - INFO - Number of pocket-forming residues: 74
+2025-12-13 15:21:30 - pockethunter - INFO - Number of frames: 13
+2025-12-13 15:21:30 - pockethunter - INFO - Optimizing round 1/175...'}
+[2025-12-13 15:22:10,009: INFO/MainProcess] Task tasks.run_docking_task[37395942-6619-4e79-8fe3-4e2cc3960b05] received
+[2025-12-13 15:22:10,075: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 15:22:10,075: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 15:22:44,408: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152209_00524d0c/trajectory_test_data_10.pdbqt
+[2025-12-13 15:22:44,457: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:22:44,456: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:22:44,468: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:22:46,679: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.21s/it]
+[2025-12-13 15:22:46,679: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.21s/it]
+[2025-12-13 15:22:46,831: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.15s.
+[2025-12-13 15:22:46,831: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.15s.
+[2025-12-13 15:23:19,039: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152209_00524d0c/trajectory_test_data_20.pdbqt
+[2025-12-13 15:23:19,084: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.04s.
+[2025-12-13 15:23:19,084: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.04s.
+[2025-12-13 15:23:19,093: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:23:21,186: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.09s/it]
+[2025-12-13 15:23:21,186: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.09s/it]
+[2025-12-13 15:23:21,266: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.08s.
+[2025-12-13 15:23:21,266: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.08s.
+[2025-12-13 15:23:50,947: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152209_00524d0c/trajectory_test_data_30.pdbqt
+[2025-12-13 15:23:50,980: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:23:50,979: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:23:50,985: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:23:52,982: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  2.00s/it]
+[2025-12-13 15:23:52,982: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  2.00s/it]
+[2025-12-13 15:23:53,041: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 15:23:53,041: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 15:24:24,641: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152209_00524d0c/trajectory_test_data_120.pdbqt
+[2025-12-13 15:24:24,672: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:24:24,672: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:24:24,678: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:24:26,608: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  1.93s/it]
+[2025-12-13 15:24:26,609: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  1.93s/it]
+[2025-12-13 15:24:26,625: INFO/ForkPoolWorker-1] Task tasks.run_docking_task[37395942-6619-4e79-8fe3-4e2cc3960b05] succeeded in 136.61454988199876s: {'status': 'completed', 'docking_output_dir': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152209_00524d0c', 'docking_results_file': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152209_00524d0c/docking_results.csv', 'total_docking_poses': 40, 'unique_ligands': 1, 'unique_receptors': 4, 'best_affinity': -5.0, 'processing_time': 136.60558080673218, 'num_poses': 10, 'exhaustiveness': 8}
+[2025-12-13 15:26:19,163: INFO/MainProcess] Task tasks.run_docking_task[8fb5ab4c-6471-4da7-89d3-1f69cc42f9af] received
+[2025-12-13 15:26:19,226: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:26:19,226: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:26:53,763: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152618_6fb542d6/trajectory_test_data_10.pdbqt
+[2025-12-13 15:26:53,812: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:26:53,812: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:26:53,823: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:26:55,942: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.12s/it]
+[2025-12-13 15:26:55,943: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.12s/it]
+[2025-12-13 15:26:56,007: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 15:26:56,007: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.06s.
+[2025-12-13 15:27:28,198: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152618_6fb542d6/trajectory_test_data_20.pdbqt
+[2025-12-13 15:27:28,247: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:27:28,247: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:27:28,256: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:27:30,085: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  1.83s/it]
+[2025-12-13 15:27:30,085: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  1.83s/it]
+[2025-12-13 15:27:30,124: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.04s.
+[2025-12-13 15:27:30,124: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.04s.
+[2025-12-13 15:28:06,758: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152618_6fb542d6/trajectory_test_data_30.pdbqt
+[2025-12-13 15:28:06,792: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:28:06,792: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:28:06,797: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:28:09,222: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.42s/it]
+[2025-12-13 15:28:09,223: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:02<00:00,  2.43s/it]
+[2025-12-13 15:28:09,269: WARNING/ForkPoolWorker-1] @> 5048 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:28:09,268: DEBUG/ForkPoolWorker-1] 5048 atoms and 1 coordinate set(s) were parsed in 0.05s.
+[2025-12-13 15:28:44,907: WARNING/ForkPoolWorker-1] Prepared /home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152618_6fb542d6/trajectory_test_data_120.pdbqt
+[2025-12-13 15:28:44,937: WARNING/ForkPoolWorker-1] @> 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:28:44,937: DEBUG/ForkPoolWorker-1] 4986 atoms and 1 coordinate set(s) were parsed in 0.03s.
+[2025-12-13 15:28:44,943: WARNING/ForkPoolWorker-1]   0%|          | 0/1 [00:00<?, ?it/s]
+[2025-12-13 15:28:46,749: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  1.81s/it]
+[2025-12-13 15:28:46,749: WARNING/ForkPoolWorker-1] 100%|##########| 1/1 [00:01<00:00,  1.81s/it]
+[2025-12-13 15:28:46,754: INFO/ForkPoolWorker-1] Task tasks.run_docking_task[8fb5ab4c-6471-4da7-89d3-1f69cc42f9af] succeeded in 147.59014476099946s: {'status': 'completed', 'docking_output_dir': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152618_6fb542d6', 'docking_results_file': '/home/bogrum/workspace/my_projects/PocketHunter-Suite/results/dock_docking_20251213_152618_6fb542d6/docking_results.csv', 'total_docking_poses': 40, 'unique_ligands': 1, 'unique_receptors': 4, 'best_affinity': -4.8, 'processing_time': 147.58700251579285, 'num_poses': 10, 'exhaustiveness': 8}
