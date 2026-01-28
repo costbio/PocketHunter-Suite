@@ -12,6 +12,8 @@ import json
 import zipfile
 import shutil
 import uuid
+import sys
+from pathlib import Path
 from tasks import run_pockethunter_pipeline, run_extract_to_pdb_task, run_detect_pockets_task, run_cluster_pockets_task, run_docking_task
 from celery_app import celery_app
 
@@ -237,6 +239,7 @@ selected = option_menu(
     menu_icon="cast",
     default_index=0,
     orientation="horizontal",
+    key="main_menu",  # Add unique key to prevent caching issues
     styles={
         "container": {"padding": "0!important", "background-color": "transparent"},
         "icon": {"font-size": "18px"},
@@ -245,27 +248,36 @@ selected = option_menu(
     }
 )
 
-# Get the corresponding file and import it safely
-import importlib
+# Route to the selected page using runpy for proper namespace isolation
+import runpy
 
-# Map page names to module names (without .py extension)
-PAGE_MODULES = {
-    "Step 1: Extract Frames": "extract_frames_app",
-    "Step 2: Detect Pockets": "detect_pockets_app",
-    "Step 3: Cluster Pockets": "cluster_pockets_app",
-    "Step 4: Molecular Docking": "docking_app",
-    "Task Monitor": "task_monitor_app"
-}
+# Map page names to file paths
+PAGE_FILES = pages  # Use the same dict
 
-# Import and execute the selected module
-if selected in PAGE_MODULES:
-    module_name = PAGE_MODULES[selected]
+# Execute the selected page with isolated namespace
+if selected in PAGE_FILES:
+    page_file = PAGE_FILES[selected]
+    page_path = Path(__file__).parent / page_file
+
     try:
-        # Import the module dynamically (SAFE - no exec())
-        importlib.import_module(module_name)
-    except ImportError as e:
-        st.error(f"Failed to load page '{selected}': {e}")
-        st.stop()
+        # Use runpy.run_path with a fresh namespace that includes streamlit
+        # This prevents namespace pollution between page switches
+        page_globals = {
+            '__name__': '__main__',
+            '__file__': str(page_path),
+            'st': st,  # Pass streamlit module
+        }
+
+        # Run the page file with isolated namespace
+        runpy.run_path(str(page_path), init_globals=page_globals, run_name='__main__')
+
+    except Exception as e:
+        st.error(f"❌ Error loading page '{selected}'")
+        st.exception(e)
+
+        # Show detailed traceback
+        import traceback
+        with st.expander("🐛 Full Error Details"):
+            st.code(traceback.format_exc())
 else:
-    st.error(f"Unknown page: {selected}")
-    st.stop() 
+    st.error(f"Unknown page: {selected}") 
