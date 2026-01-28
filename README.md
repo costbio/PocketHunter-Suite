@@ -1,115 +1,203 @@
-# 🧬 PocketHunter Suite - Streamlit Edition
+# PocketHunter Suite
 
-A modern, web-based interface for **PocketHunter**, an advanced molecular dynamics pocket detection and analysis tool. This Streamlit application provides a beautiful, user-friendly interface for running molecular simulations and analysis with real-time monitoring and interactive visualizations.
+A web-based interface for molecular dynamics pocket detection, clustering, and docking analysis. Built with Streamlit for an interactive experience with real-time task monitoring and 3D visualization.
 
-## ✨ Key Features
+## Features
 
-### 🎨 User-Centric Design
+- **Frame Extraction**: Convert MD trajectories (XTC/TRR) to individual PDB snapshots
+- **Pocket Detection**: Identify binding sites across trajectory frames using PocketHunter
+- **Pocket Clustering**: Group similar pockets and select representative conformations
+- **Molecular Docking**: Dock ligands to pocket representatives using SMINA
+- **3D Visualization**: Interactive molecular viewer with pocket highlighting
+- **Task Monitoring**: Real-time progress tracking with status history
 
-  - **Intuitive UI:** Enjoy a clean, modern interface with gradient backgrounds, responsive layouts, and smooth animations.
-  - **Real-time Monitoring:** Track the progress of your tasks with live updates and progress bars.
-  - **Interactive Visualizations:** Analyze results with dynamic charts from **Plotly** and 3D molecular visualizations.
+## Quick Start with Docker
 
-### 🔬 Scientific Workflow
+The recommended way to run PocketHunter Suite is with Docker Compose.
 
-  - **Modular Pipeline:** Run complex scientific workflows in a step-by-step, reproducible manner.
-  - **Unique Job IDs:** Every step generates a unique ID, ensuring full reproducibility and easy tracking.
-  - **Advanced Parameter Control:** Fine-tune scientific parameters for pocket detection, clustering, and docking to suit your specific research needs.
-  - **Integrated Docking:** Seamlessly perform molecular docking with **SMINA** on identified pockets.
+```bash
+# Clone the repository
+git clone git@github.com:bogrum/PocketHunter-Suite.git
+cd PocketHunter-Suite
 
------
+# Build and start all services
+docker compose up --build
+```
 
-## 🚀 Quick Start
+The application will be available at `http://localhost:8501`.
+
+### Services
+
+- **app**: Streamlit web interface (port 8501)
+- **worker**: Celery worker for background task processing
+- **redis**: Message broker for task queue
+
+## Manual Installation
+
+If you prefer to run without Docker:
 
 ### Prerequisites
 
-  - Python 3.8+
-  - A running Redis server
-  - PocketHunter CLI tools
-  - SMINA docking software (for molecular docking)
+- Python 3.8+
+- Redis server
+- PocketHunter CLI tools
+- SMINA (for docking)
 
-### Installation
+### Setup
 
-1.  **Clone the repository:**
-    ```bash
-    git clone git@github.com:bogrum/PocketHunter-Suite.git
-    cd streamlit_pockethunter_app
-    ```
-2.  **Install Python dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-3.  **Install docking dependencies (optional):**
-    ```bash
-    ./install_docking_deps.sh
-    ```
-4.  **Start your Redis server:**
-    ```bash
-    redis-server
-    ```
-5.  **Start the Celery worker:**
-    ```bash
-    celery -A celery_app worker --loglevel=info
-    ```
-6.  **Run the Streamlit application:**
-    ```bash
-    streamlit run main.py
-    ```
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
 
------
+# Install docking dependencies (optional)
+./install_docking_deps.sh
 
-## 📋 Modular Workflow Guide
+# Start Redis
+redis-server
 
-The application guides you through a four-step scientific pipeline. Each step can be executed independently using a previous step's Job ID or by uploading new files.
+# Start Celery worker (in separate terminal)
+celery -A celery_app worker --loglevel=info
 
-1.  **Extract Frames:** Convert molecular dynamics trajectories (`.xtc`) to individual PDB files.
-2.  **Detect Pockets:** Identify potential binding sites using the PDB files.
-3.  **Cluster Pockets:** Group similar pockets to find representative binding sites.
-4.  **Molecular Docking:** Dock ligands to the cluster representatives to analyze binding affinities.
+# Run the application
+streamlit run main.py
+```
 
-A dedicated **Task Monitor** allows you to view the status, filter, and manage all of your jobs in one place.
+## Workflow
 
------
+The pipeline consists of four sequential steps. Each step generates a unique Job ID that links to subsequent steps.
 
-## 🏗️ Architecture
+### Step 1: Extract Frames
 
-The application is built on a scalable and robust architecture.
+Upload a trajectory file (XTC/TRR) and topology (PDB/GRO) to extract individual frames as PDB files.
 
-  * **Frontend:** The user interface is built with **Streamlit**, enhanced with custom CSS for a modern look. It uses **Plotly** for rich, interactive data visualizations.
-  * **Backend:** Heavy computational tasks are handled asynchronously by **Celery**. **Redis** serves as the message broker, facilitating communication and real-time updates between the frontend and the backend.
-  * **Data Flow:** Files are uploaded to an organized directory structure. Celery workers process these files, and results are stored in a dedicated `results/` directory, ready for download.
+**Parameters:**
+- Frame interval (stride)
+- Start/end frames
 
------
+### Step 2: Detect Pockets
 
-## 🎯 Molecular Docking
+Run PocketHunter on extracted frames to identify binding pockets.
 
-The molecular docking feature is a core component of the pipeline. It is integrated using **SMINA**, a fast and accurate docking tool. 
+**Input:** Job ID from Step 1 or upload PDB files directly
 
-The PocketHunter Suite is being developed to include molecular docking capabilities as Step 4 of the pipeline. **Please note: This feature is currently under active development and may not be fully functional yet.**
+**Output:** CSV file with pocket predictions including residues, coordinates, and probability scores
 
-### Docking Parameters
+### Step 3: Cluster Pockets
 
-You can configure key docking parameters directly from the sidebar:
+Group similar pockets using DBSCAN clustering based on spatial overlap.
 
-  - **Number of Poses:** Controls the number of possible binding poses (1-50).
-  - **Exhaustiveness:** Determines the accuracy and computational cost of the docking run (1-20, higher is more accurate).
-  - **pH:** Specifies the protonation state of the molecules (4.0-10.0, default 7.4).
+**Parameters:**
+- Epsilon (cluster radius)
+- Minimum samples per cluster
 
+**Output:** Representative pockets from each cluster for docking
 
------
+### Step 4: Molecular Docking
 
-## 🐛 Troubleshooting
+Dock ligands against representative pocket conformations using SMINA.
 
-  * **Redis Connection:** Ensure your Redis server is actively running before starting the Celery worker and the Streamlit app.
-  * **Celery Workers:** Check the worker's terminal logs for any errors if a task is not running correctly.
-  * **File Permissions:** Verify that the `uploads` and `results` directories have the correct read/write permissions.
+**Parameters:**
+- Number of poses (1-50)
+- Exhaustiveness (1-20)
+- pH for protonation (4.0-10.0)
+- Box dimensions (X, Y, Z in Angstroms)
 
------
+**Input:**
+- Job ID from clustering step
+- Ligand files (PDBQT format, single files or ZIP archive)
 
-## 🤝 Contributing
+**Output:**
+- Docking scores and poses in SDF format
+- Interactive results table with filtering
+- 3D visualization of docked poses
 
-We welcome contributions! Please open an issue or submit a pull request on GitHub.
+## Architecture
 
------
+```
+                    +------------------+
+                    |    Streamlit     |
+                    |   (Frontend)     |
+                    +--------+---------+
+                             |
+                    +--------v---------+
+                    |      Redis       |
+                    |  (Message Queue) |
+                    +--------+---------+
+                             |
+                    +--------v---------+
+                    |  Celery Worker   |
+                    |   (Processing)   |
+                    +------------------+
+```
 
-Made with ❤️ for the scientific community.
+**Data Flow:**
+1. User uploads files via Streamlit interface
+2. Files stored in `uploads/` directory with job-specific paths
+3. Celery worker processes tasks asynchronously
+4. Results saved to `results/` directory
+5. Status tracked via JSON files in `task_status/` directory
+
+## File Structure
+
+```
+PocketHunter-Suite/
+├── main.py                 # Application entry point
+├── celery_app.py           # Celery configuration
+├── tasks.py                # Background task definitions
+├── session_state.py        # Session state management
+├── extract_frames_app.py   # Step 1: Frame extraction
+├── detect_pockets_app.py   # Step 2: Pocket detection
+├── cluster_pockets_app.py  # Step 3: Pocket clustering
+├── docking_app.py          # Step 4: Molecular docking
+├── task_monitor_app.py     # Task monitoring dashboard
+├── step4_docking.py        # Docking backend functions
+├── uploads/                # User uploaded files
+├── results/                # Processing results
+└── task_status/            # Job status tracking
+```
+
+## Docking Box Configuration
+
+The docking box defines the search space for ligand poses:
+
+- **Center**: Automatically calculated from pocket residues
+- **Size**: Configurable X, Y, Z dimensions (default: 20x20x20 Angstroms)
+
+Larger boxes increase search space but require higher exhaustiveness for accurate results.
+
+## Troubleshooting
+
+**Tasks stuck in "running" state:**
+- Check Celery worker logs for errors
+- Verify Redis connection is active
+- Restart the worker: `docker compose restart worker`
+
+**No pockets detected:**
+- Ensure PDB files contain protein atoms
+- Check that PocketHunter is properly installed in the container
+
+**Docking fails with "No PDBQT files found":**
+- Verify ligand ZIP contains .pdbqt files (not nested in subdirectories)
+- Check file format is valid PDBQT
+
+**Browser shows stale data:**
+- Refresh the page after task completion
+- Check Task Monitor for actual job status
+
+## Environment Variables
+
+Configure via `.env` file or environment:
+
+```
+REDIS_URL=redis://localhost:6379/0
+SMINA_PATH=/usr/local/bin/smina
+POCKETHUNTER_PATH=/opt/pockethunter
+```
+
+## License
+
+This project is open source. See LICENSE file for details.
+
+## Contributing
+
+Contributions welcome. Please open an issue or submit a pull request.
