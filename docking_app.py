@@ -17,6 +17,7 @@ from celery_app import celery_app
 from config import Config
 from security import FileValidator, SecurityError
 from logging_config import setup_logging
+from session_state import initialize_session_state, get_pdb_selection_key
 import py3Dmol
 import streamlit.components.v1 as components
 
@@ -26,6 +27,31 @@ UPLOAD_DIR = str(Config.UPLOAD_DIR)
 
 # Setup logging
 logger = setup_logging(__name__)
+
+
+def update_job_status(job_id, status, step=None, task_id=None, result_info=None):
+    """Update job status file"""
+    status_file = os.path.join(RESULTS_DIR, f'{job_id}_status.json')
+    current_status = {}
+    if os.path.exists(status_file):
+        with open(status_file, 'r') as f:
+            try:
+                current_status = json.load(f)
+            except json.JSONDecodeError:
+                current_status = {}
+
+    current_status['status'] = status
+    if step:
+        current_status['step'] = step
+    if task_id:
+        current_status['task_id'] = task_id
+    if result_info:
+        current_status['result_info'] = result_info
+    from datetime import datetime
+    current_status['last_updated'] = datetime.now().isoformat()
+
+    with open(status_file, 'w') as f:
+        json.dump(current_status, f, indent=4)
 
 # Page configuration is handled by main.py
 
@@ -196,13 +222,18 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Initialize session state
+# Initialize session state using centralized module
+initialize_session_state()
+
+# Additional docking-specific state (backwards compatibility)
 if 'docking_job_id' not in st.session_state:
     st.session_state.docking_job_id = None
 if 'docking_task_id' not in st.session_state:
     st.session_state.docking_task_id = None
 if 'view_mode' not in st.session_state:
     st.session_state.view_mode = 'setup'
+if 'docking_selected_pdbs' not in st.session_state:
+    st.session_state.docking_selected_pdbs = {}
 
 # Sidebar for configuration
 with st.sidebar:
@@ -346,7 +377,7 @@ def classify_affinity(affinity):
         return "poor", "🔴"
 
 # Main content area - Create tabs for different views
-tab_setup, tab_results, tab_viewer = st.tabs(["🎯 Setup & Launch", "📊 Results & Analysis", "🔬 3D Viewer"])
+tab_setup, tab_results = st.tabs(["🎯 Setup & Launch", "📊 Results & 3D Viewer"])
 
 with tab_setup:
     st.markdown("### 🎯 Job Configuration")
@@ -381,6 +412,13 @@ with tab_setup:
         help="Enter the job ID from Step 3: Cluster Pockets that you want to use for docking"
     )
 
+    # Input for extract job ID (for PDB source directory)
+    extract_job_id = st.text_input(
+        "Extract Job ID (optional):",
+        placeholder="e.g., extract_20250815_140022_a1b2c3d4",
+        help="Enter the job ID from Step 1: Extract Frames. Required if PDB files cannot be auto-detected."
+    )
+
     if cluster_job_id:
         # Construct path to cluster representatives file
         representatives_file = os.path.join(RESULTS_DIR, cluster_job_id, "pocket_clusters", "cluster_representatives.csv")
@@ -409,19 +447,22 @@ with tab_setup:
                 with col1:
                     if st.button("Select All", use_container_width=True):
                         for idx, row in df_reps_sorted.iterrows():
-                            st.session_state[f"pdb_{idx}"] = True
+                            key = get_pdb_selection_key(row['File name'])
+                            st.session_state[key] = True
                         st.rerun()
 
                 with col2:
                     if st.button("Select Top 10", use_container_width=True):
-                        for idx, row in df_reps_sorted.iterrows():
-                            st.session_state[f"pdb_{idx}"] = idx < 10
+                        for i, (idx, row) in enumerate(df_reps_sorted.iterrows()):
+                            key = get_pdb_selection_key(row['File name'])
+                            st.session_state[key] = i < 10
                         st.rerun()
 
                 with col3:
                     if st.button("Clear All", use_container_width=True):
                         for idx, row in df_reps_sorted.iterrows():
-                            st.session_state[f"pdb_{idx}"] = False
+                            key = get_pdb_selection_key(row['File name'])
+                            st.session_state[key] = False
                         st.rerun()
 
                 # Create columns for better layout
@@ -431,16 +472,18 @@ with tab_setup:
                     st.markdown("#### 🏆 High Probability Pockets (Top 50%)")
                     high_prob_pdbs = df_reps_sorted.head(len(df_reps_sorted)//2)
                     for idx, row in high_prob_pdbs.iterrows():
+                        # Use filename-based key to avoid collisions
+                        key = get_pdb_selection_key(row['File name'])
                         # Initialize session state if not exists
-                        if f"pdb_{idx}" not in st.session_state:
-                            st.session_state[f"pdb_{idx}"] = True  # Default to selected for high probability
+                        if key not in st.session_state:
+                            st.session_state[key] = True  # Default to selected for high probability
 
                         is_selected = st.checkbox(
                             f"{row['File name']} (Prob: {row['probability']:.3f})",
-                            value=st.session_state[f"pdb_{idx}"],
-                            key=f"pdb_{idx}_high"
+                            value=st.session_state[key],
+                            key=f"{key}_checkbox"
                         )
-                        st.session_state[f"pdb_{idx}"] = is_selected
+                        st.session_state[key] = is_selected
                         if is_selected:
                             selected_pdbs.append(row)
 
@@ -448,18 +491,23 @@ with tab_setup:
                     st.markdown("#### 📊 Lower Probability Pockets")
                     low_prob_pdbs = df_reps_sorted.tail(len(df_reps_sorted)//2)
                     for idx, row in low_prob_pdbs.iterrows():
+                        # Use filename-based key to avoid collisions
+                        key = get_pdb_selection_key(row['File name'])
                         # Initialize session state if not exists
-                        if f"pdb_{idx}" not in st.session_state:
-                            st.session_state[f"pdb_{idx}"] = False  # Default to not selected for low probability
+                        if key not in st.session_state:
+                            st.session_state[key] = False  # Default to not selected for low probability
 
                         is_selected = st.checkbox(
                             f"{row['File name']} (Prob: {row['probability']:.3f})",
-                            value=st.session_state[f"pdb_{idx}"],
-                            key=f"pdb_{idx}_low"
+                            value=st.session_state[key],
+                            key=f"{key}_checkbox"
                         )
-                        st.session_state[f"pdb_{idx}"] = is_selected
+                        st.session_state[key] = is_selected
                         if is_selected:
                             selected_pdbs.append(row)
+
+                # Store selected PDFs in session state for use when launching docking
+                st.session_state.docking_selected_pdbs = selected_pdbs
 
                 # Show selected count
                 if selected_pdbs:
@@ -497,8 +545,8 @@ with tab_setup:
     )
 
     if uploaded_files:
-        # Create temporary directory for ligands
-        ligand_temp_dir = os.path.join(UPLOAD_DIR, "ligands_temp")
+        # Create job-specific directory for ligands (fixes temp file accumulation)
+        ligand_temp_dir = os.path.join(UPLOAD_DIR, f"ligands_{job_id}")
         os.makedirs(ligand_temp_dir, exist_ok=True)
 
         # Process uploaded files
@@ -524,10 +572,17 @@ with tab_setup:
                 with zipfile.ZipFile(zip_temp_path, 'r') as zip_ref:
                     zip_ref.extractall(ligand_temp_dir)
                     # Find PDBQT files in extracted content
+                    pdbqt_count_before = len(ligand_files)
                     for root, dirs, files in os.walk(ligand_temp_dir):
                         for file in files:
                             if file.endswith('.pdbqt'):
                                 ligand_files.append(os.path.join(root, file))
+
+                    # Validate ZIP contained PDBQT files
+                    pdbqt_found = len(ligand_files) - pdbqt_count_before
+                    if pdbqt_found == 0:
+                        st.warning(f"⚠️ ZIP file '{uploaded_file.name}' contains no PDBQT files. Please ensure your ligands are in PDBQT format.")
+                        logger.warning(f"ZIP {uploaded_file.name} contained no PDBQT files")
             else:
                 # Save individual file
                 file_path = os.path.join(ligand_temp_dir, uploaded_file.name)
@@ -588,11 +643,31 @@ with tab_setup:
             # Start docking button
             st.markdown("---")
             if st.button("🚀 Start Molecular Docking", type="primary", use_container_width=True):
-                if 'selected_pdbs' in locals() and selected_pdbs:
+                # Get selected PDFs from session state (fixes variable scope bug)
+                selected_pdbs = st.session_state.get('docking_selected_pdbs', [])
+                if selected_pdbs:
                     # Create filtered representatives file with only selected PDBs
                     selected_df = pd.DataFrame(selected_pdbs)
                     filtered_reps_file = os.path.join(UPLOAD_DIR, f"filtered_reps_{job_id}.csv")
                     selected_df.to_csv(filtered_reps_file, index=False)
+
+                    # Determine PDB source directory
+                    pdb_source_dir = None
+                    if extract_job_id and extract_job_id.strip():
+                        # Use provided extract job ID
+                        pdb_source_dir = os.path.join(RESULTS_DIR, extract_job_id.strip(), "pdbs")
+                        if not os.path.exists(pdb_source_dir):
+                            st.error(f"❌ PDB directory not found: {pdb_source_dir}")
+                            st.stop()
+                    else:
+                        # Try to auto-detect by searching for extract jobs
+                        for dirname in sorted(os.listdir(RESULTS_DIR), reverse=True):
+                            if dirname.startswith('extract_'):
+                                candidate_dir = os.path.join(RESULTS_DIR, dirname, "pdbs")
+                                if os.path.exists(candidate_dir):
+                                    pdb_source_dir = candidate_dir
+                                    logger.info(f"Auto-detected PDB source: {pdb_source_dir}")
+                                    break
 
                     # Start docking task with all parameters
                     task = run_docking_task.delay(
@@ -605,7 +680,8 @@ with tab_setup:
                         ph_value=ph_value,
                         box_size_x=box_size_x,
                         box_size_y=box_size_y,
-                        box_size_z=box_size_z
+                        box_size_z=box_size_z,
+                        pdb_source_dir=pdb_source_dir
                     )
 
                     st.session_state.docking_job_id = job_id
@@ -622,7 +698,7 @@ with tab_setup:
                 else:
                     st.error("❌ Please select at least one PDB file for docking")
 
-# Progress and Results Section
+# Progress and Results Section with integrated 3D Viewer
 with tab_results:
     # Option to load existing results
     st.markdown("### 📂 Load Docking Results")
@@ -644,16 +720,16 @@ with tab_results:
 
     # Show progress or results
     if st.session_state.docking_job_id and st.session_state.docking_task_id:
-        st.markdown("### 📈 Current Job Progress")
-
         # Get task status
         task = celery_app.AsyncResult(st.session_state.docking_task_id)
 
         if task.state == 'PENDING':
+            st.markdown("### 📈 Job Progress")
             st.info("⏳ Task is pending in queue...")
             if st.button("🔄 Refresh Status"):
                 st.rerun()
         elif task.state == 'PROGRESS':
+            st.markdown("### 📈 Job Progress")
             progress_data = task.info
             if isinstance(progress_data, dict):
                 progress = progress_data.get('progress', 0)
@@ -664,7 +740,6 @@ with tab_results:
                 st.info(f"🔄 {current_step}")
                 st.write(f"**Status:** {status}")
 
-                # Auto-refresh for progress updates
                 if progress < 100:
                     if st.button("🔄 Refresh Progress"):
                         st.rerun()
@@ -678,346 +753,305 @@ with tab_results:
             # Display results
             results = task.result
             if isinstance(results, dict):
-                st.markdown("### 📊 Docking Results Overview")
+                # Update job status file to 'completed'
+                update_job_status(
+                    st.session_state.docking_job_id,
+                    'completed',
+                    'Molecular docking completed',
+                    result_info={
+                        'total_poses': results.get('total_docking_poses', 0),
+                        'unique_ligands': results.get('unique_ligands', 0),
+                        'best_affinity': results.get('best_affinity', 0)
+                    }
+                )
 
-                # Metrics in cards
+                # Metrics overview row
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Total Poses</div>
-                        <div class="metric-value">{results.get('total_docking_poses', 0)}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.metric("Total Poses", results.get('total_docking_poses', 0))
                 with col2:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Unique Ligands</div>
-                        <div class="metric-value">{results.get('unique_ligands', 0)}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.metric("Unique Ligands", results.get('unique_ligands', 0))
                 with col3:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Unique Receptors</div>
-                        <div class="metric-value">{results.get('unique_receptors', 0)}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.metric("Unique Receptors", results.get('unique_receptors', 0))
                 with col4:
                     best_aff = results.get('best_affinity', 0)
                     category, emoji = classify_affinity(best_aff)
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Best Affinity {emoji}</div>
-                        <div class="metric-value">{best_aff:.2f}</div>
-                        <div style="font-size: 0.8rem; color: #666;">kcal/mol</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.metric(f"Best Affinity {emoji}", f"{best_aff:.2f} kcal/mol")
 
-                # Load and display results
+                # Load results
                 results_file = results.get('docking_results_file')
                 if results_file and os.path.exists(results_file):
                     df_results = pd.read_csv(results_file)
 
-                    # Filter best poses per ligand-receptor pair
-                    df_best = df_results.loc[df_results.groupby(['ligand', 'receptor'])['affinity (kcal/mol)'].idxmin()]
+                    # Validate DataFrame has required data
+                    if df_results.empty:
+                        st.warning("⚠️ Results file is empty. No docking poses were generated.")
+                    elif 'ligand' not in df_results.columns or 'receptor' not in df_results.columns:
+                        st.error("❌ Results file is missing required columns (ligand, receptor)")
+                    else:
+                        # Filter best poses per ligand-receptor pair
+                        df_best = df_results.loc[df_results.groupby(['ligand', 'receptor'])['affinity (kcal/mol)'].idxmin()]
+                        df_best['affinity_class'] = df_best['affinity (kcal/mol)'].apply(lambda x: classify_affinity(x)[0])
+                        df_best['affinity_emoji'] = df_best['affinity (kcal/mol)'].apply(lambda x: classify_affinity(x)[1])
 
-                    # Add affinity classification
-                    df_best['affinity_class'] = df_best['affinity (kcal/mol)'].apply(lambda x: classify_affinity(x)[0])
-                    df_best['affinity_emoji'] = df_best['affinity (kcal/mol)'].apply(lambda x: classify_affinity(x)[1])
+                        st.markdown("---")
 
-                    # Create sub-tabs for different analyses
-                    results_tab1, results_tab2, results_tab3, results_tab4 = st.tabs([
-                        "🏆 Best Poses",
-                        "📈 Affinity Analysis",
-                        "🗺️ Heatmap",
-                        "💾 Download"
-                    ])
+                        # ========== MAIN SPLIT VIEW: Results Table + 3D Viewer ==========
+                        st.markdown("### 🎯 Results Explorer with 3D Visualization")
 
-                    with results_tab1:
-                        st.markdown("#### 🏆 Top Docking Poses")
-
-                        # Filter options
-                        col1, col2 = st.columns(2)
-                        with col1:
+                        # Filter controls in a row
+                        filter_col1, filter_col2, filter_col3 = st.columns([2, 2, 1])
+                        with filter_col1:
                             affinity_filter = st.multiselect(
-                                "Filter by Affinity Class:",
+                                "Filter by Affinity:",
                                 options=['excellent', 'good', 'moderate', 'poor'],
-                                default=['excellent', 'good']
+                                default=['excellent', 'good'],
+                                key="affinity_filter_main"
                             )
-                        with col2:
-                            top_n = st.slider("Show top N results:", 10, 100, 20)
+                        with filter_col2:
+                            top_n = st.slider("Show top N results:", 5, 50, 15, key="top_n_main")
+                        with filter_col3:
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            auto_view = st.checkbox("Auto-view", value=True, help="Automatically show 3D view when selecting a pose")
 
+                        # Apply filters
                         if affinity_filter:
                             df_filtered = df_best[df_best['affinity_class'].isin(affinity_filter)]
                         else:
                             df_filtered = df_best
-
                         df_display = df_filtered.sort_values('affinity (kcal/mol)').head(top_n)
 
-                        # Enhanced table with styling
-                        st.dataframe(
-                            df_display[['ligand', 'receptor', 'affinity (kcal/mol)', 'affinity_emoji', 'rmsd l.b.', 'rmsd u.b.']].rename(
-                                columns={'affinity_emoji': 'Quality'}
-                            ),
-                            use_container_width=True,
-                            height=400
-                        )
+                        # Split view: Table on left, 3D viewer on right
+                        table_col, viewer_col = st.columns([1, 1])
 
-                        # Selection for 3D viewing
+                        with table_col:
+                            st.markdown("#### 🏆 Top Docking Poses")
+
+                            # Create a selection table
+                            if not df_display.empty:
+                                # Select pose for viewing
+                                pose_options = df_display.index.tolist()
+                                selected_idx = st.selectbox(
+                                    "Select pose to view:",
+                                    pose_options,
+                                    format_func=lambda x: f"{df_display.loc[x, 'affinity_emoji']} {df_display.loc[x, 'ligand']} ↔ {df_display.loc[x, 'receptor']} ({df_display.loc[x, 'affinity (kcal/mol)']:.2f} kcal/mol)",
+                                    key="pose_selector_main"
+                                )
+
+                                if selected_idx is not None:
+                                    st.session_state.selected_pose = df_display.loc[selected_idx].to_dict()
+
+                                # Display table
+                                st.dataframe(
+                                    df_display[['ligand', 'receptor', 'affinity (kcal/mol)', 'affinity_emoji', 'rmsd l.b.', 'rmsd u.b.']].rename(
+                                        columns={'affinity_emoji': '🎯', 'affinity (kcal/mol)': 'Affinity', 'rmsd l.b.': 'RMSD LB', 'rmsd u.b.': 'RMSD UB'}
+                                    ),
+                                    use_container_width=True,
+                                    height=350
+                                )
+                            else:
+                                st.info("No poses match the selected filters.")
+
+                        with viewer_col:
+                            st.markdown("#### 🔬 3D Structure Viewer")
+
+                            if 'selected_pose' in st.session_state and st.session_state.selected_pose:
+                                pose = st.session_state.selected_pose
+
+                                # Pose info card
+                                category, emoji = classify_affinity(pose.get('affinity (kcal/mol)', 0))
+                                st.markdown(f"""
+                                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1rem; border-radius: 10px; color: white; margin-bottom: 1rem;">
+                                    <strong>{emoji} {pose.get('ligand', 'N/A')}</strong> ↔ <strong>{pose.get('receptor', 'N/A')}</strong><br>
+                                    <span style="font-size: 1.2rem; font-weight: bold;">{pose.get('affinity (kcal/mol)', 0):.2f} kcal/mol</span>
+                                    <span style="margin-left: 1rem; font-size: 0.9rem;">RMSD: {pose.get('rmsd l.b.', 0):.2f} / {pose.get('rmsd u.b.', 0):.2f} Å</span>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                # Visualization controls
+                                viz_col1, viz_col2 = st.columns(2)
+                                with viz_col1:
+                                    viz_style = st.selectbox("Style:", ["cartoon", "surface", "stick"], key="viz_style_main")
+                                with viz_col2:
+                                    show_ligand = st.checkbox("Show Ligand", value=True, key="show_ligand_main")
+
+                                # Try to load and display the structure
+                                try:
+                                    receptor_file = pose.get('receptor_path')
+                                    if receptor_file and os.path.exists(receptor_file):
+                                        with open(receptor_file, 'r') as f:
+                                            receptor_data = f.read()
+                                        show_molecule_3d(receptor_data, None, width=400, height=350, style=viz_style)
+                                    else:
+                                        # Try to find receptor in docking output
+                                        docking_dir = results.get('docking_output_dir')
+                                        if docking_dir:
+                                            receptor_name = pose.get('receptor', '')
+                                            possible_paths = [
+                                                os.path.join(docking_dir, f"{receptor_name}"),
+                                                os.path.join(docking_dir, f"{receptor_name}.pdb"),
+                                                os.path.join(docking_dir, f"{receptor_name}.pdbqt"),
+                                            ]
+                                            for path in possible_paths:
+                                                if os.path.exists(path):
+                                                    with open(path, 'r') as f:
+                                                        receptor_data = f.read()
+                                                    show_molecule_3d(receptor_data, None, width=400, height=350, style=viz_style)
+                                                    break
+                                            else:
+                                                st.info("📁 Upload a PDB file to visualize:")
+                                                demo_file = st.file_uploader("Upload PDB", type=['pdb'], key='viewer_pdb', label_visibility="collapsed")
+                                                if demo_file:
+                                                    pdb_content = demo_file.getvalue().decode('utf-8')
+                                                    show_molecule_3d(pdb_content, None, width=400, height=350, style=viz_style)
+                                        else:
+                                            st.warning("⚠️ Structure files not available")
+                                except Exception as e:
+                                    st.error(f"Error loading structure: {e}")
+                                    logger.error(f"3D viewer error: {e}", exc_info=True)
+                            else:
+                                st.info("👆 Select a pose from the table to view its 3D structure")
+                                # Demo upload
+                                demo_file = st.file_uploader("Or upload a PDB file:", type=['pdb'], key='demo_viewer_pdb')
+                                if demo_file:
+                                    pdb_content = demo_file.getvalue().decode('utf-8')
+                                    show_molecule_3d(pdb_content, None, width=400, height=350, style="cartoon")
+
+                        # ========== Additional Analysis Tabs ==========
                         st.markdown("---")
-                        st.markdown("**Select a pose to view in 3D Viewer tab:**")
-                        selected_idx = st.selectbox(
-                            "Choose pose:",
-                            df_display.index,
-                            format_func=lambda x: f"{df_display.loc[x, 'ligand']} - {df_display.loc[x, 'receptor']} ({df_display.loc[x, 'affinity (kcal/mol)']:.2f} kcal/mol)"
-                        )
-                        if selected_idx is not None:
-                            st.session_state.selected_pose = df_display.loc[selected_idx].to_dict()
-                            st.info("✅ Pose selected! Switch to the 3D Viewer tab to visualize it.")
+                        st.markdown("### 📊 Detailed Analysis")
 
-                    with results_tab2:
-                        st.markdown("#### 📈 Affinity Distribution Analysis")
+                        analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs(["📈 Statistics", "🗺️ Heatmap", "💾 Download"])
 
-                        col1, col2 = st.columns(2)
+                        with analysis_tab1:
+                            col1, col2 = st.columns(2)
 
-                        with col1:
-                            # Histogram
-                            fig_hist = px.histogram(
-                                df_results,
-                                x='affinity (kcal/mol)',
-                                title='Distribution of Docking Affinities',
-                                nbins=30,
-                                color_discrete_sequence=['#667eea']
-                            )
-                            fig_hist.update_layout(
-                                xaxis_title="Affinity (kcal/mol)",
-                                yaxis_title="Number of Poses",
-                                showlegend=False
-                            )
-                            st.plotly_chart(fig_hist, use_container_width=True)
+                            with col1:
+                                # Histogram
+                                fig_hist = px.histogram(
+                                    df_results,
+                                    x='affinity (kcal/mol)',
+                                    title='Affinity Distribution',
+                                    nbins=30,
+                                    color_discrete_sequence=['#667eea']
+                                )
+                                fig_hist.update_layout(xaxis_title="Affinity (kcal/mol)", yaxis_title="Count", showlegend=False, height=300)
+                                st.plotly_chart(fig_hist, use_container_width=True)
 
-                        with col2:
-                            # Box plot by ligand
-                            fig_box = px.box(
-                                df_results.groupby('ligand').head(5),  # Top 5 per ligand
-                                x='ligand',
-                                y='affinity (kcal/mol)',
-                                title='Affinity Range by Ligand',
-                                color_discrete_sequence=['#764ba2']
-                            )
-                            fig_box.update_layout(
-                                xaxis_title="Ligand",
-                                yaxis_title="Affinity (kcal/mol)",
-                                showlegend=False
-                            )
-                            fig_box.update_xaxes(tickangle=45)
-                            st.plotly_chart(fig_box, use_container_width=True)
+                            with col2:
+                                # Box plot by ligand
+                                fig_box = px.box(
+                                    df_results.groupby('ligand').head(5),
+                                    x='ligand',
+                                    y='affinity (kcal/mol)',
+                                    title='Affinity by Ligand',
+                                    color_discrete_sequence=['#764ba2']
+                                )
+                                fig_box.update_layout(xaxis_title="Ligand", yaxis_title="Affinity", showlegend=False, height=300)
+                                fig_box.update_xaxes(tickangle=45)
+                                st.plotly_chart(fig_box, use_container_width=True)
 
-                        # Statistics
-                        st.markdown("#### 📊 Statistical Summary")
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Mean Affinity", f"{df_results['affinity (kcal/mol)'].mean():.2f}")
-                        with col2:
-                            st.metric("Median Affinity", f"{df_results['affinity (kcal/mol)'].median():.2f}")
-                        with col3:
-                            st.metric("Std Dev", f"{df_results['affinity (kcal/mol)'].std():.2f}")
-                        with col4:
-                            st.metric("Min Affinity", f"{df_results['affinity (kcal/mol)'].min():.2f}")
+                            # Statistics row
+                            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                            with stat_col1:
+                                st.metric("Mean", f"{df_results['affinity (kcal/mol)'].mean():.2f}")
+                            with stat_col2:
+                                st.metric("Median", f"{df_results['affinity (kcal/mol)'].median():.2f}")
+                            with stat_col3:
+                                st.metric("Std Dev", f"{df_results['affinity (kcal/mol)'].std():.2f}")
+                            with stat_col4:
+                                st.metric("Best", f"{df_results['affinity (kcal/mol)'].min():.2f}")
 
-                    with results_tab3:
-                        st.markdown("#### 🗺️ Ligand-Receptor Affinity Heatmap")
+                        with analysis_tab2:
+                            # Heatmap
+                            if len(df_best) > 1:
+                                pivot_data = df_best.pivot_table(
+                                    values='affinity (kcal/mol)',
+                                    index='ligand',
+                                    columns='receptor',
+                                    aggfunc='min'
+                                )
 
-                        # Create pivot table for heatmap
-                        pivot_data = df_best.pivot_table(
-                            values='affinity (kcal/mol)',
-                            index='ligand',
-                            columns='receptor',
-                            aggfunc='min'
-                        )
+                                fig_heat = go.Figure(data=go.Heatmap(
+                                    z=pivot_data.values,
+                                    x=pivot_data.columns,
+                                    y=pivot_data.index,
+                                    colorscale='RdYlGn_r',
+                                    text=pivot_data.values,
+                                    texttemplate='%{text:.1f}',
+                                    textfont={"size": 9},
+                                    colorbar=dict(title="kcal/mol")
+                                ))
+                                fig_heat.update_layout(
+                                    title='Ligand-Receptor Affinity Matrix',
+                                    height=max(350, len(pivot_data.index) * 25)
+                                )
+                                st.plotly_chart(fig_heat, use_container_width=True)
+                            else:
+                                st.info("Need multiple ligand-receptor pairs for heatmap visualization")
 
-                        # Create heatmap
-                        fig_heat = go.Figure(data=go.Heatmap(
-                            z=pivot_data.values,
-                            x=pivot_data.columns,
-                            y=pivot_data.index,
-                            colorscale='RdYlGn_r',
-                            text=pivot_data.values,
-                            texttemplate='%{text:.2f}',
-                            textfont={"size": 10},
-                            colorbar=dict(title="Affinity<br>(kcal/mol)")
-                        ))
+                        with analysis_tab3:
+                            dl_col1, dl_col2 = st.columns(2)
 
-                        fig_heat.update_layout(
-                            title='Binding Affinity Matrix (Lower is Better)',
-                            xaxis_title='Receptor',
-                            yaxis_title='Ligand',
-                            height=max(400, len(pivot_data.index) * 30)
-                        )
+                            with dl_col1:
+                                csv_data = df_results.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Full Results (CSV)",
+                                    data=csv_data,
+                                    file_name=f"docking_results_{st.session_state.docking_job_id}.csv",
+                                    mime="text/csv",
+                                    use_container_width=True
+                                )
 
-                        st.plotly_chart(fig_heat, use_container_width=True)
+                                best_csv = df_best.to_csv(index=False)
+                                st.download_button(
+                                    label="📥 Best Poses (CSV)",
+                                    data=best_csv,
+                                    file_name=f"best_poses_{st.session_state.docking_job_id}.csv",
+                                    mime="text/csv",
+                                    use_container_width=True
+                                )
 
-                        # Best combinations
-                        st.markdown("#### 🏅 Top 10 Ligand-Receptor Combinations")
-                        top_combinations = df_best.nsmallest(10, 'affinity (kcal/mol)')
+                            with dl_col2:
+                                docking_dir = results.get('docking_output_dir')
+                                if docking_dir:
+                                    if st.button("🔄 Generate ZIP Archive", use_container_width=True):
+                                        with st.spinner("Creating archive..."):
+                                            zip_path = os.path.join(docking_dir, 'results.zip')
+                                            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                                                for root, dirs, files in os.walk(docking_dir):
+                                                    for file in files:
+                                                        if file.endswith(('.csv', '.sdf', '.pdbqt', '.log')):
+                                                            file_path = os.path.join(root, file)
+                                                            zipf.write(file_path, os.path.relpath(file_path, docking_dir))
+                                            st.success("✅ Archive created!")
 
-                        for idx, row in top_combinations.iterrows():
-                            category, emoji = classify_affinity(row['affinity (kcal/mol)'])
-                            st.markdown(f"""
-                            <div class="docking-card">
-                                <strong>{emoji} {row['ligand']}</strong> ↔ <strong>{row['receptor']}</strong><br>
-                                <span class="affinity-badge affinity-{category}">
-                                    {row['affinity (kcal/mol)']:.2f} kcal/mol
-                                </span>
-                                <span style="margin-left: 1rem; color: #666;">
-                                    RMSD: {row['rmsd l.b.']:.2f} / {row['rmsd u.b.']:.2f} Å
-                                </span>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                    with results_tab4:
-                        st.markdown("#### 💾 Download Results")
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.markdown("**📄 Download Data Files**")
-
-                            # CSV download
-                            csv_data = df_results.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Download Full Results (CSV)",
-                                data=csv_data,
-                                file_name=f"docking_results_{st.session_state.docking_job_id}.csv",
-                                mime="text/csv",
-                                use_container_width=True
-                            )
-
-                            # Best poses CSV
-                            best_csv = df_best.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Download Best Poses (CSV)",
-                                data=best_csv,
-                                file_name=f"best_poses_{st.session_state.docking_job_id}.csv",
-                                mime="text/csv",
-                                use_container_width=True
-                            )
-
-                        with col2:
-                            st.markdown("**📦 Download Structure Files**")
-
-                            # Create ZIP with all results
-                            if st.button("🔄 Generate Complete Results ZIP", use_container_width=True):
-                                with st.spinner("Creating ZIP archive..."):
-                                    zip_path = os.path.join(results.get('docking_output_dir'), 'docking_results_complete.zip')
-                                    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                                        for root, dirs, files in os.walk(results.get('docking_output_dir')):
-                                            for file in files:
-                                                if file.endswith(('.csv', '.sdf', '.pdbqt', '.log')):
-                                                    file_path = os.path.join(root, file)
-                                                    zipf.write(file_path, os.path.relpath(file_path, results.get('docking_output_dir')))
-                                    st.success("✅ ZIP archive created!")
-
-                            # Download ZIP
-                            zip_path = os.path.join(results.get('docking_output_dir'), 'docking_results_complete.zip')
-                            if os.path.exists(zip_path):
-                                with open(zip_path, 'rb') as f:
-                                    st.download_button(
-                                        label="📥 Download Complete ZIP",
-                                        data=f.read(),
-                                        file_name=f"docking_results_{st.session_state.docking_job_id}.zip",
-                                        mime="application/zip",
-                                        use_container_width=True
-                                    )
-
-                        st.markdown("---")
-                        st.info("💡 The ZIP file contains all docking poses in PDBQT/SDF format, CSV result tables, and log files.")
+                                    zip_path = os.path.join(docking_dir, 'results.zip')
+                                    if os.path.exists(zip_path):
+                                        with open(zip_path, 'rb') as f:
+                                            st.download_button(
+                                                label="📥 Download ZIP",
+                                                data=f.read(),
+                                                file_name=f"docking_{st.session_state.docking_job_id}.zip",
+                                                mime="application/zip",
+                                                use_container_width=True
+                                            )
 
         elif task.state == 'FAILURE':
             st.error("❌ Docking job failed!")
-            if isinstance(task.info, dict):
-                error_msg = task.info.get('exc_message', 'Unknown error')
-            else:
-                error_msg = str(task.info) if task.info else 'Unknown error'
+            error_msg = task.info.get('exc_message', 'Unknown error') if isinstance(task.info, dict) else str(task.info) if task.info else 'Unknown error'
             st.error(f"Error: {error_msg}")
             st.info("💡 Check the Task Monitor for detailed error logs.")
     else:
-        st.info("ℹ️ No active docking job. Start a new job in the 'Setup & Launch' tab or enter a job ID above to load existing results.")
-
-# 3D Viewer Section
-with tab_viewer:
-    st.markdown("### 🔬 Interactive 3D Molecular Viewer")
-
-    if 'selected_pose' in st.session_state and st.session_state.selected_pose:
-        pose = st.session_state.selected_pose
-
-        st.markdown(f"""
-        <div class="docking-card">
-            <h4>🎯 Selected Pose</h4>
-            <p><strong>Ligand:</strong> {pose.get('ligand', 'N/A')}</p>
-            <p><strong>Receptor:</strong> {pose.get('receptor', 'N/A')}</p>
-            <p><strong>Affinity:</strong> <span class="affinity-badge affinity-{pose.get('affinity_class', 'poor')}">
-                {pose.get('affinity (kcal/mol)', 0):.2f} kcal/mol
-            </span></p>
-            <p><strong>RMSD:</strong> {pose.get('rmsd l.b.', 0):.2f} / {pose.get('rmsd u.b.', 0):.2f} Å</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Visualization controls
-        col1, col2 = st.columns(2)
-        with col1:
-            viz_style = st.selectbox(
-                "Protein Style:",
-                ["cartoon", "surface", "stick"],
-                help="Visualization style for the protein structure"
-            )
-        with col2:
-            show_binding_site = st.checkbox("Highlight Binding Site", value=True)
-
-        # Try to load and display the structure
-        try:
-            # Construct file paths (this would need to match your actual file structure)
-            receptor_file = pose.get('receptor_file')  # You'd need to add this to the results
-            ligand_file = pose.get('pose_file')  # You'd need to add this to the results
-
-            if receptor_file and os.path.exists(receptor_file):
-                with open(receptor_file, 'r') as f:
-                    receptor_data = f.read()
-
-                ligand_data = None
-                if ligand_file and os.path.exists(ligand_file):
-                    with open(ligand_file, 'r') as f:
-                        ligand_data = f.read()
-
-                show_molecule_3d(receptor_data, ligand_data, style_protein=viz_style)
-            else:
-                st.warning("⚠️ Structure files not found. Make sure to save receptor and pose file paths in the results.")
-                st.info("💡 File paths need to be added to the docking results CSV for 3D visualization.")
-
-        except Exception as e:
-            st.error(f"Error loading structure: {e}")
-            logger.error(f"Error loading structure for 3D viewer: {e}", exc_info=True)
-
-    else:
-        st.info("ℹ️ No pose selected for viewing. Go to the 'Results & Analysis' tab and select a pose from the Best Poses section.")
-
-        # Show demo viewer
-        st.markdown("#### 📺 Demo Viewer")
-        st.markdown("Upload a PDB file to preview:")
-
-        demo_file = st.file_uploader("Upload PDB file", type=['pdb'], key='demo_pdb')
-        if demo_file:
-            pdb_content = demo_file.getvalue().decode('utf-8')
-            show_molecule_3d(pdb_content, style_protein="cartoon")
+        st.info("ℹ️ No active docking job. Start a new job in the 'Setup & Launch' tab or enter a job ID above.")
 
 # Footer
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: #666;'>
-    <p>🔬 Molecular Docking powered by SMINA | 3D Visualization by py3Dmol | Part of the PocketHunter Suite</p>
+<div style='text-align: center; color: #666; padding: 1rem 0;'>
+    <p>🔬 Molecular Docking powered by <strong>SMINA</strong> | 3D Visualization by <strong>py3Dmol</strong></p>
     <p style='font-size: 0.85rem; margin-top: 0.5rem;'>
-        💡 Tip: Lower (more negative) affinity values indicate stronger binding
+        💡 Lower (more negative) affinity values indicate stronger binding
     </p>
 </div>
 """, unsafe_allow_html=True)
