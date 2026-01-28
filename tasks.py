@@ -15,8 +15,126 @@ POCKETHUNTER_DIR = str(Config.POCKETHUNTER_DIR)
 POCKETHUNTER_CLI = str(Config.POCKETHUNTER_CLI)
 RESULTS_DIR = str(Config.RESULTS_DIR)
 
+# Process timeout constants (in seconds)
+PIPELINE_TIMEOUT = 3600  # 1 hour for full pipeline
+EXTRACT_TIMEOUT = 1800   # 30 minutes for frame extraction
+DETECT_TIMEOUT = 3600    # 1 hour for pocket detection
+CLUSTER_TIMEOUT = 1800   # 30 minutes for clustering
+
 # Setup logging
 logger = setup_logging(__name__)
+
+
+def validate_pockethunter_output(output_dir, expected_files=None, expected_dirs=None):
+    """
+    Validate that PocketHunter output exists and contains expected files.
+
+    Parameters
+    ----------
+    output_dir : str
+        Path to the output directory to validate.
+    expected_files : list of str, optional
+        List of expected file names or patterns to check for.
+    expected_dirs : list of str, optional
+        List of expected subdirectory names to check for.
+
+    Returns
+    -------
+    dict
+        Validation results with 'valid' boolean, 'missing_files', 'missing_dirs', and 'found_files'.
+    """
+    result = {
+        'valid': True,
+        'missing_files': [],
+        'missing_dirs': [],
+        'found_files': [],
+        'output_dir': output_dir
+    }
+
+    # Check if output directory exists
+    if not os.path.exists(output_dir):
+        result['valid'] = False
+        logger.warning(f"Output directory does not exist: {output_dir}")
+        return result
+
+    # Check expected subdirectories
+    if expected_dirs:
+        for subdir in expected_dirs:
+            subdir_path = os.path.join(output_dir, subdir)
+            if not os.path.exists(subdir_path):
+                result['valid'] = False
+                result['missing_dirs'].append(subdir)
+                logger.warning(f"Expected directory missing: {subdir_path}")
+
+    # Check expected files
+    if expected_files:
+        for filename in expected_files:
+            file_path = os.path.join(output_dir, filename)
+            if os.path.exists(file_path):
+                result['found_files'].append(filename)
+            else:
+                result['valid'] = False
+                result['missing_files'].append(filename)
+                logger.warning(f"Expected file missing: {file_path}")
+
+    return result
+
+
+def validate_csv_output(csv_path, required_columns=None, min_rows=0):
+    """
+    Validate that a CSV output file exists and has expected structure.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the CSV file to validate.
+    required_columns : list of str, optional
+        List of column names that must exist in the CSV.
+    min_rows : int
+        Minimum number of data rows expected.
+
+    Returns
+    -------
+    dict
+        Validation results with 'valid' boolean, 'row_count', 'missing_columns', and 'error'.
+    """
+    result = {
+        'valid': True,
+        'row_count': 0,
+        'missing_columns': [],
+        'error': None
+    }
+
+    if not os.path.exists(csv_path):
+        result['valid'] = False
+        result['error'] = f"CSV file does not exist: {csv_path}"
+        logger.warning(result['error'])
+        return result
+
+    try:
+        df = pd.read_csv(csv_path)
+        result['row_count'] = len(df)
+
+        # Check minimum row count
+        if len(df) < min_rows:
+            result['valid'] = False
+            result['error'] = f"CSV has {len(df)} rows, expected at least {min_rows}"
+            logger.warning(result['error'])
+
+        # Check required columns
+        if required_columns:
+            for col in required_columns:
+                if col not in df.columns:
+                    result['valid'] = False
+                    result['missing_columns'].append(col)
+                    logger.warning(f"Required column missing in {csv_path}: {col}")
+
+    except Exception as e:
+        result['valid'] = False
+        result['error'] = f"Error reading CSV: {str(e)}"
+        logger.error(result['error'])
+
+    return result
 
 @celery_app.task(bind=True)
 def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=4, min_prob=0.5, clustering_method='dbscan'):
@@ -67,14 +185,21 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=current_working_dir, 
+            cwd=current_working_dir,
             text=True,
             encoding='utf-8'
         )
-        
-        # Monitor progress
+
+        # Monitor progress with timeout tracking
         progress = 10
+        start_time = time.time()
         while process.poll() is None:
+            # Check for timeout
+            elapsed = time.time() - start_time
+            if elapsed > PIPELINE_TIMEOUT:
+                process.kill()
+                raise subprocess.TimeoutExpired(command, PIPELINE_TIMEOUT)
+
             time.sleep(5)
             progress = min(90, progress + 10)
             self.update_state(
@@ -82,11 +207,12 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
                 meta={
                     'current_step': 'Processing molecular dynamics data',
                     'progress': progress,
-                    'status': 'Pipeline running...'
+                    'status': 'Pipeline running...',
+                    'elapsed': elapsed
                 }
             )
-        
-        stdout, stderr = process.communicate()
+
+        stdout, stderr = process.communicate(timeout=60)  # 60s timeout for final communication
 
         if process.returncode == 0:
             # Collect results
@@ -156,9 +282,21 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
             )
             raise Exception(f"{error_message}. Stderr: {stderr}")
 
+    except subprocess.TimeoutExpired as e:
+        error_message = f"Pipeline timed out after {PIPELINE_TIMEOUT} seconds"
+        self.update_state(
+            state='FAILURE',
+            meta={
+                'status': error_message,
+                'output_folder': output_folder_job,
+                'exc_type': type(e).__name__,
+                'exc_message': str(e)
+            }
+        )
+        raise Exception(error_message)
     except FileNotFoundError as e:
         self.update_state(
-            state='FAILURE', 
+            state='FAILURE',
             meta={
                 'status': 'Error: pockethunter.py or python not found. Ensure PocketHunter is properly installed.',
                 'exc_type': type(e).__name__,
@@ -168,7 +306,7 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
         raise
     except Exception as e:
         meta = {
-            'status': f'Unexpected error occurred: {str(e)}', 
+            'status': f'Unexpected error occurred: {str(e)}',
             'output_folder': output_folder_job,
             'exc_type': type(e).__name__,
             'exc_message': str(e)
@@ -216,7 +354,7 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
     try:
         # Start the process
         start_time = time.time()
-        
+
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -225,7 +363,7 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
             text=True,
             encoding='utf-8'
         )
-        
+
         # Progress tracking variables
         progress = 5
         last_update = start_time
@@ -239,19 +377,24 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
             (30, 85, "Finalizing extraction..."),
             (60, 95, "Completing extraction...")
         ]
-        
-        # Monitor the process with real-time progress updates
+
+        # Monitor the process with real-time progress updates and timeout
         while process.poll() is None:
             time.sleep(0.5)  # Check more frequently
             current_time = time.time()
             elapsed = current_time - start_time
-            
+
+            # Check for timeout
+            if elapsed > EXTRACT_TIMEOUT:
+                process.kill()
+                raise subprocess.TimeoutExpired(command, EXTRACT_TIMEOUT)
+
             # Determine progress based on elapsed time and stages
             current_stage = None
             for stage_elapsed, stage_progress, stage_desc in progress_stages:
                 if elapsed >= stage_elapsed:
                     current_stage = (stage_progress, stage_desc)
-            
+
             if current_stage:
                 progress, stage_desc = current_stage
             else:
@@ -260,7 +403,7 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
                     progress = min(95, 85 + int(((elapsed - 60) / 30) * 10))
                 else:
                     progress = 95
-            
+
             # Send progress update more frequently
             if current_time - last_update >= update_interval:
                 self.update_state(
@@ -273,9 +416,9 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
                     }
                 )
                 last_update = current_time
-        
-        # Get final output
-        stdout, stderr = process.communicate()
+
+        # Get final output with timeout
+        stdout, stderr = process.communicate(timeout=60)
         elapsed = time.time() - start_time
         
         if process.returncode == 0:
@@ -323,12 +466,14 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
             raise Exception(f"{error_message}. Stderr: {stderr}")
 
     except subprocess.TimeoutExpired:
-        error_message = "Frame extraction timed out after 10 minutes"
+        error_message = f"Frame extraction timed out after {EXTRACT_TIMEOUT} seconds"
         self.update_state(
             state='FAILURE',
             meta={
                 'status': error_message,
-                'output_folder': job_main_output_folder
+                'output_folder': job_main_output_folder,
+                'exc_type': 'TimeoutExpired',
+                'exc_message': error_message
             }
         )
         raise Exception(error_message)
@@ -386,27 +531,32 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
 
     try:
         start_time = time.time()
-        
+
         process = subprocess.Popen(
-            command, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            cwd=current_working_dir, 
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=current_working_dir,
             text=True,
             encoding='utf-8'
         )
-        
+
         # Progress tracking variables
         progress = 5
         last_update = start_time
         update_interval = 3  # Update every 3 seconds
-        
-        # Monitor progress with real-time updates
+
+        # Monitor progress with real-time updates and timeout
         while process.poll() is None:
             time.sleep(1)
             current_time = time.time()
             elapsed = current_time - start_time
-            
+
+            # Check for timeout
+            if elapsed > DETECT_TIMEOUT:
+                process.kill()
+                raise subprocess.TimeoutExpired(command, DETECT_TIMEOUT)
+
             # Update progress based on time elapsed (pocket detection can take longer)
             if elapsed < 15:  # First 15 seconds - initialization
                 progress = min(15, 5 + int((elapsed / 15) * 10))
@@ -416,7 +566,7 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
                 progress = min(80, 50 + int(((elapsed - 60) / 120) * 30))
             else:  # After 3 minutes - finishing up
                 progress = min(95, 80 + int(((elapsed - 180) / 60) * 15))
-            
+
             # Send progress update every few seconds
             if current_time - last_update >= update_interval:
                 self.update_state(
@@ -429,8 +579,8 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
                     }
                 )
                 last_update = current_time
-        
-        stdout, stderr = process.communicate()
+
+        stdout, stderr = process.communicate(timeout=60)
         elapsed = time.time() - start_time
 
         if process.returncode == 0:
@@ -484,9 +634,21 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
             )
             raise Exception(f"{error_message}. Stderr: {stderr}")
 
+    except subprocess.TimeoutExpired:
+        error_message = f"Pocket detection timed out after {DETECT_TIMEOUT} seconds"
+        self.update_state(
+            state='FAILURE',
+            meta={
+                'status': error_message,
+                'output_folder': job_main_output_folder,
+                'exc_type': 'TimeoutExpired',
+                'exc_message': error_message
+            }
+        )
+        raise Exception(error_message)
     except Exception as e:
         meta = {
-            'status': f'Error occurred: {str(e)}', 
+            'status': f'Error occurred: {str(e)}',
             'output_folder': job_main_output_folder,
             'exc_type': type(e).__name__,
             'exc_message': str(e)
@@ -543,27 +705,32 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
 
     try:
         start_time = time.time()
-        
+
         process = subprocess.Popen(
-            command, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            cwd=current_working_dir, 
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=current_working_dir,
             text=True,
             encoding='utf-8'
         )
-        
+
         # Progress tracking variables
         progress = 5
         last_update = start_time
         update_interval = 2  # Update every 2 seconds
-        
-        # Monitor progress with real-time updates
+
+        # Monitor progress with real-time updates and timeout
         while process.poll() is None:
             time.sleep(1)
             current_time = time.time()
             elapsed = current_time - start_time
-            
+
+            # Check for timeout
+            if elapsed > CLUSTER_TIMEOUT:
+                process.kill()
+                raise subprocess.TimeoutExpired(command, CLUSTER_TIMEOUT)
+
             # Update progress based on time elapsed (clustering is usually faster)
             if elapsed < 10:  # First 10 seconds - initialization
                 progress = min(20, 5 + int((elapsed / 10) * 15))
@@ -573,7 +740,7 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                 progress = min(85, 60 + int(((elapsed - 30) / 30) * 25))
             else:  # After 1 minute - finishing up
                 progress = min(95, 85 + int(((elapsed - 60) / 60) * 10))
-            
+
             # Send progress update every few seconds
             if current_time - last_update >= update_interval:
                 self.update_state(
@@ -586,8 +753,8 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                     }
                 )
                 last_update = current_time
-        
-        stdout, stderr = process.communicate()
+
+        stdout, stderr = process.communicate(timeout=60)
         elapsed = time.time() - start_time
 
         if process.returncode == 0:
@@ -600,14 +767,14 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
             if not os.path.exists(representatives_csv_abs):
                 representatives_csv_abs = os.path.join(output_clusters_dir, 'representatives.csv')
             
-            # Debug: List all files in the output directory
+            # List all files in the output directory for debugging
             import glob
             all_files = glob.glob(os.path.join(output_clusters_dir, '*.csv'))
-            print(f"Debug: Found CSV files in {output_clusters_dir}: {all_files}")
-            print(f"Debug: Looking for clustered_pockets_csv_abs: {clustered_pockets_csv_abs}")
-            print(f"Debug: Looking for representatives_csv_abs: {representatives_csv_abs}")
-            print(f"Debug: clustered_pockets_csv_abs exists: {os.path.exists(clustered_pockets_csv_abs)}")
-            print(f"Debug: representatives_csv_abs exists: {os.path.exists(representatives_csv_abs)}")
+            logger.debug(f"Found CSV files in {output_clusters_dir}: {all_files}")
+            logger.debug(f"Looking for clustered_pockets_csv_abs: {clustered_pockets_csv_abs}")
+            logger.debug(f"Looking for representatives_csv_abs: {representatives_csv_abs}")
+            logger.debug(f"clustered_pockets_csv_abs exists: {os.path.exists(clustered_pockets_csv_abs)}")
+            logger.debug(f"representatives_csv_abs exists: {os.path.exists(representatives_csv_abs)}")
             
             # Count results
             total_pockets = 0
@@ -639,7 +806,7 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                     elif 'cluster_id' in df.columns:
                         clusters_found = df['cluster_id'].nunique()
                 except Exception as e:
-                    print(f"Debug: Error reading clustered_pockets_csv: {e}")
+                    logger.debug(f"Error reading clustered_pockets_csv: {e}")
                     pass
             
             if os.path.exists(representatives_csv_abs):
@@ -647,7 +814,7 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                     df = pd.read_csv(representatives_csv_abs)
                     representatives = len(df)
                 except Exception as e:
-                    print(f"Debug: Error reading representatives_csv: {e}")
+                    logger.debug(f"Error reading representatives_csv: {e}")
                     pass
             
             # Final success update
@@ -714,9 +881,21 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
             self.update_state(state='FAILURE', meta=meta)
             raise Exception(f"{error_message}. Stderr: {stderr}")
 
+    except subprocess.TimeoutExpired:
+        error_message = f"Pocket clustering timed out after {CLUSTER_TIMEOUT} seconds"
+        self.update_state(
+            state='FAILURE',
+            meta={
+                'status': error_message,
+                'output_folder': job_main_output_folder,
+                'exc_type': 'TimeoutExpired',
+                'exc_message': error_message
+            }
+        )
+        raise Exception(error_message)
     except Exception as e:
         meta = {
-            'status': f'Error occurred: {str(e)}', 
+            'status': f'Error occurred: {str(e)}',
             'output_folder': job_main_output_folder,
             'exc_type': type(e).__name__,
             'exc_message': str(e)
@@ -724,13 +903,34 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
         if hasattr(e, 'stdout'): meta['stdout'] = e.stdout
         if hasattr(e, 'stderr'): meta['stderr'] = e.stderr
         self.update_state(state='FAILURE', meta=meta)
-        raise 
+        raise
 
 
 @celery_app.task(bind=True)
-def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, smina_exe_path=None, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0):
+def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, smina_exe_path=None, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0, pdb_source_dir=None):
     """
     Molecular docking task for Streamlit app.
+
+    Parameters
+    ----------
+    cluster_representatives_csv : str
+        Path to CSV file containing cluster representatives.
+    ligand_folder : str
+        Path to folder containing ligand PDBQT files.
+    job_id : str
+        Unique job identifier.
+    smina_exe_path : str, optional
+        Path to smina executable.
+    num_poses : int
+        Maximum number of poses per docking.
+    exhaustiveness : int
+        Docking accuracy parameter.
+    ph_value : float
+        pH for protonation.
+    box_size_x, box_size_y, box_size_z : float
+        Docking box dimensions.
+    pdb_source_dir : str, optional
+        Directory containing source PDB files for receptors.
     """
     start_time = time.time()
     
@@ -789,7 +989,8 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
             ph_value=ph_value,
             box_size_x=box_size_x,
             box_size_y=box_size_y,
-            box_size_z=box_size_z
+            box_size_z=box_size_z,
+            pdb_source_dir=pdb_source_dir
         )
         
         # Save results
