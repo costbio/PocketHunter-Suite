@@ -149,8 +149,8 @@ if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=
 
         # Handle file uploads with security validation
         try:
-            xtc_path = handle_file_upload_secure(xtc_file, job_id, "trajectory_")
-            topology_path = handle_file_upload_secure(topology_file, job_id, "topology_")
+            xtc_path = str(handle_file_upload_secure(xtc_file, job_id, "trajectory_"))
+            topology_path = str(handle_file_upload_secure(topology_file, job_id, "topology_"))
             logger.info(f"Files uploaded successfully for job {job_id}")
         except SecurityError as e:
             st.error(f"❌ File upload failed: {e}")
@@ -334,9 +334,21 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
         if st.session_state.extract_task_id and task.ready() and task.successful():
             st.session_state.extract_status = 'completed'
             st.session_state.cached_job_ids['extract'] = st.session_state.extract_job_id
-            
-            # Display results
+
+            # Update job status file to 'completed'
             result = task.result
+            if result:
+                update_job_status(
+                    st.session_state.extract_job_id,
+                    'completed',
+                    'Frame extraction completed',
+                    result_info={
+                        'frames_extracted': result.get('frames_extracted', 0),
+                        'output_files': result.get('output_files', [])
+                    }
+                )
+
+            # Display results
             if result:
                 st.markdown("### 📈 Results")
                 
@@ -499,9 +511,8 @@ if st.session_state.extract_status == 'running':
                 st.session_state.extract_status = 'completed'
                 st.rerun()
             else:
-                # Task still running, check for completion more aggressively
-                # For quick tasks, check more frequently
-                time.sleep(0.1)  # Very responsive for quick tasks
+                # Task still running, poll at reasonable interval to avoid browser freeze
+                time.sleep(3)  # Reasonable polling interval
                 st.rerun()
                 
         except Exception as e:
@@ -517,8 +528,8 @@ if st.session_state.extract_status == 'running':
                         # Don't clear task_id so status section stays visible
                         st.rerun()
             
-            # Fallback refresh - very quick for error recovery
-            time.sleep(0.2)
+            # Fallback refresh - reasonable interval
+            time.sleep(3)
             st.rerun()
     else:
         # No task ID, check for completion via output files
@@ -532,6 +543,6 @@ if st.session_state.extract_status == 'running':
                     st.session_state.cached_job_ids['extract'] = st.session_state.extract_job_id
                     st.rerun()
         
-        # No task ID, refresh less frequently
-        time.sleep(0.5)
+        # No task ID, poll at reasonable interval
+        time.sleep(3)
         st.rerun() 
