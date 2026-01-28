@@ -145,32 +145,59 @@ def parse_smina_log(text):
     return data
 
 
-def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0):
-    
+def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0, pdb_source_dir=None):
+    """
+    Perform ensemble docking of ligands against multiple receptor pockets.
+
+    Parameters
+    ----------
+    df_rep_pockets : pandas.DataFrame
+        DataFrame containing representative pockets with 'File name' and 'residues' columns.
+    ligand_folder : str
+        Path to folder containing ligand PDBQT files.
+    smina_exe : str
+        Path to smina executable.
+    out_folder : str
+        Path to output folder.
+    num_poses : int
+        Maximum number of poses to generate per docking.
+    exhaustiveness : int
+        Accuracy of docking calculations.
+    ph_value : float
+        pH for protonation.
+    box_size_x, box_size_y, box_size_z : float
+        Docking box dimensions in Angstroms.
+    pdb_source_dir : str, optional
+        Directory containing the source PDB files. If None, will search in results directory.
+    """
     list_outputs = list()
 
     for row in df_rep_pockets.iterrows():
         # Prepare receptor
         receptor_pdb_pred = row[1]['File name']
-        
+
         # Extract base filename (remove _predictions suffix)
         if receptor_pdb_pred.endswith('_predictions'):
             receptor_pdb = receptor_pdb_pred[:-12]  # Remove '_predictions'
         else:
             receptor_pdb = receptor_pdb_pred
-        
+
         # Construct path to actual PDB file
-        # Find the extract directory by searching in results
-        results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
-        extract_dirs = [d for d in os.listdir(results_dir) if d.startswith('extract_') and os.path.isdir(os.path.join(results_dir, d))]
-        if not extract_dirs:
-            raise FileNotFoundError("No extract directories found in results")
-        
-        # Use the most recent extract directory
-        extract_dirs.sort()
-        extract_dir = os.path.join(results_dir, extract_dirs[-1], 'pdbs')
-        receptor_pdb_path = os.path.join(extract_dir, receptor_pdb)
-        
+        if pdb_source_dir:
+            # Use provided source directory
+            receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
+        else:
+            # Fallback: search in results directory (legacy behavior)
+            results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
+            extract_dirs = [d for d in os.listdir(results_dir) if d.startswith('extract_') and os.path.isdir(os.path.join(results_dir, d))]
+            if not extract_dirs:
+                raise FileNotFoundError("No extract directories found in results. Please provide pdb_source_dir parameter.")
+
+            # Use the most recent extract directory
+            extract_dirs.sort()
+            extract_dir = os.path.join(results_dir, extract_dirs[-1], 'pdbs')
+            receptor_pdb_path = os.path.join(extract_dir, receptor_pdb)
+
         # Verify the file exists
         if not os.path.exists(receptor_pdb_path):
             raise FileNotFoundError(f"PDB file not found: {receptor_pdb_path}")
@@ -194,6 +221,9 @@ def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_pose
             os.makedirs(docking_output_folder)
 
         ligands = glob.glob(ligand_folder+'/*.pdbqt')
+        if not ligands:
+            raise FileNotFoundError(f"No PDBQT ligand files found in {ligand_folder}")
+
         for lig_path in tqdm.tqdm(ligands):
             out_path = os.path.join(docking_output_folder,os.path.basename(lig_path)[:-6]+'_smina.sdf')
             output, stderr = run_smina(lig_path, receptor_pdbqt, out_path, box_center, box_size, smina_exe, num_poses=num_poses, exhaustiveness=exhaustiveness)
@@ -204,7 +234,10 @@ def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_pose
             df_output['receptor_path'] = receptor_pdbqt
             list_outputs.append(df_output)
 
-    df_outputs = pd.concat(list_outputs,axis=0, ignore_index=True)
+    if not list_outputs:
+        raise ValueError("No docking results generated. Check that ligands and receptors are valid.")
+
+    df_outputs = pd.concat(list_outputs, axis=0, ignore_index=True)
     return df_outputs
 
 
