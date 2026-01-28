@@ -1,15 +1,21 @@
 FROM python:3.10-slim
 
-# Install system dependencies
+# Install system dependencies and build tools
 RUN apt-get update && apt-get install -y \
     curl \
+    gcc \
+    g++ \
+    make \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y gcc g++ make python3-dev \
+    && apt-get autoremove -y
 
 # Copy application code
 COPY . .
