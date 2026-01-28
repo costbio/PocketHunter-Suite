@@ -387,6 +387,17 @@ with tab_progress:
                     with col3:
                         st.metric("Status", "Complete")
 
+                    # Update job status file to 'completed'
+                    update_job_status(
+                        st.session_state.cluster_job_id,
+                        'completed',
+                        'Pocket clustering completed',
+                        result_info={
+                            'clusters_found': result.get('clusters_found', 0),
+                            'processing_time': result.get('processing_time', 0)
+                        }
+                    )
+
                 st.session_state.cluster_status = 'completed'
                 st.session_state.cached_job_ids['cluster'] = st.session_state.cluster_job_id
                 st.info("💡 Switch to the Results & Visualization tab to explore your clusters!")
