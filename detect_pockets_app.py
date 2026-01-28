@@ -304,13 +304,13 @@ with tab_setup:
         input_pdb_path = None
         input_source = None
 
-        if extract_job_id:
-            extract_output_dir = os.path.join(RESULTS_DIR, extract_job_id, "pdbs")
+        if extract_job_id and extract_job_id.strip():
+            extract_output_dir = os.path.join(RESULTS_DIR, extract_job_id.strip(), "pdbs")
             if os.path.exists(extract_output_dir) and os.listdir(extract_output_dir):
                 input_pdb_path = extract_output_dir
-                input_source = f"Step 1 results (Job ID: {extract_job_id})"
+                input_source = f"Step 1 results (Job ID: {extract_job_id.strip()})"
             else:
-                st.error(f"PDB files not found for Job ID: {extract_job_id}")
+                st.error(f"PDB files not found for Job ID: {extract_job_id.strip()}")
                 st.stop()
 
         elif pdb_zip:
@@ -411,6 +411,17 @@ with tab_progress:
                         st.metric("Processing Time", f"{result.get('processing_time', 0):.1f}s")
                     with col3:
                         st.metric("Status", "Complete")
+
+                    # Update job status file to 'completed'
+                    update_job_status(
+                        st.session_state.detect_job_id,
+                        'completed',
+                        'Pocket detection completed',
+                        result_info={
+                            'pockets_detected': result.get('pockets_detected', 0),
+                            'processing_time': result.get('processing_time', 0)
+                        }
+                    )
 
                 st.session_state.detect_status = 'completed'
                 st.session_state.cached_job_ids['detect'] = st.session_state.detect_job_id
