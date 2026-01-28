@@ -33,7 +33,7 @@ def get_all_job_statuses():
                     task = celery_app.AsyncResult(status_data['task_id'])
                     status_data['task_state'] = task.state
                     status_data['task_info'] = task.info
-                except:
+                except Exception:
                     status_data['task_state'] = 'UNKNOWN'
                     status_data['task_info'] = None
             
@@ -272,7 +272,7 @@ if jobs:
                         try:
                             last_updated = datetime.fromisoformat(selected_job['last_updated'])
                             st.write(f"**Last Updated:** {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
-                        except:
+                        except (ValueError, TypeError):
                             st.write(f"**Last Updated:** {selected_job['last_updated']}")
                 
                 with col2:
@@ -288,7 +288,11 @@ if jobs:
                                 if isinstance(task.info, dict):
                                     for key, value in task.info.items():
                                         if key == 'progress':
-                                            st.write(f"**Progress:** {value:.1f}%")
+                                            # Type check to prevent crash on non-numeric values
+                                            if isinstance(value, (int, float)):
+                                                st.write(f"**Progress:** {value:.1f}%")
+                                            else:
+                                                st.write(f"**Progress:** {value}")
                                         elif key == 'current_step':
                                             st.write(f"**Current Step:** {value}")
                                         else:
