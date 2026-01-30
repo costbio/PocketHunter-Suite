@@ -12,6 +12,7 @@ from tasks import run_detect_pockets_task
 from celery_app import celery_app
 from config import Config
 from security import handle_file_upload_secure, SecurityError, FileValidator
+from rate_limiter import RateLimitExceeded, check_task_rate_limit
 from logging_config import setup_logging
 import py3Dmol
 import streamlit.components.v1 as components
@@ -343,6 +344,15 @@ with tab_setup:
             # Generate unique job ID
             job_id = f"detect_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
             st.session_state.detect_job_id = job_id
+
+            # Check task rate limit before submission
+            try:
+                check_task_rate_limit()
+            except RateLimitExceeded as e:
+                st.error(f"⏳ Task submission rate limit exceeded: {e}")
+                st.info(f"Please wait {e.retry_after:.0f} seconds before submitting another task.")
+                logger.warning(f"Task rate limit exceeded for job {job_id}: {e}")
+                st.stop()
 
             # Update status
             update_job_status(job_id, 'submitted', 'Initializing pocket detection')

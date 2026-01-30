@@ -82,6 +82,20 @@ class Config:
     MAX_DISK_USAGE_GB = int(os.getenv('MAX_DISK_USAGE_GB', 100))
 
     # ========================================
+    # Rate Limiting
+    # ========================================
+    # Set RATE_LIMIT_ENABLED=false in .env for local development
+    RATE_LIMIT_ENABLED = os.getenv('RATE_LIMIT_ENABLED', 'true').lower() == 'true'
+    # Maximum uploads per time window
+    RATE_LIMIT_MAX_UPLOADS = int(os.getenv('RATE_LIMIT_MAX_UPLOADS', 10))
+    # Time window in seconds (default: 60 seconds = 1 minute)
+    RATE_LIMIT_WINDOW_SECONDS = int(os.getenv('RATE_LIMIT_WINDOW_SECONDS', 60))
+    # Maximum task submissions per time window
+    RATE_LIMIT_MAX_TASKS = int(os.getenv('RATE_LIMIT_MAX_TASKS', 5))
+    # Task rate limit window in seconds (default: 60 seconds)
+    RATE_LIMIT_TASK_WINDOW_SECONDS = int(os.getenv('RATE_LIMIT_TASK_WINDOW_SECONDS', 60))
+
+    # ========================================
     # Logging Configuration
     # ========================================
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -245,6 +259,9 @@ class Config:
         print(f"MAX_DISK_USAGE_GB:     {cls.MAX_DISK_USAGE_GB} GB")
         print(f"LOG_LEVEL:             {cls.LOG_LEVEL}")
         print(f"LOG_FILE:              {cls.LOG_FILE}")
+        print(f"RATE_LIMIT_ENABLED:    {cls.RATE_LIMIT_ENABLED}")
+        print(f"RATE_LIMIT_MAX_UPLOADS:{cls.RATE_LIMIT_MAX_UPLOADS} per {cls.RATE_LIMIT_WINDOW_SECONDS}s")
+        print(f"RATE_LIMIT_MAX_TASKS:  {cls.RATE_LIMIT_MAX_TASKS} per {cls.RATE_LIMIT_TASK_WINDOW_SECONDS}s")
         print("=" * 60)
 
 

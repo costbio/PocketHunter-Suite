@@ -6,6 +6,7 @@ This module provides functions to:
 - Check file sizes against limits
 - Validate ZIP files for ZIP bombs and malicious content
 - Provide secure file upload handling
+- Rate limit uploads and task submissions
 """
 
 import os
@@ -13,6 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Optional, Tuple
 from config import Config
+from rate_limiter import check_upload_rate_limit, RateLimitExceeded
 
 
 class SecurityError(Exception):
@@ -217,13 +219,14 @@ class FileValidator:
 
 def handle_file_upload_secure(uploaded_file, job_id: str, filename_prefix: str = "") -> Path:
     """
-    Securely handle file upload with validation.
+    Securely handle file upload with validation and rate limiting.
 
     This function:
-    1. Validates file size
-    2. Sanitizes filename
-    3. Creates secure upload path
-    4. Saves file
+    1. Checks rate limits (if enabled)
+    2. Validates file size
+    3. Sanitizes filename
+    4. Creates secure upload path
+    5. Saves file
 
     Args:
         uploaded_file: Streamlit UploadedFile object
@@ -236,6 +239,7 @@ def handle_file_upload_secure(uploaded_file, job_id: str, filename_prefix: str =
     Raises:
         ValueError: If no file provided
         SecurityError: If file fails validation
+        RateLimitExceeded: If upload rate limit is exceeded
 
     Example:
         >>> from streamlit.runtime.uploaded_file_manager import UploadedFile
@@ -245,6 +249,9 @@ def handle_file_upload_secure(uploaded_file, job_id: str, filename_prefix: str =
     """
     if uploaded_file is None:
         raise ValueError("No file provided")
+
+    # Check rate limit before processing upload
+    check_upload_rate_limit()
 
     # Validate file size
     file_size = uploaded_file.size if hasattr(uploaded_file, 'size') else len(uploaded_file.getvalue())

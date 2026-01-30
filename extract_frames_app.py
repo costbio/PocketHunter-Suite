@@ -9,6 +9,7 @@ from tasks import run_extract_to_pdb_task
 from celery_app import celery_app
 from config import Config
 from security import handle_file_upload_secure, SecurityError
+from rate_limiter import RateLimitExceeded, check_task_rate_limit, get_rate_limit_status
 from logging_config import setup_logging
 
 # Use Config for directories
@@ -152,6 +153,11 @@ if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=
             xtc_path = str(handle_file_upload_secure(xtc_file, job_id, "trajectory_"))
             topology_path = str(handle_file_upload_secure(topology_file, job_id, "topology_"))
             logger.info(f"Files uploaded successfully for job {job_id}")
+        except RateLimitExceeded as e:
+            st.error(f"⏳ Rate limit exceeded: {e}")
+            st.info(f"Please wait {e.retry_after:.0f} seconds before uploading again.")
+            logger.warning(f"Rate limit exceeded for job {job_id}: {e}")
+            st.stop()
         except SecurityError as e:
             st.error(f"❌ File upload failed: {e}")
             logger.error(f"Security error during upload for job {job_id}: {e}")
@@ -162,10 +168,19 @@ if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=
             st.stop()
 
         if xtc_path and topology_path:
+            # Check task rate limit before submission
+            try:
+                check_task_rate_limit()
+            except RateLimitExceeded as e:
+                st.error(f"⏳ Task submission rate limit exceeded: {e}")
+                st.info(f"Please wait {e.retry_after:.0f} seconds before submitting another task.")
+                logger.warning(f"Task rate limit exceeded for job {job_id}: {e}")
+                st.stop()
+
             # Update status
             update_job_status(job_id, 'submitted', 'Initializing frame extraction')
             st.session_state.extract_status = 'running'
-            
+
             # Start the extraction
             with st.spinner("Starting frame extraction..."):
                 try:

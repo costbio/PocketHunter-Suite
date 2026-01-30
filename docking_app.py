@@ -16,6 +16,7 @@ from tasks import run_docking_task
 from celery_app import celery_app
 from config import Config
 from security import FileValidator, SecurityError
+from rate_limiter import RateLimitExceeded, check_task_rate_limit, check_upload_rate_limit
 from logging_config import setup_logging
 from session_state import initialize_session_state, get_pdb_selection_key
 import py3Dmol
@@ -643,6 +644,15 @@ with tab_setup:
             # Start docking button
             st.markdown("---")
             if st.button("🚀 Start Molecular Docking", type="primary", use_container_width=True):
+                # Check task rate limit before submission
+                try:
+                    check_task_rate_limit()
+                except RateLimitExceeded as e:
+                    st.error(f"⏳ Task submission rate limit exceeded: {e}")
+                    st.info(f"Please wait {e.retry_after:.0f} seconds before submitting another task.")
+                    logger.warning(f"Task rate limit exceeded for docking job: {e}")
+                    st.stop()
+
                 # Get selected PDFs from session state (fixes variable scope bug)
                 selected_pdbs = st.session_state.get('docking_selected_pdbs', [])
                 if selected_pdbs:
