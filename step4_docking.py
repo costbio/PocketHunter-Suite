@@ -9,6 +9,9 @@ import scipy.cluster.hierarchy as sch
 import numpy as np
 from openbabel import pybel
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 # CONVERTING
 
@@ -57,7 +60,7 @@ def calc_box(pdb_path, pocket_res_list):
 
 
 def run_smina(
-    ligand_path, protein_path, out_path, pocket_center, pocket_size, smina_exe, num_poses=10, exhaustiveness=8
+    ligand_path, protein_path, out_path, pocket_center, pocket_size, smina_exe, num_poses=10, exhaustiveness=8, log_dir=None
 ):
     """
     Perform docking with Smina.
@@ -78,12 +81,19 @@ def run_smina(
         Maximum number of poses to generate.
     exhaustiveness: int
         Accuracy of docking calculations.
+    log_dir: str or pathlib.Path, optional
+        Directory to write smina debug log. If None, uses the same directory as out_path.
 
     Returns
     -------
     output_text: str
         The output of the Smina calculation.
     """
+    # Determine log file path
+    if log_dir is None:
+        log_dir = os.path.dirname(str(out_path))
+    log_file = os.path.join(str(log_dir), 'smina_debug.log')
+
     try:
         result = subprocess.run(
             [
@@ -110,7 +120,7 @@ def run_smina(
                 str(num_poses),
                 "--exhaustiveness",
                 str(exhaustiveness),
-                '--log', 'smina_debug.log'
+                '--log', log_file
             ],
             check=True,
             capture_output=True,
@@ -118,11 +128,11 @@ def run_smina(
         )
         return result.stdout, result.stderr
     except subprocess.CalledProcessError as e:
-        print(f"Error running smina: {e}")
-        print(f"Command: {e.cmd}")
-        print(f"Return code: {e.returncode}")
-        print(f"Output: {e.output}")
-        print(f"Error output: {e.stderr}")
+        logger.error(f"Error running smina: {e}")
+        logger.error(f"Command: {e.cmd}")
+        logger.error(f"Return code: {e.returncode}")
+        logger.error(f"Output: {e.output}")
+        logger.error(f"Error output: {e.stderr}")
         raise
 
 
@@ -209,7 +219,7 @@ def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_pose
         writePDB(protein_pdb, protein)
         receptor_pdbqt = os.path.join(protein_pdb[:-4]+".pdbqt")
         pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
-        print(f"Prepared {receptor_pdbqt}")
+        logger.info(f"Prepared {receptor_pdbqt}")
 
         # Calculate box center from residues, but use custom box size
         box_center, box_min, box_max = calc_box(protein_pdb, row[1]['residues'])
@@ -226,7 +236,7 @@ def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_pose
 
         for lig_path in tqdm.tqdm(ligands):
             out_path = os.path.join(docking_output_folder,os.path.basename(lig_path)[:-6]+'_smina.sdf')
-            output, stderr = run_smina(lig_path, receptor_pdbqt, out_path, box_center, box_size, smina_exe, num_poses=num_poses, exhaustiveness=exhaustiveness)
+            output, stderr = run_smina(lig_path, receptor_pdbqt, out_path, box_center, box_size, smina_exe, num_poses=num_poses, exhaustiveness=exhaustiveness, log_dir=docking_output_folder)
             df_output = parse_smina_log(output)
             df_output['library'] = ligand_folder
             df_output['ligand'] = os.path.basename(lig_path)[:-6]

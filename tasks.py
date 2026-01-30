@@ -961,9 +961,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
     )
 
     try:
-        # Import docking functions
-        import sys
-        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        # Import docking functions (step4_docking is in the same directory as tasks.py)
         from step4_docking import dock_ensemble, pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
         
         # Read cluster representatives
