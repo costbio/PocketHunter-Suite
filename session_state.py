@@ -67,18 +67,21 @@ def initialize_session_state():
         st.session_state.selected_pose = None
 
 
-def get_pdb_selection_key(filename: str) -> str:
+def get_pdb_selection_key(filename: str, row_index=None) -> str:
     """
     Generate a unique session state key for PDB file selection.
 
     Args:
         filename: The PDB filename
+        row_index: Optional DataFrame row index to disambiguate duplicate filenames
 
     Returns:
         A unique key string for session state
     """
     # Sanitize filename to create valid key
     safe_name = filename.replace('.', '_').replace(' ', '_').replace('-', '_')
+    if row_index is not None:
+        return f"pdb_select_{safe_name}_{row_index}"
     return f"pdb_select_{safe_name}"
 
 

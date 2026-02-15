@@ -25,6 +25,33 @@ CLUSTER_TIMEOUT = 1800   # 30 minutes for clustering
 logger = setup_logging(__name__)
 
 
+def _update_status_file(job_id, status, step=None, task_id=None, result_info=None, prefix=''):
+    """Update the job status JSON file on disk. Called by Celery tasks on completion/failure."""
+    try:
+        filename = f'{prefix}{job_id}_status.json' if prefix else f'{job_id}_status.json'
+        status_file = os.path.join(RESULTS_DIR, filename)
+        current_status = {}
+        if os.path.exists(status_file):
+            with open(status_file, 'r') as f:
+                try:
+                    current_status = json.load(f)
+                except json.JSONDecodeError:
+                    current_status = {}
+        current_status['status'] = status
+        if step:
+            current_status['step'] = step
+        if task_id:
+            current_status['task_id'] = task_id
+        if result_info:
+            current_status['result_info'] = result_info
+        current_status['last_updated'] = datetime.now().isoformat()
+        with open(status_file, 'w') as f:
+            json.dump(current_status, f, indent=4)
+        logger.info(f"Status file updated: {status_file} -> {status}")
+    except Exception as e:
+        logger.warning(f"Failed to update status file for {job_id}: {e}")
+
+
 def validate_pockethunter_output(output_dir, expected_files=None, expected_dirs=None):
     """
     Validate that PocketHunter output exists and contains expected files.
@@ -451,15 +478,19 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
             }
             
             self.update_state(state='SUCCESS', meta=results_overview)
+            _update_status_file(job_id, 'completed', 'Frame extraction completed successfully',
+                task_id=self.request.id, result_info={
+                    'frames_extracted': len(pdb_files), 'processing_time': elapsed})
             return results_overview
         else:
             error_message = f"Frame extraction failed. Return code: {process.returncode}"
+            _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
             self.update_state(
-                state='FAILURE', 
+                state='FAILURE',
                 meta={
-                    'status': error_message, 
-                    'stdout': stdout, 
-                    'stderr': stderr, 
+                    'status': error_message,
+                    'stdout': stdout,
+                    'stderr': stderr,
                     'output_folder': job_main_output_folder
                 }
             )
@@ -467,6 +498,7 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
 
     except subprocess.TimeoutExpired:
         error_message = f"Frame extraction timed out after {EXTRACT_TIMEOUT} seconds"
+        _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
         self.update_state(
             state='FAILURE',
             meta={
@@ -478,8 +510,9 @@ def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, str
         )
         raise Exception(error_message)
     except Exception as e:
+        _update_status_file(job_id, 'failed', str(e), task_id=self.request.id)
         meta = {
-            'status': f'Error occurred: {str(e)}', 
+            'status': f'Error occurred: {str(e)}',
             'output_folder': job_main_output_folder,
             'exc_type': type(e).__name__,
             'exc_message': str(e)
@@ -620,15 +653,19 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
             }
             
             self.update_state(state='SUCCESS', meta=results_overview)
+            _update_status_file(job_id, 'completed', 'Pocket detection completed successfully',
+                task_id=self.request.id, result_info={
+                    'pockets_detected': pockets_detected, 'processing_time': elapsed})
             return results_overview
         else:
             error_message = f"Pocket detection failed. Return code: {process.returncode}"
+            _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
             self.update_state(
-                state='FAILURE', 
+                state='FAILURE',
                 meta={
-                    'status': error_message, 
-                    'stdout': stdout, 
-                    'stderr': stderr, 
+                    'status': error_message,
+                    'stdout': stdout,
+                    'stderr': stderr,
                     'output_folder': job_main_output_folder
                 }
             )
@@ -636,6 +673,7 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
 
     except subprocess.TimeoutExpired:
         error_message = f"Pocket detection timed out after {DETECT_TIMEOUT} seconds"
+        _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
         self.update_state(
             state='FAILURE',
             meta={
@@ -647,6 +685,7 @@ def run_detect_pockets_task(self, input_pdb_path_abs, job_id, numthreads):
         )
         raise Exception(error_message)
     except Exception as e:
+        _update_status_file(job_id, 'failed', str(e), task_id=self.request.id)
         meta = {
             'status': f'Error occurred: {str(e)}',
             'output_folder': job_main_output_folder,
@@ -841,48 +880,29 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                 'stderr': stderr
             }
             
-            # Update the status file to reflect completion
-            status_file = os.path.join(RESULTS_DIR, f'{job_id}_status.json')
-            completion_status = {
-                'status': 'completed',
-                'step': 'Pocket clustering completed successfully',
-                'last_updated': datetime.now().isoformat(),
-                'task_id': self.request.id,
-                'result_info': results_overview
-            }
-            with open(status_file, 'w') as f:
-                json.dump(completion_status, f, indent=4)
-            
+            _update_status_file(job_id, 'completed', 'Pocket clustering completed successfully',
+                task_id=self.request.id, result_info={
+                    'total_pockets': total_pockets, 'clusters_found': clusters_found,
+                    'representatives': representatives, 'processing_time': elapsed})
             self.update_state(state='SUCCESS', meta=results_overview)
             return results_overview
         else:
             error_message = f"Pocket clustering failed. Return code: {process.returncode}"
+            _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
             meta = {
-                'status': error_message, 
-                'stdout': stdout, 
-                'stderr': stderr, 
+                'status': error_message,
+                'stdout': stdout,
+                'stderr': stderr,
                 'output_folder': job_main_output_folder,
                 'exc_type': 'Exception',
                 'exc_message': f"{error_message}. Stderr: {stderr}"
             }
-            
-            # Update the status file to reflect failure
-            status_file = os.path.join(RESULTS_DIR, f'{job_id}_status.json')
-            failure_status = {
-                'status': 'failed',
-                'step': 'Pocket clustering failed',
-                'last_updated': datetime.now().isoformat(),
-                'task_id': self.request.id,
-                'error_info': meta
-            }
-            with open(status_file, 'w') as f:
-                json.dump(failure_status, f, indent=4)
-            
             self.update_state(state='FAILURE', meta=meta)
             raise Exception(f"{error_message}. Stderr: {stderr}")
 
     except subprocess.TimeoutExpired:
         error_message = f"Pocket clustering timed out after {CLUSTER_TIMEOUT} seconds"
+        _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
         self.update_state(
             state='FAILURE',
             meta={
@@ -894,6 +914,7 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
         )
         raise Exception(error_message)
     except Exception as e:
+        _update_status_file(job_id, 'failed', str(e), task_id=self.request.id)
         meta = {
             'status': f'Error occurred: {str(e)}',
             'output_folder': job_main_output_folder,
@@ -966,7 +987,12 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         
         # Read cluster representatives
         df_rep_pockets = pd.read_csv(cluster_representatives_csv)
-        
+
+        required_columns = {'File name', 'residues'}
+        missing = required_columns - set(df_rep_pockets.columns)
+        if missing:
+            raise ValueError(f"CSV missing required columns: {missing}. Found: {list(df_rep_pockets.columns)}")
+
         self.update_state(
             state='PROGRESS', 
             meta={
@@ -1026,42 +1052,20 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
             'exhaustiveness': exhaustiveness
         }
         
-        # Update the status file to reflect completion
-        status_file = os.path.join(RESULTS_DIR, f'dock_{job_id}_status.json')
-        completion_status = {
-            'status': 'completed',
-            'step': 'Molecular docking completed successfully',
-            'last_updated': datetime.now().isoformat(),
-            'task_id': self.request.id,
-            'result_info': results_overview
-        }
-        with open(status_file, 'w') as f:
-            json.dump(completion_status, f, indent=4)
-        
+        _update_status_file(job_id, 'completed', 'Molecular docking completed successfully',
+            task_id=self.request.id, result_info=results_overview)
         self.update_state(state='SUCCESS', meta=results_overview)
         return results_overview
-        
+
     except Exception as e:
         elapsed = time.time() - start_time
+        _update_status_file(job_id, 'failed', str(e), task_id=self.request.id)
         meta = {
-            'status': f'Error occurred: {str(e)}', 
+            'status': f'Error occurred: {str(e)}',
             'output_folder': output_folder_job,
             'exc_type': type(e).__name__,
             'exc_message': str(e),
             'processing_time': elapsed
         }
-        
-        # Update the status file to reflect failure
-        status_file = os.path.join(RESULTS_DIR, f'dock_{job_id}_status.json')
-        failure_status = {
-            'status': 'failed',
-            'step': 'Molecular docking failed',
-            'last_updated': datetime.now().isoformat(),
-            'task_id': self.request.id,
-            'error_info': meta
-        }
-        with open(status_file, 'w') as f:
-            json.dump(failure_status, f, indent=4)
-        
         self.update_state(state='FAILURE', meta=meta)
-        raise 
+        raise

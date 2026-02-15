@@ -10,6 +10,7 @@ import numpy as np
 from openbabel import pybel
 import re
 import logging
+from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,8 @@ def pdb_to_pdbqt(pdb_path, pdbqt_path, pH=7.4):
 
 def calc_box(pdb_path, pocket_res_list):
     syst = parsePDB(pdb_path)
-    pocket_res_list = pocket_res_list.split(' ')
-    pocket_res_list = [el for el in pocket_res_list if len(el)>2]
+    pocket_res_list = pocket_res_list.split()
+    pocket_res_list = [el for el in pocket_res_list if len(el) >= 2]
     chains = np.unique([el[0] for el in pocket_res_list])
     selection_string = ""
     for chain in chains:
@@ -141,15 +142,19 @@ def parse_smina_log(text):
     pattern = r'(\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)'
     matches = re.findall(pattern, text)
 
+    if not matches:
+        logger.warning(f"No docking poses found in SMINA output (text length: {len(text)})")
+
     # Creating a DataFrame from the matches
     columns = ['mode', 'affinity (kcal/mol)', 'rmsd l.b.', 'rmsd u.b.']
     data = pd.DataFrame(matches, columns=columns)
 
     # Convert appropriate columns to numeric types
-    data['mode'] = data['mode'].astype(int)
-    data['affinity (kcal/mol)'] = data['affinity (kcal/mol)'].astype(float)
-    data['rmsd l.b.'] = data['rmsd l.b.'].astype(float)
-    data['rmsd u.b.'] = data['rmsd u.b.'].astype(float)
+    if not data.empty:
+        data['mode'] = data['mode'].astype(int)
+        data['affinity (kcal/mol)'] = data['affinity (kcal/mol)'].astype(float)
+        data['rmsd l.b.'] = data['rmsd l.b.'].astype(float)
+        data['rmsd u.b.'] = data['rmsd u.b.'].astype(float)
 
     # Return the DataFrame
     return data
@@ -198,7 +203,7 @@ def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_pose
             receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
         else:
             # Fallback: search in results directory (legacy behavior)
-            results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
+            results_dir = str(Config.RESULTS_DIR)
             extract_dirs = [d for d in os.listdir(results_dir) if d.startswith('extract_') and os.path.isdir(os.path.join(results_dir, d))]
             if not extract_dirs:
                 raise FileNotFoundError("No extract directories found in results. Please provide pdb_source_dir parameter.")
@@ -242,6 +247,8 @@ def dock_ensemble(df_rep_pockets, ligand_folder, smina_exe, out_folder, num_pose
             df_output['ligand'] = os.path.basename(lig_path)[:-6]
             df_output['receptor'] = os.path.basename(receptor_pdb)
             df_output['receptor_path'] = receptor_pdbqt
+            df_output['receptor_pdb_path'] = protein_pdb
+            df_output['output_sdf'] = out_path
             list_outputs.append(df_output)
 
     if not list_outputs:
