@@ -17,16 +17,19 @@ services:
     build: .
     container_name: pockethunter-celery
     command: celery -A celery_app worker --loglevel=info
+    working_dir: /app
     depends_on:
       redis:
         condition: service_healthy
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - PYTHONPATH=/app
     volumes:
       - ./uploads:/app/uploads
       - ./results:/app/results
       - ./logs:/app/logs
+      - /usr/local/bin/smina:/usr/local/bin/smina:ro
     restart: unless-stopped
 
   celery-beat:
