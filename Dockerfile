@@ -1,12 +1,15 @@
 FROM python:3.10-slim
 
-# Install system dependencies and build tools
+# Install system dependencies, build tools, and Java (for P2Rank)
 RUN apt-get update && apt-get install -y \
     curl \
     gcc \
     g++ \
     make \
     python3-dev \
+    libxrender1 \
+    libxext6 \
+    default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
