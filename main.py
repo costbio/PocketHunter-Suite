@@ -213,7 +213,6 @@ def clear_old_session_state():
     """Clear old session state that might cause Celery errors"""
     old_keys = [
         'current_pipeline_job_id', 'pipeline_task_id', 'pipeline_done',
-        'extract_task_id', 'detect_task_id', 'cluster_task_id'
     ]
     for key in old_keys:
         if key in st.session_state:
