@@ -324,8 +324,104 @@ with st.sidebar:
         help="Opacity of molecular surface"
     )
 
+def _get_binding_site_residues(pdb_data, sdf_data, distance=5.0):
+    """Find protein residue numbers within distance of ligand atoms."""
+    import math
+    # Parse ligand coordinates from SDF
+    lig_coords = []
+    for line in sdf_data.split('\n'):
+        parts = line.split()
+        if len(parts) >= 4:
+            try:
+                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+                if parts[3] in ('C','N','O','S','H','F','P','Cl','Br','I'):
+                    lig_coords.append((x, y, z))
+            except (ValueError, IndexError):
+                pass
+    if not lig_coords:
+        return []
+    # Parse protein atom coordinates and residue numbers from PDB
+    resis = set()
+    for line in pdb_data.split('\n'):
+        if line.startswith('ATOM') or line.startswith('HETATM'):
+            try:
+                px = float(line[30:38])
+                py = float(line[38:46])
+                pz = float(line[46:54])
+                resi = int(line[22:26].strip())
+                for lx, ly, lz in lig_coords:
+                    dx, dy, dz = px - lx, py - ly, pz - lz
+                    if math.sqrt(dx*dx + dy*dy + dz*dz) <= distance:
+                        resis.add(resi)
+                        break
+            except (ValueError, IndexError):
+                pass
+    return sorted(resis)
+
+def _compute_pocket_view_quaternion(pdb_data, sdf_data):
+    """Compute a quaternion that orients the camera to look into the binding pocket.
+
+    Returns (qx, qy, qz, qw) for use with 3Dmol.js setView.
+    """
+    import math
+    # Parse ligand coordinates
+    lig_coords = []
+    for line in sdf_data.split('\n'):
+        parts = line.split()
+        if len(parts) >= 4:
+            try:
+                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
+                if parts[3] in ('C','N','O','S','H','F','P','Cl','Br','I'):
+                    lig_coords.append((x, y, z))
+            except (ValueError, IndexError):
+                pass
+    # Parse protein CA coordinates
+    prot_coords = []
+    for line in pdb_data.split('\n'):
+        if line.startswith('ATOM') and line[12:16].strip() == 'CA':
+            try:
+                prot_coords.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
+            except (ValueError, IndexError):
+                pass
+    if not lig_coords or not prot_coords:
+        return (0, 0, 0, 1)
+    # Centroids
+    lc = [sum(c[i] for c in lig_coords) / len(lig_coords) for i in range(3)]
+    pc = [sum(c[i] for c in prot_coords) / len(prot_coords) for i in range(3)]
+    # Direction from protein center toward ligand (we want camera to look opposite: into pocket)
+    dx, dy, dz = lc[0] - pc[0], lc[1] - pc[1], lc[2] - pc[2]
+    mag = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if mag < 0.001:
+        return (0, 0, 0, 1)
+    dx, dy, dz = dx / mag, dy / mag, dz / mag
+    # Quaternion rotating (dx,dy,dz) to (0,0,1) using half-vector method
+    # src × dst where dst=(0,0,1): cross = (dy, -dx, 0)
+    dot = dz  # src · dst
+    if dot > 0.9999:
+        qx, qy, qz, qw = 0, 0, 0, 1
+    elif dot < -0.9999:
+        qx, qy, qz, qw = 0, 1, 0, 0
+    else:
+        qw = 1 + dot
+        qx, qy, qz = dy, -dx, 0
+        norm = math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
+        qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+    # Apply 15° tilt around X for depth, then 20° around Y to shift view left
+    def _qmul(w1, x1, y1, z1, w2, x2, y2, z2):
+        return (w1*w2 - x1*x2 - y1*y2 - z1*z2,
+                w1*x2 + x1*w2 + y1*z2 - z1*y2,
+                w1*y2 - x1*z2 + y1*w2 + z1*x2,
+                w1*z2 + x1*y2 - y1*x2 + z1*w2)
+    # X tilt (above)
+    ax = math.radians(35) / 2
+    rw, rx, ry, rz = _qmul(math.cos(ax), math.sin(ax), 0, 0, qw, qx, qy, qz)
+    # Y shift (rotate left)
+    ay = math.radians(85) / 2
+    rw, rx, ry, rz = _qmul(math.cos(ay), 0, math.sin(ay), 0, rw, rx, ry, rz)
+    return (rx, ry, rz, rw)
+
 # Function to display 3D molecule using py3Dmol
-def show_molecule_3d(pdb_data, sdf_data=None, width=800, height=600, style_protein="cartoon", style_ligand="stick"):
+def show_molecule_3d(pdb_data, sdf_data=None, width=800, height=600, style_protein="cartoon", style_ligand="stick", color_scheme="spectrum", surface_opacity=0.7):
     """
     Display 3D molecular structure using py3Dmol
 
@@ -336,34 +432,155 @@ def show_molecule_3d(pdb_data, sdf_data=None, width=800, height=600, style_prote
         height: Viewer height
         style_protein: Protein visualization style
         style_ligand: Ligand visualization style
+        color_scheme: Color scheme for protein visualization
+        surface_opacity: Opacity for surface style
     """
     view = py3Dmol.view(width=width, height=height)
 
-    # Add protein
+    # Add both models first so selectors like 'within' can reference either
     if pdb_data:
         view.addModel(pdb_data, 'pdb')
-        if style_protein == "cartoon":
+    if sdf_data:
+        view.addModel(sdf_data, 'sdf')
+
+    # Style protein
+    if pdb_data:
+        if style_protein == "binding site":
+            # Binding site view: all protein as stick, nearby residues as 50% transparent surface
+            view.setStyle({'model': 0}, {'stick': {'colorscheme': color_scheme}})
+            if sdf_data:
+                # 3Dmol.js 'within' doesn't work reliably with addSurface,
+                # so we find binding site residues in Python and select by resi
+                binding_resis = _get_binding_site_residues(pdb_data, sdf_data, distance=5.0)
+                if binding_resis:
+                    view.addSurface(py3Dmol.VDW, {'opacity': 0.85, 'color': 'white'},
+                        {'model': 0, 'resi': binding_resis}, {'model': 0})
+        elif style_protein == "cartoon":
             view.setStyle({'model': 0}, {'cartoon': {'color': color_scheme}})
         elif style_protein == "surface":
-            view.setStyle({'model': 0}, {'surface': {'opacity': surface_opacity, 'color': color_scheme}})
+            view.setStyle({'model': 0}, {'cartoon': {'color': color_scheme, 'opacity': 0.3}})
+            view.addSurface(py3Dmol.VDW, {'opacity': surface_opacity, 'color': color_scheme}, {'model': 0})
         elif style_protein == "stick":
             view.setStyle({'model': 0}, {'stick': {'colorscheme': color_scheme}})
 
-    # Add ligand if provided
+    # Style ligand
     if sdf_data:
-        view.addModel(sdf_data, 'sdf')
-        view.setStyle({'model': 1}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}, 'sphere': {'scale': 0.3}})
+        # Element-based coloring with green carbons (field standard: PyMOL/Chimera convention)
+        view.setStyle({'model': 1}, {
+            'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}
+        })
+        view.center({'model': 1})
 
     view.zoomTo()
     view.spin(False)
 
-    # Generate HTML
+    # Generate HTML with control buttons
+    viewer_html = view._make_html()
+    # Extract viewer variable name for button JS
+    import re as _re
+    viewer_match = _re.search(r'(viewer_\w+)', viewer_html)
+    viewer_var = viewer_match.group(1) if viewer_match else 'viewer'
+
+    has_ligand = sdf_data is not None
+    # Compute pocket view quaternion and binding site residues for the focus button
+    qx, qy, qz, qw = (0, 0, 0, 1)
+    binding_resis_js = "[]"
+    if has_ligand and pdb_data:
+        qx, qy, qz, qw = _compute_pocket_view_quaternion(pdb_data, sdf_data)
+        resis = _get_binding_site_residues(pdb_data, sdf_data, distance=8.0)
+        if resis:
+            binding_resis_js = str(resis)
+
+    btn_style = ("padding:4px 10px; border:1px solid rgba(255,255,255,0.3); border-radius:6px; "
+                 "background:rgba(0,0,0,0.45); color:white; cursor:pointer; font-size:11px; "
+                 "backdrop-filter:blur(4px); transition:background 0.2s;")
+    btn_disabled_style = btn_style + "opacity:0.3;pointer-events:none;"
+
+    # Binding site button: orient to look into pocket, zoom to pocket residues (not just ligand)
+    focus_js = (
+        f"var v={viewer_var}.getView();"
+        f"v[4]={qx:.6f};v[5]={qy:.6f};v[6]={qz:.6f};v[7]={qw:.6f};"
+        f"{viewer_var}.setView(v);"
+        f"{viewer_var}.zoomTo({{model:0,resi:{binding_resis_js}}},{{padding:5}});"
+        f"{viewer_var}.render();"
+    )
+
+    buttons_html = f"""
+    <div style="position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
+                display:flex; gap:6px; z-index:10;">
+        <button onclick="{focus_js}"
+            style="{btn_disabled_style if not has_ligand else btn_style}"
+            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
+            onmouseout="this.style.background='rgba(0,0,0,0.45)'"
+            {'disabled' if not has_ligand else ''}>🔍 Binding Site</button>
+        <button onclick="{viewer_var}.zoomTo({{model:0}});{viewer_var}.render();"
+            style="{btn_style}"
+            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
+            onmouseout="this.style.background='rgba(0,0,0,0.45)'">🏠 Protein</button>
+        <button onclick="
+            var uri = {viewer_var}.pngURI();
+            var a = document.createElement('a');
+            a.href = uri;
+            a.download = 'docking_snapshot.png';
+            a.click();"
+            style="{btn_style}"
+            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
+            onmouseout="this.style.background='rgba(0,0,0,0.45)'">📸 Snapshot</button>
+    </div>"""
+
     html = f"""
-    <div class="viewer-container">
-        {view._make_html()}
+    <div style="position:relative;">
+        {viewer_html}
+        {buttons_html}
     </div>
     """
     components.html(html, height=height+50, scrolling=False)
+
+def extract_sdf_model(sdf_path, mode):
+    """
+    Extract a single model from a multi-model SDF file.
+
+    Args:
+        sdf_path: Path to the SDF file
+        mode: 1-indexed model number (matching SMINA's 'mode' column)
+
+    Returns:
+        SDF content string for the requested model, or None on failure.
+    """
+    try:
+        if not sdf_path or not os.path.exists(sdf_path):
+            logger.warning(f"SDF file not found: {sdf_path}")
+            return None
+        with open(sdf_path, 'r') as f:
+            content = f.read()
+        models = content.split('$$$$')
+        # Filter out empty entries but preserve internal whitespace
+        # (SDF V2000 header requires blank molecule name line — strip() destroys it)
+        models = [m for m in models if m.strip()]
+        idx = int(mode) - 1  # Convert 1-indexed to 0-indexed
+        if 0 <= idx < len(models):
+            # Ensure model starts with proper SDF header (molecule name line)
+            # Raw split may have leading \n from delimiter — normalize to exactly
+            # one blank molecule name line before the OpenBabel/program line
+            model_text = models[idx].lstrip('\n')
+            # SDF requires: line1=mol_name, line2=program, line3=comment, line4=counts
+            # If first line is the program line (e.g. "OpenBabel..."), prepend blank mol name
+            lines = model_text.split('\n')
+            if lines and 'V2000' not in lines[0] and len(lines) > 2:
+                # Check if counts line is at position 2 (missing mol name) or 3 (correct)
+                for i, line in enumerate(lines[:5]):
+                    if 'V2000' in line or 'V3000' in line:
+                        if i < 3:
+                            # Need to prepend blank lines to push counts to line index 3
+                            model_text = '\n' * (3 - i) + model_text
+                        break
+            return model_text + '\n$$$$\n'
+        logger.warning(f"Model {mode} out of range (file has {len(models)} models): {sdf_path}")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to extract SDF model {mode} from {sdf_path}: {e}")
+        return None
+
 
 # Function to classify affinity
 def classify_affinity(affinity):
@@ -384,7 +601,7 @@ with tab_setup:
     st.markdown("### 🎯 Job Configuration")
 
     # Generate job ID once and store in session state
-    if 'docking_display_job_id' not in st.session_state:
+    if not st.session_state.get('docking_display_job_id'):
         st.session_state.docking_display_job_id = f"docking_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
     job_id = st.session_state.docking_display_job_id
 
@@ -448,21 +665,21 @@ with tab_setup:
                 with col1:
                     if st.button("Select All", use_container_width=True):
                         for idx, row in df_reps_sorted.iterrows():
-                            key = get_pdb_selection_key(row['File name'])
+                            key = get_pdb_selection_key(row['File name'], idx)
                             st.session_state[key] = True
                         st.rerun()
 
                 with col2:
                     if st.button("Select Top 10", use_container_width=True):
                         for i, (idx, row) in enumerate(df_reps_sorted.iterrows()):
-                            key = get_pdb_selection_key(row['File name'])
+                            key = get_pdb_selection_key(row['File name'], idx)
                             st.session_state[key] = i < 10
                         st.rerun()
 
                 with col3:
                     if st.button("Clear All", use_container_width=True):
                         for idx, row in df_reps_sorted.iterrows():
-                            key = get_pdb_selection_key(row['File name'])
+                            key = get_pdb_selection_key(row['File name'], idx)
                             st.session_state[key] = False
                         st.rerun()
 
@@ -471,10 +688,11 @@ with tab_setup:
 
                 with col1:
                     st.markdown("#### 🏆 High Probability Pockets (Top 50%)")
-                    high_prob_pdbs = df_reps_sorted.head(len(df_reps_sorted)//2)
+                    mid = (len(df_reps_sorted) + 1) // 2
+                    high_prob_pdbs = df_reps_sorted.iloc[:mid]
                     for idx, row in high_prob_pdbs.iterrows():
-                        # Use filename-based key to avoid collisions
-                        key = get_pdb_selection_key(row['File name'])
+                        # Use filename + row index key to avoid collisions with duplicate filenames
+                        key = get_pdb_selection_key(row['File name'], idx)
                         # Initialize session state if not exists
                         if key not in st.session_state:
                             st.session_state[key] = True  # Default to selected for high probability
@@ -490,10 +708,10 @@ with tab_setup:
 
                 with col2:
                     st.markdown("#### 📊 Lower Probability Pockets")
-                    low_prob_pdbs = df_reps_sorted.tail(len(df_reps_sorted)//2)
+                    low_prob_pdbs = df_reps_sorted.iloc[mid:]
                     for idx, row in low_prob_pdbs.iterrows():
-                        # Use filename-based key to avoid collisions
-                        key = get_pdb_selection_key(row['File name'])
+                        # Use filename + row index key to avoid collisions with duplicate filenames
+                        key = get_pdb_selection_key(row['File name'], idx)
                         # Initialize session state if not exists
                         if key not in st.session_state:
                             st.session_state[key] = False  # Default to not selected for low probability
@@ -637,7 +855,7 @@ with tab_setup:
                         try:
                             with open(selected_ligand, 'r') as f:
                                 ligand_data = f.read()
-                            show_molecule_3d(None, ligand_data, width=400, height=300)
+                            show_molecule_3d(None, ligand_data, width=400, height=300, color_scheme=color_scheme, surface_opacity=surface_opacity)
                         except Exception as e:
                             st.error(f"Could not preview ligand: {e}")
 
@@ -738,6 +956,8 @@ with tab_results:
             st.info("⏳ Task is pending in queue...")
             if st.button("🔄 Refresh Status"):
                 st.rerun()
+            time.sleep(3)
+            st.rerun()
         elif task.state == 'PROGRESS':
             st.markdown("### 📈 Job Progress")
             progress_data = task.info
@@ -753,10 +973,14 @@ with tab_results:
                 if progress < 100:
                     if st.button("🔄 Refresh Progress"):
                         st.rerun()
+                    time.sleep(3)
+                    st.rerun()
                 else:
                     st.success("✅ Docking completed!")
             else:
                 st.warning("⚠️ Progress data format unexpected")
+                time.sleep(3)
+                st.rerun()
         elif task.state == 'SUCCESS':
             st.success("✅ Docking completed successfully!")
 
@@ -881,17 +1105,32 @@ with tab_results:
                                 # Visualization controls
                                 viz_col1, viz_col2 = st.columns(2)
                                 with viz_col1:
-                                    viz_style = st.selectbox("Style:", ["cartoon", "surface", "stick"], key="viz_style_main")
+                                    viz_style = st.selectbox("Style:", ["cartoon", "surface", "stick", "binding site"], key="viz_style_main")
                                 with viz_col2:
                                     show_ligand = st.checkbox("Show Ligand", value=True, key="show_ligand_main")
 
                                 # Try to load and display the structure
                                 try:
+                                    # Load ligand SDF if available and checkbox enabled
+                                    ligand_sdf_data = None
+                                    if show_ligand:
+                                        sdf_path = pose.get('output_sdf')
+                                        mode = pose.get('mode')
+                                        if sdf_path and mode is not None:
+                                            ligand_sdf_data = extract_sdf_model(sdf_path, mode)
+
+                                    # Prefer PDB over PDBQT for better visualization
+                                    receptor_pdb_file = pose.get('receptor_pdb_path')
                                     receptor_file = pose.get('receptor_path')
-                                    if receptor_file and os.path.exists(receptor_file):
+
+                                    if receptor_pdb_file and os.path.exists(receptor_pdb_file):
+                                        with open(receptor_pdb_file, 'r') as f:
+                                            receptor_data = f.read()
+                                        show_molecule_3d(receptor_data, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
+                                    elif receptor_file and os.path.exists(receptor_file):
                                         with open(receptor_file, 'r') as f:
                                             receptor_data = f.read()
-                                        show_molecule_3d(receptor_data, None, width=400, height=350, style=viz_style)
+                                        show_molecule_3d(receptor_data, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
                                     else:
                                         # Try to find receptor in docking output
                                         docking_dir = results.get('docking_output_dir')
@@ -906,14 +1145,14 @@ with tab_results:
                                                 if os.path.exists(path):
                                                     with open(path, 'r') as f:
                                                         receptor_data = f.read()
-                                                    show_molecule_3d(receptor_data, None, width=400, height=350, style=viz_style)
+                                                    show_molecule_3d(receptor_data, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
                                                     break
                                             else:
                                                 st.info("📁 Upload a PDB file to visualize:")
                                                 demo_file = st.file_uploader("Upload PDB", type=['pdb'], key='viewer_pdb', label_visibility="collapsed")
                                                 if demo_file:
                                                     pdb_content = demo_file.getvalue().decode('utf-8')
-                                                    show_molecule_3d(pdb_content, None, width=400, height=350, style=viz_style)
+                                                    show_molecule_3d(pdb_content, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
                                         else:
                                             st.warning("⚠️ Structure files not available")
                                 except Exception as e:
@@ -925,7 +1164,7 @@ with tab_results:
                                 demo_file = st.file_uploader("Or upload a PDB file:", type=['pdb'], key='demo_viewer_pdb')
                                 if demo_file:
                                     pdb_content = demo_file.getvalue().decode('utf-8')
-                                    show_molecule_3d(pdb_content, None, width=400, height=350, style="cartoon")
+                                    show_molecule_3d(pdb_content, None, width=400, height=350, style_protein="cartoon", color_scheme=color_scheme, surface_opacity=surface_opacity)
 
                         # ========== Additional Analysis Tabs ==========
                         st.markdown("---")
@@ -1052,6 +1291,151 @@ with tab_results:
             error_msg = task.info.get('exc_message', 'Unknown error') if isinstance(task.info, dict) else str(task.info) if task.info else 'Unknown error'
             st.error(f"Error: {error_msg}")
             st.info("💡 Check the Task Monitor for detailed error logs.")
+    elif st.session_state.docking_job_id and not st.session_state.docking_task_id:
+        # Load results directly from disk (no Celery task ID — e.g. loaded by job ID)
+        docking_output_dir = os.path.join(RESULTS_DIR, f'dock_{st.session_state.docking_job_id}')
+        results_file = os.path.join(docking_output_dir, 'docking_results.csv')
+        if os.path.exists(results_file):
+            st.success("✅ Loaded docking results from disk")
+            df_results = pd.read_csv(results_file)
+
+            if df_results.empty:
+                st.warning("⚠️ Results file is empty. No docking poses were generated.")
+            elif 'ligand' not in df_results.columns or 'receptor' not in df_results.columns:
+                st.error("❌ Results file is missing required columns (ligand, receptor)")
+            else:
+                # Metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Poses", len(df_results))
+                with col2:
+                    st.metric("Unique Ligands", df_results['ligand'].nunique())
+                with col3:
+                    st.metric("Unique Receptors", df_results['receptor'].nunique())
+                with col4:
+                    best_aff = df_results['affinity (kcal/mol)'].min()
+                    category, emoji = classify_affinity(best_aff)
+                    st.metric(f"Best Affinity {emoji}", f"{best_aff:.2f} kcal/mol")
+
+                # Best poses
+                df_best = df_results.loc[df_results.groupby(['ligand', 'receptor'])['affinity (kcal/mol)'].idxmin()]
+                df_best['affinity_class'] = df_best['affinity (kcal/mol)'].apply(lambda x: classify_affinity(x)[0])
+                df_best['affinity_emoji'] = df_best['affinity (kcal/mol)'].apply(lambda x: classify_affinity(x)[1])
+
+                st.markdown("---")
+                st.markdown("### 🎯 Results Explorer with 3D Visualization")
+
+                # Filter controls
+                filter_col1, filter_col2, filter_col3 = st.columns([2, 2, 1])
+                with filter_col1:
+                    affinity_filter = st.multiselect(
+                        "Filter by Affinity:",
+                        options=['excellent', 'good', 'moderate', 'poor'],
+                        default=['excellent', 'good', 'moderate'],
+                        key="affinity_filter_loaded"
+                    )
+                with filter_col2:
+                    top_n = st.slider("Show top N results:", 5, 50, 15, key="top_n_loaded")
+                with filter_col3:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    auto_view = st.checkbox("Auto-view", value=True, key="auto_view_loaded")
+
+                if affinity_filter:
+                    df_filtered = df_best[df_best['affinity_class'].isin(affinity_filter)]
+                else:
+                    df_filtered = df_best
+                df_display = df_filtered.sort_values('affinity (kcal/mol)').head(top_n)
+
+                # Split view
+                table_col, viewer_col = st.columns([1, 1])
+
+                with table_col:
+                    st.markdown("#### 🏆 Top Docking Poses")
+                    if not df_display.empty:
+                        pose_options = df_display.index.tolist()
+                        selected_idx = st.selectbox(
+                            "Select pose to view:",
+                            pose_options,
+                            format_func=lambda x: f"{df_display.loc[x, 'affinity_emoji']} {df_display.loc[x, 'ligand']} ↔ {df_display.loc[x, 'receptor']} ({df_display.loc[x, 'affinity (kcal/mol)']:.2f} kcal/mol)",
+                            key="pose_selector_loaded"
+                        )
+                        if selected_idx is not None:
+                            st.session_state.selected_pose = df_display.loc[selected_idx].to_dict()
+
+                        st.dataframe(
+                            df_display[['ligand', 'receptor', 'affinity (kcal/mol)', 'affinity_emoji', 'rmsd l.b.', 'rmsd u.b.']].rename(
+                                columns={'affinity_emoji': '🎯', 'affinity (kcal/mol)': 'Affinity', 'rmsd l.b.': 'RMSD LB', 'rmsd u.b.': 'RMSD UB'}
+                            ),
+                            use_container_width=True,
+                            height=350
+                        )
+                    else:
+                        st.info("No poses match the selected filters.")
+
+                with viewer_col:
+                    st.markdown("#### 🔬 3D Structure Viewer")
+                    if 'selected_pose' in st.session_state and st.session_state.selected_pose:
+                        pose = st.session_state.selected_pose
+                        category, emoji = classify_affinity(pose.get('affinity (kcal/mol)', 0))
+                        st.markdown(f"""
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1rem; border-radius: 10px; color: white; margin-bottom: 1rem;">
+                            <strong>{emoji} {pose.get('ligand', 'N/A')}</strong> ↔ <strong>{pose.get('receptor', 'N/A')}</strong><br>
+                            <span style="font-size: 1.2rem; font-weight: bold;">{pose.get('affinity (kcal/mol)', 0):.2f} kcal/mol</span>
+                            <span style="margin-left: 1rem; font-size: 0.9rem;">RMSD: {pose.get('rmsd l.b.', 0):.2f} / {pose.get('rmsd u.b.', 0):.2f} Å</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                        viz_col1, viz_col2 = st.columns(2)
+                        with viz_col1:
+                            viz_style = st.selectbox("Style:", ["cartoon", "surface", "stick", "binding site"], key="viz_style_loaded")
+                        with viz_col2:
+                            show_ligand = st.checkbox("Show Ligand", value=True, key="show_ligand_loaded")
+
+                        try:
+                            ligand_sdf_data = None
+                            if show_ligand:
+                                sdf_path = pose.get('output_sdf')
+                                mode = pose.get('mode')
+                                if sdf_path and mode is not None:
+                                    ligand_sdf_data = extract_sdf_model(sdf_path, mode)
+
+                            receptor_pdb_file = pose.get('receptor_pdb_path')
+                            receptor_file = pose.get('receptor_path')
+
+                            if receptor_pdb_file and os.path.exists(receptor_pdb_file):
+                                with open(receptor_pdb_file, 'r') as f:
+                                    receptor_data = f.read()
+                                show_molecule_3d(receptor_data, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
+                            elif receptor_file and os.path.exists(receptor_file):
+                                with open(receptor_file, 'r') as f:
+                                    receptor_data = f.read()
+                                show_molecule_3d(receptor_data, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
+                            else:
+                                possible_paths = [
+                                    os.path.join(docking_output_dir, f"{pose.get('receptor', '')}"),
+                                    os.path.join(docking_output_dir, f"{pose.get('receptor', '')}.pdb"),
+                                    os.path.join(docking_output_dir, f"{pose.get('receptor', '')}.pdbqt"),
+                                ]
+                                for path in possible_paths:
+                                    if os.path.exists(path):
+                                        with open(path, 'r') as f:
+                                            receptor_data = f.read()
+                                        show_molecule_3d(receptor_data, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
+                                        break
+                                else:
+                                    st.info("📁 Upload a PDB file to visualize:")
+                                    demo_file = st.file_uploader("Upload PDB", type=['pdb'], key='viewer_pdb_loaded', label_visibility="collapsed")
+                                    if demo_file:
+                                        pdb_content = demo_file.getvalue().decode('utf-8')
+                                        show_molecule_3d(pdb_content, ligand_sdf_data, width=400, height=350, style_protein=viz_style, color_scheme=color_scheme, surface_opacity=surface_opacity)
+                        except Exception as e:
+                            st.error(f"Error loading structure: {e}")
+                            logger.error(f"3D viewer error: {e}", exc_info=True)
+                    else:
+                        st.info("👆 Select a pose from the table to view its 3D structure")
+        else:
+            st.error(f"❌ No results found for job '{st.session_state.docking_job_id}'. Check that the job ID is correct and docking has completed.")
+            st.info(f"Looking for: {results_file}")
     else:
         st.info("ℹ️ No active docking job. Start a new job in the 'Setup & Launch' tab or enter a job ID above.")
 
