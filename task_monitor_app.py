@@ -75,23 +75,31 @@ def get_job_type(job_id):
 
 def get_related_jobs(job_id, all_jobs):
     """Get jobs related to the given job ID (upstream and downstream)"""
-    related = set([job_id])
+    related = set()
 
-    # Find the job data
+    # Find the job data — try exact match first, then substring match
     job_data = next((j for j in all_jobs if j.get('job_id') == job_id), None)
     if not job_data:
+        job_data = next((j for j in all_jobs if job_id in j.get('job_id', '')), None)
+    if job_data:
+        related.add(job_data['job_id'])
+    else:
+        related.add(job_id)
         return related
 
-    # Extract base timestamp from job_id (format: type_YYYYMMDD_HHMMSS_hash)
-    parts = job_id.split('_')
-    if len(parts) >= 3:
-        timestamp = f"{parts[1]}_{parts[2]}"  # YYYYMMDD_HHMMSS
-
-        # Find jobs with same timestamp (they're from the same pipeline run)
-        for job in all_jobs:
-            other_id = job.get('job_id', '')
-            if timestamp in other_id:
-                related.add(other_id)
+    # Extract timestamp from the matched job_id (format: type_YYYYMMDD_HHMMSS_hash)
+    matched_id = job_data['job_id']
+    parts = matched_id.split('_')
+    # Find YYYYMMDD_HHMMSS pattern in parts
+    for i in range(len(parts) - 1):
+        if len(parts[i]) == 8 and parts[i].isdigit() and len(parts[i+1]) == 6 and parts[i+1].isdigit():
+            timestamp = f"{parts[i]}_{parts[i+1]}"
+            # Find jobs with same timestamp (from the same pipeline run)
+            for job in all_jobs:
+                other_id = job.get('job_id', '')
+                if timestamp in other_id:
+                    related.add(other_id)
+            break
 
     return related
 
