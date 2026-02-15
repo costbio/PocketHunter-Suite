@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import numpy as np
 from datetime import datetime
 import time
 import json
@@ -56,11 +57,6 @@ st.markdown("""
         transition: all 0.3s ease;
     }
 
-    .cluster-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 12px 48px rgba(31, 38, 135, 0.2);
-    }
-
     .metric-card {
         background: linear-gradient(135deg, #FFF3E0 0%, #FFE0B2 100%);
         padding: 1.5rem;
@@ -110,24 +106,6 @@ st.markdown("""
         font-weight: 600;
         text-align: center;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        background: linear-gradient(135deg, #FFA726 0%, #FB8C00 100%);
-        color: white;
-    }
-
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: #FFF3E0;
-        border-radius: 10px;
-        padding: 0 24px;
-        font-weight: 600;
-    }
-
-    .stTabs [aria-selected="true"] {
         background: linear-gradient(135deg, #FFA726 0%, #FB8C00 100%);
         color: white;
     }
@@ -206,254 +184,207 @@ def show_molecule_3d(pdb_path, width=800, height=600, style="cartoon"):
         st.error(f"Error loading 3D structure: {e}")
         logger.error(f"Error in show_molecule_3d: {e}", exc_info=True)
 
-# Create tabs for different views
-tab_setup, tab_progress, tab_results = st.tabs(["🚀 Setup & Launch", "📊 Progress", "🎯 Results & Visualization"])
+# ── Status Banner ──────────────────────────────────────────────────────
+if st.session_state.cluster_task_id:
+    try:
+        _task = celery_app.AsyncResult(st.session_state.cluster_task_id)
+        if _task.state == 'PENDING':
+            st.info("⏳ Task is pending in queue...")
+            st.progress(0)
+        elif _task.state == 'PROGRESS':
+            _prog = (_task.info or {}).get('progress', 0)
+            _step = (_task.info or {}).get('current_step', 'Processing...')
+            st.info(f"🔄 {_step}")
+            st.progress(_prog / 100)
+        elif _task.state == 'SUCCESS':
+            _result = _task.result or {}
+            st.success(f"✅ Clustering completed! Clusters found: {_result.get('clusters_found', 'N/A')} | Time: {_result.get('processing_time', 0):.1f}s")
+            st.progress(1.0)
+            st.session_state.cluster_status = 'completed'
+            st.session_state.cached_job_ids['cluster'] = st.session_state.cluster_job_id
+        elif _task.state == 'FAILURE':
+            st.error(f"❌ Clustering failed: {_task.info}")
+            st.session_state.cluster_status = 'failed'
+    except Exception as e:
+        logger.error(f"Status banner error: {e}")
 
-with tab_setup:
-    st.markdown("### 📁 Input Configuration")
+# ── Input Configuration ───────────────────────────────────────────────
+st.markdown("### 📁 Input Configuration")
 
-    # Display current job ID if exists
-    if st.session_state.cluster_job_id:
-        st.markdown(f"""
-        <div class="job-id-display">
-            🔑 Current Job ID: {st.session_state.cluster_job_id}
-        </div>
-        """, unsafe_allow_html=True)
+if st.session_state.cluster_job_id:
+    st.markdown(f"""
+    <div class="job-id-display">
+        🔑 Current Job ID: {st.session_state.cluster_job_id}
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Input options in columns
-    st.markdown("#### Select Input Source")
+input_col1, input_col2 = st.columns(2)
 
-    input_col1, input_col2 = st.columns(2)
+with input_col1:
+    st.markdown("**Option 1: Use Previous Step**")
+    cached_detect_id = st.session_state.cached_job_ids.get('detect', '')
+    detect_job_id = st.text_input(
+        "Job ID from Step 2:",
+        value=cached_detect_id,
+        key="cluster_detect_job_id",
+        help="Enter the Job ID from pocket detection"
+    )
 
-    with input_col1:
-        st.markdown("**Option 1: Use Previous Step**")
-        cached_detect_id = st.session_state.cached_job_ids.get('detect', '')
-        detect_job_id = st.text_input(
-            "Job ID from Step 2:",
-            value=cached_detect_id,
-            key="cluster_detect_job_id",
-            help="Enter the Job ID from pocket detection"
-        )
+with input_col2:
+    st.markdown("**Option 2: Upload CSV**")
+    pockets_csv = st.file_uploader(
+        "Upload pockets.csv:",
+        type=['csv'],
+        key="cluster_pockets_csv",
+        help="Upload pockets.csv from pocket detection"
+    )
 
-    with input_col2:
-        st.markdown("**Option 2: Upload CSV**")
-        pockets_csv = st.file_uploader(
-            "Upload pockets.csv:",
-            type=['csv'],
-            key="cluster_pockets_csv",
-            help="Upload pockets.csv from pocket detection"
-        )
+st.markdown("#### ⚙️ Clustering Parameters")
 
-    st.markdown("#### ⚙️ Clustering Parameters")
+param_col1, param_col2 = st.columns(2)
 
-    param_col1, param_col2 = st.columns(2)
+with param_col1:
+    min_prob = st.slider(
+        "Min. Ligand-Binding Probability",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.5,
+        step=0.05,
+        key="cluster_min_prob",
+        help="Minimum probability threshold for pocket clustering"
+    )
 
-    with param_col1:
-        min_prob = st.slider(
-            "Min. Ligand-Binding Probability",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.5,
-            step=0.05,
-            key="cluster_min_prob",
-            help="Minimum probability threshold for pocket clustering"
-        )
+with param_col2:
+    clustering_method = st.selectbox(
+        "Clustering Method",
+        options=["dbscan", "hierarchical"],
+        index=0,
+        key="cluster_method",
+        help="DBSCAN: Density-based | Hierarchical: Tree-based"
+    )
 
-    with param_col2:
-        clustering_method = st.selectbox(
-            "Clustering Method",
-            options=["dbscan", "hierarchical"],
-            index=0,
-            key="cluster_method",
-            help="DBSCAN: Density-based | Hierarchical: Tree-based"
-        )
+# Advanced options
+if clustering_method == "dbscan":
+    dbscan_hierarchical = st.checkbox(
+        "Enable Hierarchical Refinement",
+        value=True,
+        key="cluster_dbscan_hierarchical",
+        help="Apply hierarchical sub-clustering within DBSCAN clusters"
+    )
+else:
+    dbscan_hierarchical = False
 
-    # Advanced options
-    if clustering_method == "dbscan":
-        dbscan_hierarchical = st.checkbox(
-            "Enable Hierarchical Refinement",
-            value=True,
-            key="cluster_dbscan_hierarchical",
-            help="Apply hierarchical sub-clustering within DBSCAN clusters"
-        )
-    else:
-        dbscan_hierarchical = False
+# Run button
+st.markdown("---")
+if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width=True):
+    # Determine input source
+    pockets_csv_path = None
+    input_source = None
 
-    # Run button
-    st.markdown("---")
-    if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width=True):
-        # Determine input source
-        pockets_csv_path = None
-        input_source = None
-
-        if detect_job_id:
-            detect_output_dir = os.path.join(RESULTS_DIR, detect_job_id, "pockets")
-            potential_csv_path = os.path.join(detect_output_dir, "pockets.csv")
-            if os.path.exists(potential_csv_path):
-                pockets_csv_path = potential_csv_path
-                input_source = f"Step 2 results (Job ID: {detect_job_id})"
-            else:
-                st.error(f"pockets.csv not found for Job ID: {detect_job_id}")
-                st.stop()
-
-        elif pockets_csv:
-            job_id = f"cluster_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-            try:
-                csv_path = handle_file_upload_secure(pockets_csv, job_id, "pockets_")
-                logger.info(f"CSV file uploaded for job {job_id}")
-            except SecurityError as e:
-                st.error(f"❌ File upload failed: {e}")
-                logger.error(f"Security error during CSV upload: {e}")
-                st.stop()
-            if csv_path:
-                pockets_csv_path = csv_path
-                input_source = "Uploaded pockets.csv"
-
+    if detect_job_id and detect_job_id.strip():
+        detect_output_dir = os.path.join(RESULTS_DIR, detect_job_id.strip(), "pockets")
+        potential_csv_path = os.path.join(detect_output_dir, "pockets.csv")
+        if os.path.exists(potential_csv_path):
+            pockets_csv_path = potential_csv_path
+            input_source = f"Step 2 results (Job ID: {detect_job_id.strip()})"
         else:
-            st.error("Please provide input using one of the options above.")
+            st.error(f"pockets.csv not found for Job ID: {detect_job_id.strip()}")
             st.stop()
 
-        if pockets_csv_path:
-            # Generate unique job ID
-            job_id = f"cluster_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-            st.session_state.cluster_job_id = job_id
+    elif pockets_csv:
+        job_id = f"cluster_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        try:
+            csv_path = handle_file_upload_secure(pockets_csv, job_id, "pockets_")
+            logger.info(f"CSV file uploaded for job {job_id}")
+        except SecurityError as e:
+            st.error(f"❌ File upload failed: {e}")
+            logger.error(f"Security error during CSV upload: {e}")
+            st.stop()
+        if csv_path:
+            pockets_csv_path = csv_path
+            input_source = "Uploaded pockets.csv"
 
-            # Check task rate limit before submission
-            try:
-                check_task_rate_limit()
-            except RateLimitExceeded as e:
-                st.error(f"⏳ Task submission rate limit exceeded: {e}")
-                st.info(f"Please wait {e.retry_after:.0f} seconds before submitting another task.")
-                logger.warning(f"Task rate limit exceeded for job {job_id}: {e}")
-                st.stop()
+    else:
+        st.error("Please provide input using one of the options above.")
+        st.stop()
 
-            # Update status
-            update_job_status(job_id, 'submitted', 'Initializing pocket clustering')
-            st.session_state.cluster_status = 'running'
+    if pockets_csv_path:
+        # Generate unique job ID
+        job_id = f"cluster_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        st.session_state.cluster_job_id = job_id
 
-            # Start the clustering
-            with st.spinner("Starting pocket clustering..."):
-                task = run_cluster_pockets_task.delay(
-                    pockets_csv_path_abs=os.path.abspath(pockets_csv_path),
-                    job_id=job_id,
-                    min_prob=min_prob,
-                    clustering_method=clustering_method,
-                    dbscan_hierarchical=dbscan_hierarchical
-                )
-                st.session_state.cluster_task_id = task.id
-                update_job_status(job_id, 'running', 'Pocket clustering started', task_id=task.id)
+        # Check task rate limit before submission
+        try:
+            check_task_rate_limit()
+        except RateLimitExceeded as e:
+            st.error(f"⏳ Task submission rate limit exceeded: {e}")
+            st.info(f"Please wait {e.retry_after:.0f} seconds before submitting another task.")
+            logger.warning(f"Task rate limit exceeded for job {job_id}: {e}")
+            st.stop()
 
-            st.success(f"✅ Clustering started! Job ID: `{job_id}`")
-            st.info(f"📂 Input: {input_source}")
-            st.info("💡 Switch to the Progress tab to monitor execution")
-            time.sleep(2)
+        # Update status
+        update_job_status(job_id, 'submitted', 'Initializing pocket clustering')
+        st.session_state.cluster_status = 'running'
+
+        # Start the clustering
+        with st.spinner("Starting pocket clustering..."):
+            task = run_cluster_pockets_task.delay(
+                pockets_csv_path_abs=os.path.abspath(pockets_csv_path),
+                job_id=job_id,
+                min_prob=min_prob,
+                clustering_method=clustering_method,
+                dbscan_hierarchical=dbscan_hierarchical
+            )
+            st.session_state.cluster_task_id = task.id
+            update_job_status(job_id, 'running', 'Pocket clustering started', task_id=task.id)
+
+        st.success(f"✅ Clustering started! Job ID: `{job_id}`")
+        st.info(f"📂 Input: {input_source}")
+
+# ── Results ────────────────────────────────────────────────────────────
+# Determine which job to show results for
+results_job_id = st.session_state.cluster_job_id
+
+# Allow loading previous results
+with st.expander("📂 Load previous results"):
+    load_job_id = st.text_input(
+        "Enter Clustering Job ID:",
+        value="",
+        placeholder="e.g., cluster_20250815_143022_a1b2c3d4",
+        key="cluster_load_job_id",
+        help="Enter a clustering job ID to view its results"
+    )
+    if st.button("🔍 Load Results"):
+        if load_job_id:
+            st.session_state.cluster_job_id = load_job_id
+            results_job_id = load_job_id
             st.rerun()
 
-with tab_progress:
-    st.markdown("### 📊 Clustering Progress")
+if results_job_id:
+    cluster_output_dir = os.path.join(RESULTS_DIR, results_job_id, "pocket_clusters")
+    representatives_file = os.path.join(cluster_output_dir, "cluster_representatives.csv")
 
-    if st.session_state.cluster_task_id:
+    if os.path.exists(representatives_file):
         try:
-            task = celery_app.AsyncResult(st.session_state.cluster_task_id)
+            df_reps = pd.read_csv(representatives_file)
 
-            if task.state == 'PENDING':
-                st.info("⏳ Task is pending in queue...")
-                st.progress(0)
-                if st.button("🔄 Refresh"):
-                    st.rerun()
+            # Compute numeric residue count from residue name strings
+            if 'residues' in df_reps.columns and df_reps['residues'].dtype == object:
+                df_reps['num_residues'] = df_reps['residues'].apply(
+                    lambda x: len(str(x).split()) if pd.notna(x) else 0
+                )
+            elif 'residues' in df_reps.columns:
+                df_reps['num_residues'] = df_reps['residues']
+            else:
+                df_reps['num_residues'] = 0
 
-            elif task.state == 'PROGRESS':
-                progress_info = task.info or {}
-                progress = progress_info.get('progress', 0)
-                current_step = progress_info.get('current_step', 'Processing...')
-                status_msg = progress_info.get('status', 'Running...')
+            if len(df_reps) == 0:
+                st.warning("⚠️ Clustering completed but no representative pockets were found.")
+            else:
+                st.markdown("---")
+                st.markdown("### 🎯 Clustering Results")
 
-                st.info(f"🔄 {current_step}")
-                st.progress(progress / 100)
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Progress", f"{progress:.1f}%")
-                with col2:
-                    st.metric("Status", status_msg)
-                with col3:
-                    if 'elapsed' in progress_info:
-                        st.metric("Elapsed", f"{progress_info['elapsed']:.1f}s")
-
-                time.sleep(2)
-                st.rerun()
-
-            elif task.state == 'SUCCESS':
-                st.success("✅ Clustering completed successfully!")
-                st.progress(1.0)
-
-                result = task.result
-                if result:
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Clusters Found", result.get('clusters_found', 'N/A'))
-                    with col2:
-                        st.metric("Processing Time", f"{result.get('processing_time', 0):.1f}s")
-                    with col3:
-                        st.metric("Status", "Complete")
-
-                    # Update job status file to 'completed'
-                    update_job_status(
-                        st.session_state.cluster_job_id,
-                        'completed',
-                        'Pocket clustering completed',
-                        result_info={
-                            'clusters_found': result.get('clusters_found', 0),
-                            'processing_time': result.get('processing_time', 0)
-                        }
-                    )
-
-                st.session_state.cluster_status = 'completed'
-                st.session_state.cached_job_ids['cluster'] = st.session_state.cluster_job_id
-                st.info("💡 Switch to the Results & Visualization tab to explore your clusters!")
-
-            elif task.state == 'FAILURE':
-                st.error("❌ Clustering failed!")
-                error_msg = str(task.info) if task.info else 'Unknown error'
-                st.error(f"Error: {error_msg}")
-
-        except Exception as e:
-            st.error(f"Error checking task status: {e}")
-            logger.error(f"Task status error: {e}", exc_info=True)
-    else:
-        st.info("ℹ️ No active clustering job. Start a new job in the Setup & Launch tab.")
-
-with tab_results:
-    st.markdown("### 🎯 Clustering Results")
-
-    # Option to load existing results
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        load_job_id = st.text_input(
-            "Enter Clustering Job ID:",
-            value=st.session_state.cluster_job_id if st.session_state.cluster_job_id else "",
-            placeholder="e.g., cluster_20250815_143022_a1b2c3d4",
-            help="Enter a clustering job ID to view results"
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔍 Load Results", use_container_width=True):
-            if load_job_id:
-                st.session_state.cluster_job_id = load_job_id
-                st.rerun()
-
-    if st.session_state.cluster_job_id:
-        # Check if results exist
-        cluster_output_dir = os.path.join(RESULTS_DIR, st.session_state.cluster_job_id, "pocket_clusters")
-        representatives_file = os.path.join(cluster_output_dir, "cluster_representatives.csv")
-
-        if os.path.exists(representatives_file):
-            try:
-                df_reps = pd.read_csv(representatives_file)
-
-                # Display overview metrics
-                st.markdown("#### 📊 Clustering Overview")
-
+                # Overview metrics
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.markdown(f"""
@@ -473,7 +404,7 @@ with tab_results:
                     st.markdown(f"""
                     <div class="metric-card">
                         <div class="metric-label">Avg Residues</div>
-                        <div class="metric-value">{df_reps['residues'].mean():.0f}</div>
+                        <div class="metric-value">{df_reps['num_residues'].mean():.0f}</div>
                     </div>
                     """, unsafe_allow_html=True)
                 with col4:
@@ -484,21 +415,25 @@ with tab_results:
                     </div>
                     """, unsafe_allow_html=True)
 
-                # Create sub-tabs for different analyses
-                results_tab1, results_tab2, results_tab3, results_tab4 = st.tabs([
+                # Load full clustered pockets for heatmap (if available)
+                clustered_file = os.path.join(cluster_output_dir, "pockets_clustered.csv")
+                df_clustered = None
+                if os.path.exists(clustered_file):
+                    df_clustered = pd.read_csv(clustered_file)
+                    df_clustered = df_clustered[df_clustered['cluster'] != -1]
+
+                # Sub-tabs for results data
+                results_tab1, results_tab2, results_tab3, results_tab4, results_tab5 = st.tabs([
                     "📋 Cluster Table",
+                    "🗺️ Residue Heatmap",
                     "📈 Distribution Analysis",
                     "🔬 3D Viewer",
                     "💾 Download"
                 ])
 
                 with results_tab1:
-                    st.markdown("#### 🏆 Cluster Representatives")
-
-                    # Sort and display
                     df_display = df_reps.sort_values('probability', ascending=False)
 
-                    # Add quality badges
                     def get_quality_badge(prob):
                         if prob >= 0.8:
                             return "🟢 Excellent"
@@ -512,30 +447,154 @@ with tab_results:
                     df_display['Quality'] = df_display['probability'].apply(get_quality_badge)
 
                     st.dataframe(
-                        df_display[['File name', 'probability', 'residues', 'Quality']],
+                        df_display[['File name', 'probability', 'num_residues', 'Quality']],
                         use_container_width=True,
                         height=400
                     )
 
-                    # Selection for 3D viewing
-                    st.markdown("---")
-                    st.markdown("**Select a cluster to view in 3D:**")
-                    selected_idx = st.selectbox(
-                        "Choose cluster:",
-                        df_display.index,
-                        format_func=lambda x: f"{df_display.loc[x, 'File name']} (Prob: {df_display.loc[x, 'probability']:.3f})"
-                    )
-                    if selected_idx is not None:
-                        st.session_state.selected_cluster = df_display.loc[selected_idx].to_dict()
-                        st.info("✅ Cluster selected! Switch to the 3D Viewer tab to visualize it.")
+                    if len(df_display) > 0:
+                        st.markdown("---")
+                        st.markdown("**Select a cluster to view in 3D:**")
+                        selected_idx = st.selectbox(
+                            "Choose cluster:",
+                            df_display.index,
+                            format_func=lambda x: f"{df_display.loc[x, 'File name']} (Prob: {df_display.loc[x, 'probability']:.3f})"
+                        )
+                        if selected_idx is not None:
+                            st.session_state.selected_cluster = df_display.loc[selected_idx].to_dict()
 
                 with results_tab2:
-                    st.markdown("#### 📈 Statistical Analysis")
+                    if df_clustered is not None and len(df_clustered) > 0:
+                        # Identify binary residue columns
+                        meta_cols = {'Frame_pocket_index', 'File name', 'Frame', 'pocket_index',
+                                     'probability', 'residues', 'cluster', 'num_residues'}
+                        residue_cols = [c for c in df_clustered.columns if c not in meta_cols]
 
+                        if residue_cols:
+                            unique_clusters = sorted(df_clustered['cluster'].unique())
+
+                            # --- Consensus Heatmap: residue frequency per cluster ---
+                            consensus_rows = []
+                            cluster_labels = []
+                            for clust in unique_clusters:
+                                clust_data = df_clustered[df_clustered['cluster'] == clust]
+                                freq = clust_data[residue_cols].mean()
+                                consensus_rows.append(freq.values)
+                                cluster_labels.append(
+                                    f"Cluster {clust}  ({len(clust_data)} pockets, avg prob: {clust_data['probability'].mean():.3f})"
+                                )
+
+                            consensus_matrix = np.array(consensus_rows)
+
+                            # Drop residues that are never present in any cluster
+                            col_mask = consensus_matrix.sum(axis=0) > 0
+                            filtered_residues = [r for r, m in zip(residue_cols, col_mask) if m]
+                            filtered_matrix = consensus_matrix[:, col_mask]
+
+                            # Sort residues numerically (e.g. A_807 before A_1019)
+                            def residue_sort_key(name):
+                                parts = name.rsplit('_', 1)
+                                try:
+                                    return (parts[0], int(parts[1]))
+                                except (ValueError, IndexError):
+                                    return (name, 0)
+
+                            sort_order = sorted(range(len(filtered_residues)),
+                                                key=lambda i: residue_sort_key(filtered_residues[i]))
+                            filtered_residues = [filtered_residues[i] for i in sort_order]
+                            filtered_matrix = filtered_matrix[:, sort_order]
+
+                            fig_heat = go.Figure(data=go.Heatmap(
+                                z=filtered_matrix,
+                                x=filtered_residues,
+                                y=cluster_labels,
+                                colorscale='YlOrRd',
+                                zmin=0, zmax=1,
+                                colorbar=dict(title="Frequency", tickvals=[0, 0.25, 0.5, 0.75, 1.0]),
+                                hovertemplate=(
+                                    "<b>%{y}</b><br>"
+                                    "Residue: %{x}<br>"
+                                    "Frequency: %{z:.2f}"
+                                    "<extra></extra>"
+                                ),
+                            ))
+
+                            height = max(400, len(unique_clusters) * 60 + 200)
+                            fig_heat.update_layout(
+                                title="Residue Frequency per Cluster",
+                                xaxis_title="Residue",
+                                yaxis_title="",
+                                height=height,
+                                xaxis=dict(tickangle=45, tickfont=dict(size=9)),
+                                yaxis=dict(autorange="reversed"),
+                                margin=dict(l=20, r=20, b=100),
+                            )
+                            st.plotly_chart(fig_heat, use_container_width=True)
+
+                            st.markdown("""
+                            **How to read this heatmap:**
+                            - Each row is a cluster (binding site). Each column is a residue.
+                            - Color intensity shows how consistently a residue appears across all pockets in that cluster (0 = never, 1 = always).
+                            - **Core residues** (dark red, freq ~1.0) define the binding site. **Peripheral residues** (yellow/light) appear in some conformations only.
+                            - Clusters with similar residue patterns target the same binding region; distinct patterns indicate different binding sites.
+                            """)
+
+                            # --- Per-pocket heatmap grouped by cluster ---
+                            st.markdown("---")
+                            st.markdown("#### Per-Pocket Residue Composition")
+
+                            df_sorted = df_clustered.sort_values(['cluster', 'Frame'])
+                            pocket_labels = [
+                                f"C{int(row['cluster'])} | Frame {int(row['Frame'])} (p={row['probability']:.2f})"
+                                for _, row in df_sorted.iterrows()
+                            ]
+                            pocket_matrix = df_sorted[filtered_residues].values
+
+                            # Mark representative rows
+                            rep_frames = set(df_reps['Frame_pocket_index'].values) if 'Frame_pocket_index' in df_reps.columns else set()
+                            pocket_labels_marked = []
+                            for i, (_, row) in enumerate(df_sorted.iterrows()):
+                                fp_idx = row.get('Frame_pocket_index', '')
+                                label = pocket_labels[i]
+                                if fp_idx in rep_frames:
+                                    label = "★ " + label
+                                pocket_labels_marked.append(label)
+
+                            fig_detail = go.Figure(data=go.Heatmap(
+                                z=pocket_matrix,
+                                x=filtered_residues,
+                                y=pocket_labels_marked,
+                                colorscale=[[0, '#FFF3E0'], [1, '#E65100']],
+                                zmin=0, zmax=1,
+                                showscale=False,
+                                hovertemplate=(
+                                    "<b>%{y}</b><br>"
+                                    "Residue: %{x}<br>"
+                                    "Present: %{z}"
+                                    "<extra></extra>"
+                                ),
+                            ))
+
+                            detail_height = max(400, len(df_sorted) * 30 + 200)
+                            fig_detail.update_layout(
+                                title="Individual Pocket Residue Composition (★ = representative)",
+                                xaxis_title="Residue",
+                                yaxis_title="",
+                                height=detail_height,
+                                xaxis=dict(tickangle=45, tickfont=dict(size=9)),
+                                yaxis=dict(autorange="reversed", tickfont=dict(size=10)),
+                                margin=dict(l=20, r=20, b=100),
+                            )
+                            st.plotly_chart(fig_detail, use_container_width=True)
+                        else:
+                            st.warning("No residue columns found in clustered data.")
+                    else:
+                        st.info("Heatmap requires pockets_clustered.csv which was not found for this job.")
+
+                with results_tab3:
                     col1, col2 = st.columns(2)
 
                     with col1:
-                        # Probability distribution
                         fig_hist = px.histogram(
                             df_reps,
                             x='probability',
@@ -551,10 +610,9 @@ with tab_results:
                         st.plotly_chart(fig_hist, use_container_width=True)
 
                     with col2:
-                        # Residue count distribution
                         fig_residues = px.box(
                             df_reps,
-                            y='residues',
+                            y='num_residues',
                             title='Residue Count Distribution',
                             color_discrete_sequence=['#FB8C00']
                         )
@@ -564,24 +622,20 @@ with tab_results:
                         )
                         st.plotly_chart(fig_residues, use_container_width=True)
 
-                    # Scatter plot
-                    st.markdown("#### 🎯 Probability vs Size")
                     fig_scatter = px.scatter(
                         df_reps,
-                        x='residues',
+                        x='num_residues',
                         y='probability',
                         size='probability',
                         color='probability',
                         title='Cluster Probability vs Pocket Size',
-                        labels={'residues': 'Number of Residues', 'probability': 'Binding Probability'},
+                        labels={'num_residues': 'Number of Residues', 'probability': 'Binding Probability'},
                         color_continuous_scale='Oranges',
                         hover_data=['File name']
                     )
                     fig_scatter.update_traces(marker=dict(line=dict(width=1, color='DarkOrange')))
                     st.plotly_chart(fig_scatter, use_container_width=True)
 
-                    # Statistics
-                    st.markdown("#### 📊 Statistical Summary")
                     stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
                     with stats_col1:
                         st.metric("Mean Probability", f"{df_reps['probability'].mean():.3f}")
@@ -591,11 +645,9 @@ with tab_results:
                         st.metric("Std Dev", f"{df_reps['probability'].std():.3f}")
                     with stats_col4:
                         high_quality = len(df_reps[df_reps['probability'] >= 0.7])
-                        st.metric("High Quality (≥0.7)", high_quality)
+                        st.metric("High Quality (>=0.7)", high_quality)
 
-                with results_tab3:
-                    st.markdown("### 🔬 3D Cluster Viewer")
-
+                with results_tab4:
                     if 'selected_cluster' in st.session_state and st.session_state.selected_cluster:
                         cluster = st.session_state.selected_cluster
 
@@ -606,22 +658,16 @@ with tab_results:
                             <p><strong>Probability:</strong> <span class="cluster-badge">
                                 {cluster.get('probability', 0):.3f}
                             </span></p>
-                            <p><strong>Residues:</strong> {cluster.get('residues', 0)}</p>
+                            <p><strong>Residues:</strong> {cluster.get('num_residues', 0)}</p>
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # Visualization controls
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            viz_style = st.selectbox(
-                                "Visualization Style:",
-                                ["cartoon", "surface", "stick"],
-                                help="Choose how to display the pocket structure"
-                            )
-                        with col2:
-                            st.markdown("<br>", unsafe_allow_html=True)
+                        viz_style = st.selectbox(
+                            "Visualization Style:",
+                            ["cartoon", "surface", "stick"],
+                            help="Choose how to display the pocket structure"
+                        )
 
-                        # Load and display the structure
                         pdb_filename = cluster.get('File name')
                         if pdb_filename:
                             pdb_path = os.path.join(cluster_output_dir, pdb_filename)
@@ -629,13 +675,9 @@ with tab_results:
                                 show_molecule_3d(pdb_path, style=viz_style)
                             else:
                                 st.warning(f"⚠️ PDB file not found: {pdb_path}")
-                        else:
-                            st.error("No PDB file information in cluster data")
-
                     else:
-                        st.info("ℹ️ No cluster selected. Go to the Cluster Table tab and select a cluster to view.")
+                        st.info("ℹ️ Select a cluster from the Cluster Table tab to view it in 3D.")
 
-                        # Demo: show first available cluster
                         if len(df_reps) > 0:
                             st.markdown("#### 📺 Preview: First Cluster")
                             first_cluster = df_reps.iloc[0]
@@ -644,40 +686,33 @@ with tab_results:
                             if os.path.exists(pdb_path):
                                 show_molecule_3d(pdb_path, width=600, height=400)
 
-                with results_tab4:
-                    st.markdown("#### 💾 Download Results")
-
+                with results_tab5:
                     col1, col2 = st.columns(2)
 
                     with col1:
                         st.markdown("**📄 Data Files**")
-
-                        # CSV download
                         csv_data = df_reps.to_csv(index=False)
                         st.download_button(
                             label="📥 Download Cluster Representatives (CSV)",
                             data=csv_data,
-                            file_name=f"cluster_representatives_{st.session_state.cluster_job_id}.csv",
+                            file_name=f"cluster_representatives_{results_job_id}.csv",
                             mime="text/csv",
                             use_container_width=True
                         )
 
-                        # High quality clusters only
                         df_high_quality = df_reps[df_reps['probability'] >= 0.7]
                         if len(df_high_quality) > 0:
                             hq_csv = df_high_quality.to_csv(index=False)
                             st.download_button(
                                 label="📥 Download High Quality Clusters (CSV)",
                                 data=hq_csv,
-                                file_name=f"high_quality_clusters_{st.session_state.cluster_job_id}.csv",
+                                file_name=f"high_quality_clusters_{results_job_id}.csv",
                                 mime="text/csv",
                                 use_container_width=True
                             )
 
                     with col2:
                         st.markdown("**📦 Structure Files**")
-
-                        # Create ZIP with PDB files
                         if st.button("🔄 Generate PDB Archive", use_container_width=True):
                             import zipfile
                             with st.spinner("Creating archive..."):
@@ -687,28 +722,37 @@ with tab_results:
                                         zipf.write(pdb_file, pdb_file.name)
                                 st.success("✅ Archive created!")
 
-                        # Download ZIP
                         zip_path = os.path.join(cluster_output_dir, 'cluster_structures.zip')
                         if os.path.exists(zip_path):
                             with open(zip_path, 'rb') as f:
                                 st.download_button(
                                     label="📥 Download All PDB Files (ZIP)",
                                     data=f.read(),
-                                    file_name=f"cluster_structures_{st.session_state.cluster_job_id}.zip",
+                                    file_name=f"cluster_structures_{results_job_id}.zip",
                                     mime="application/zip",
                                     use_container_width=True
                                 )
 
-                    st.markdown("---")
-                    st.info("💡 Use the cluster representatives CSV in Step 4: Molecular Docking")
+                st.markdown("---")
+                st.info("💡 Use the cluster representatives CSV in Step 4: Molecular Docking")
 
-            except Exception as e:
-                st.error(f"Error loading results: {e}")
-                logger.error(f"Results loading error: {e}", exc_info=True)
+        except Exception as e:
+            st.error(f"Error loading results: {e}")
+            logger.error(f"Results loading error: {e}", exc_info=True)
+
+# Auto-refresh when task is running
+if st.session_state.cluster_status == 'running' and st.session_state.cluster_task_id:
+    try:
+        task = celery_app.AsyncResult(st.session_state.cluster_task_id)
+        if task.ready():
+            st.session_state.cluster_status = 'completed'
+            st.rerun()
         else:
-            st.info("ℹ️ No results found for this job ID. Make sure clustering has completed successfully.")
-    else:
-        st.info("ℹ️ No job selected. Start a new job or enter a job ID above.")
+            time.sleep(3)
+            st.rerun()
+    except Exception:
+        time.sleep(3)
+        st.rerun()
 
 # Footer
 st.markdown("---")
@@ -716,7 +760,7 @@ st.markdown("""
 <div style='text-align: center; color: #666;'>
     <p>🎯 Pocket Clustering | Part of the PocketHunter Suite</p>
     <p style='font-size: 0.85rem; margin-top: 0.5rem;'>
-        💡 Tip: High-probability clusters (≥0.7) are recommended for docking studies
+        💡 Tip: High-probability clusters (>=0.7) are recommended for docking studies
     </p>
 </div>
 """, unsafe_allow_html=True)
