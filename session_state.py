@@ -73,6 +73,14 @@ def initialize_session_state():
     if 'heatmap_last_job_id' not in st.session_state:
         st.session_state.heatmap_last_job_id = None
 
+    # Pipeline inline docking state
+    if 'pipe_docking_task_id' not in st.session_state:
+        st.session_state.pipe_docking_task_id = None
+    if 'pipe_docking_job_id' not in st.session_state:
+        st.session_state.pipe_docking_job_id = None
+    if 'pipe_selected_pose' not in st.session_state:
+        st.session_state.pipe_selected_pose = None
+
     # Heatmap interactive selection state
     if 'heatmap_selected_cluster_id' not in st.session_state:
         st.session_state.heatmap_selected_cluster_id = None

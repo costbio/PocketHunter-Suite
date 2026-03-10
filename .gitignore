@@ -18,3 +18,4 @@ __pycache__/
 job_statuses/
 results/
 test_output/
+test_ligands/
