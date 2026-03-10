@@ -14,9 +14,11 @@ from config import Config
 from security import handle_file_upload_secure, SecurityError
 from rate_limiter import RateLimitExceeded, check_task_rate_limit
 from logging_config import setup_logging
+import re
 import py3Dmol
 import streamlit.components.v1 as components
 from pathlib import Path
+from session_state import initialize_session_state
 
 # Use Config for directories
 UPLOAD_DIR = str(Config.UPLOAD_DIR)
@@ -120,17 +122,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Session state initialization
-if 'cluster_job_id' not in st.session_state:
-    st.session_state.cluster_job_id = None
-if 'cluster_task_id' not in st.session_state:
-    st.session_state.cluster_task_id = None
-if 'cluster_status' not in st.session_state:
-    st.session_state.cluster_status = 'idle'
-
-# Initialize cached_job_ids if not exists
-if 'cached_job_ids' not in st.session_state:
-    st.session_state.cached_job_ids = {}
+initialize_session_state()
 
 # Helper functions
 def update_job_status(job_id, status, step=None, task_id=None, result_info=None):
@@ -154,6 +146,28 @@ def update_job_status(job_id, status, step=None, task_id=None, result_info=None)
 
     with open(status_file, 'w') as f:
         json.dump(current_status, f, indent=4)
+
+def resolve_pdb_path(file_name, job_id):
+    """Resolve the actual PDB file path from a cluster representative filename.
+
+    p2rank stores filenames as e.g. 'test_data_100.pdb_predictions'.
+    The actual PDB lives in {job_id}/pdbs/test_data_100.pdb.
+    Falls back to the pocket_clusters dir for standalone cluster runs.
+    """
+    # Strip p2rank suffix
+    pdb_name = file_name.replace('_predictions', '') if '_predictions' in file_name else file_name
+    if not pdb_name.endswith('.pdb'):
+        pdb_name += '.pdb'
+    # Primary: sibling pdbs/ directory (pipeline layout)
+    candidate = os.path.join(RESULTS_DIR, job_id, 'pdbs', pdb_name)
+    if os.path.exists(candidate):
+        return candidate
+    # Fallback: pocket_clusters dir (in case files were copied there)
+    candidate2 = os.path.join(RESULTS_DIR, job_id, 'pocket_clusters', pdb_name)
+    if os.path.exists(candidate2):
+        return candidate2
+    return candidate  # return primary even if missing (caller handles missing)
+
 
 def show_molecule_3d(pdb_path, width=800, height=600, style="cartoon"):
     """Display 3D molecular structure using py3Dmol"""
@@ -183,6 +197,48 @@ def show_molecule_3d(pdb_path, width=800, height=600, style="cartoon"):
     except Exception as e:
         st.error(f"Error loading 3D structure: {e}")
         logger.error(f"Error in show_molecule_3d: {e}", exc_info=True)
+
+
+def show_molecule_3d_with_pocket(pdb_path, pocket_residues, width=800, height=600):
+    """Show PDB with pocket residues highlighted in orange (py3Dmol)."""
+    try:
+        with open(pdb_path, 'r') as f:
+            pdb_data = f.read()
+
+        # Parse "A_807" -> chain="A", resi=807
+        highlight_specs = []
+        for res_str in pocket_residues:
+            parts = res_str.strip().split('_', 1)
+            if len(parts) == 2:
+                try:
+                    highlight_specs.append({'chain': parts[0], 'resi': int(parts[1])})
+                except ValueError:
+                    pass
+
+        view = py3Dmol.view(width=width, height=height)
+        view.addModel(pdb_data, 'pdb')
+        view.setStyle({}, {'cartoon': {'color': 'spectrum'}})
+        for spec in highlight_specs:
+            view.setStyle({'chain': spec['chain'], 'resi': spec['resi']},
+                          {'stick': {'color': 'orange', 'radius': 0.3}})
+        if highlight_specs:
+            chains = {}
+            for s in highlight_specs:
+                chains.setdefault(s['chain'], []).append(s['resi'])
+            for chain, resis in chains.items():
+                view.addSurface(py3Dmol.VDW, {'opacity': 0.4, 'color': 'orange'},
+                                {'chain': chain, 'resi': resis})
+            view.zoomTo({'resi': [s['resi'] for s in highlight_specs]})
+        else:
+            view.zoomTo()
+        view.spin(False)
+
+        html = f'<div style="border-radius:15px;overflow:hidden;">{view._make_html()}</div>'
+        components.html(html, height=height + 50, scrolling=False)
+    except Exception as e:
+        st.error(f"Error loading 3D structure with pocket: {e}")
+        logger.error(f"Error in show_molecule_3d_with_pocket: {e}", exc_info=True)
+
 
 # ── Status Banner ──────────────────────────────────────────────────────
 if st.session_state.cluster_task_id:
@@ -341,6 +397,15 @@ if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width
         st.success(f"✅ Clustering started! Job ID: `{job_id}`")
         st.info(f"📂 Input: {input_source}")
 
+@st.cache_data(ttl=300)
+def load_clustered_data(path):
+    return pd.read_csv(path)
+
+@st.cache_data(ttl=300)
+def load_representatives(path):
+    return pd.read_csv(path)
+
+
 # ── Results ────────────────────────────────────────────────────────────
 # Determine which job to show results for
 results_job_id = st.session_state.cluster_job_id
@@ -361,12 +426,20 @@ with st.expander("📂 Load previous results"):
             st.rerun()
 
 if results_job_id:
+    # Clear heatmap selection state whenever the active job changes
+    if st.session_state.get('heatmap_last_job_id') != results_job_id:
+        st.session_state.heatmap_selected_cluster_id = None
+        st.session_state.heatmap_selected_pdb_path = None
+        st.session_state.heatmap_selected_residues = []
+        st.session_state.heatmap_docking_clusters = []
+        st.session_state.heatmap_last_job_id = results_job_id
+
     cluster_output_dir = os.path.join(RESULTS_DIR, results_job_id, "pocket_clusters")
     representatives_file = os.path.join(cluster_output_dir, "cluster_representatives.csv")
 
     if os.path.exists(representatives_file):
         try:
-            df_reps = pd.read_csv(representatives_file)
+            df_reps = load_representatives(representatives_file)
 
             # Compute numeric residue count from residue name strings
             if 'residues' in df_reps.columns and df_reps['residues'].dtype == object:
@@ -419,7 +492,7 @@ if results_job_id:
                 clustered_file = os.path.join(cluster_output_dir, "pockets_clustered.csv")
                 df_clustered = None
                 if os.path.exists(clustered_file):
-                    df_clustered = pd.read_csv(clustered_file)
+                    df_clustered = load_clustered_data(clustered_file)
                     df_clustered = df_clustered[df_clustered['cluster'] != -1]
 
                 # Sub-tabs for results data
@@ -473,6 +546,21 @@ if results_job_id:
                         if residue_cols:
                             unique_clusters = sorted(df_clustered['cluster'].unique())
 
+                            # Build cluster integer -> representative row mapping.
+                            # Prefer the 'cluster' column if present; fall back to
+                            # positional alignment (assumes same sort order as unique_clusters).
+                            if 'cluster' in df_reps.columns:
+                                cluster_to_rep = {
+                                    int(row['cluster']): row
+                                    for _, row in df_reps.iterrows()
+                                }
+                            else:
+                                cluster_to_rep = {
+                                    clust: df_reps.iloc[i]
+                                    for i, clust in enumerate(unique_clusters)
+                                    if i < len(df_reps)
+                                }
+
                             # --- Consensus Heatmap: residue frequency per cluster ---
                             consensus_rows = []
                             cluster_labels = []
@@ -519,44 +607,133 @@ if results_job_id:
                                 ),
                             ))
 
-                            height = max(400, len(unique_clusters) * 60 + 200)
+                            # Layout constants for alignment
+                            _n_clust = len(unique_clusters)
+                            _heat_top_margin = 60    # title + plotly top margin (px)
+                            _heat_bot_margin = 100   # explicit b=100
+                            height = max(400, _n_clust * 60 + 200)
+                            _plot_area_h = height - _heat_top_margin - _heat_bot_margin
+                            _row_h = _plot_area_h / _n_clust  # heatmap row height in px
+                            _cb_h = 36                         # Streamlit checkbox height in px
+                            _top_pad = max(0, _heat_top_margin + _row_h / 2 - _cb_h / 2)
+                            _gap = max(0, _row_h - _cb_h)
+
                             fig_heat.update_layout(
                                 title="Residue Frequency per Cluster",
                                 xaxis_title="Residue",
                                 yaxis_title="",
                                 height=height,
                                 xaxis=dict(tickangle=45, tickfont=dict(size=9)),
-                                yaxis=dict(autorange="reversed"),
-                                margin=dict(l=20, r=20, b=100),
+                                yaxis=dict(autorange="reversed", showticklabels=False),
+                                margin=dict(t=_heat_top_margin, l=20, r=20, b=_heat_bot_margin),
                             )
-                            st.plotly_chart(fig_heat, use_container_width=True)
 
-                            st.markdown("""
-                            **How to read this heatmap:**
-                            - Each row is a cluster (binding site). Each column is a residue.
-                            - Color intensity shows how consistently a residue appears across all pockets in that cluster (0 = never, 1 = always).
-                            - **Core residues** (dark red, freq ~1.0) define the binding site. **Peripheral residues** (yellow/light) appear in some conformations only.
-                            - Clusters with similar residue patterns target the same binding region; distinct patterns indicate different binding sites.
-                            """)
+                            # Three-column layout: checkboxes | heatmap | 3D viewer
+                            cb_col, heat_col, viewer_col = st.columns([1, 3, 2])
+
+                            with cb_col:
+                                st.markdown("**Select cluster:**")
+                                # Top padding to align first checkbox with first heatmap row
+                                st.markdown(
+                                    f'<div style="height:{_top_pad:.0f}px"></div>',
+                                    unsafe_allow_html=True,
+                                )
+                                for _cid in unique_clusters:
+                                    _rep = cluster_to_rep.get(_cid)
+                                    if _rep is None:
+                                        continue
+                                    _clust_df = df_clustered[df_clustered['cluster'] == _cid]
+                                    _n = len(_clust_df)
+                                    _avg = _clust_df['probability'].mean()
+
+                                    def _on_change(_cid=_cid, _rep=_rep, _rj=results_job_id):
+                                        cb_key = f"cluster_cb_{_cid}"
+                                        if st.session_state[cb_key]:
+                                            _pdb_file = _rep['File name']
+                                            _pdb_path = resolve_pdb_path(_pdb_file, _rj)
+                                            _res_raw = str(_rep.get('residues', ''))
+                                            _res_list = [r.strip() for r in _res_raw.replace(',', ' ').split() if r.strip()]
+                                            st.session_state.heatmap_selected_cluster_id = _cid
+                                            st.session_state.heatmap_selected_pdb_path = _pdb_path
+                                            st.session_state.heatmap_selected_residues = _res_list
+                                        else:
+                                            if st.session_state.heatmap_selected_cluster_id == _cid:
+                                                st.session_state.heatmap_selected_cluster_id = None
+                                                st.session_state.heatmap_selected_pdb_path = None
+                                                st.session_state.heatmap_selected_residues = []
+
+                                    st.checkbox(
+                                        f"Cluster {_cid}  ({_n} pockets, avg prob: {_avg:.3f})",
+                                        key=f"cluster_cb_{_cid}",
+                                        on_change=_on_change,
+                                    )
+                                    # Gap between checkboxes to match heatmap row height
+                                    st.markdown(
+                                        f'<div style="height:{_gap:.0f}px"></div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                            with heat_col:
+                                st.plotly_chart(fig_heat, use_container_width=True, key="consensus_heatmap")
+                                st.caption(
+                                    "Each row = a cluster. Each column = a residue. "
+                                    "Color = how consistently the residue appears (0 = never, 1 = always)."
+                                )
+
+                            with viewer_col:
+                                sel_id = st.session_state.heatmap_selected_cluster_id
+                                if sel_id is not None:
+                                    sel_path = st.session_state.heatmap_selected_pdb_path
+                                    sel_residues = st.session_state.heatmap_selected_residues
+                                    rep = cluster_to_rep.get(sel_id)
+
+                                    st.markdown(f"**Cluster {sel_id}** — Representative Structure")
+                                    if rep is not None:
+                                        m1, m2 = st.columns(2)
+                                        m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
+                                        m2.metric("Residues", len(sel_residues))
+
+                                    is_selected = sel_id in st.session_state.heatmap_docking_clusters
+                                    if st.checkbox("Select for Docking", value=is_selected, key=f"dock_sel_{sel_id}"):
+                                        if sel_id not in st.session_state.heatmap_docking_clusters:
+                                            st.session_state.heatmap_docking_clusters.append(sel_id)
+                                    else:
+                                        if sel_id in st.session_state.heatmap_docking_clusters:
+                                            st.session_state.heatmap_docking_clusters.remove(sel_id)
+
+                                    if sel_path and os.path.exists(sel_path):
+                                        show_molecule_3d_with_pocket(sel_path, sel_residues, width=400, height=420)
+                                    else:
+                                        st.warning(f"PDB not found: `{sel_path}`")
+                                else:
+                                    st.info("← Check a cluster to view its 3D structure here")
+
+                            if st.session_state.heatmap_docking_clusters:
+                                selected_str = ", ".join(str(c) for c in st.session_state.heatmap_docking_clusters)
+                                st.info(f"Clusters selected for docking: **{selected_str}**")
+                                if st.button("Start Docking with Selected Clusters", type="primary",
+                                             use_container_width=True, key="heatmap_goto_docking"):
+                                    st.session_state.cached_job_ids['cluster'] = results_job_id
+                                    st.session_state.heatmap_preselected_for_docking = {
+                                        'cluster_job_id': results_job_id,
+                                        'cluster_ids': list(st.session_state.heatmap_docking_clusters),
+                                    }
+                                    st.session_state.pending_nav = "Step 4: Molecular Docking"
+                                    st.rerun()
 
                             # --- Per-pocket heatmap grouped by cluster ---
                             st.markdown("---")
                             st.markdown("#### Per-Pocket Residue Composition")
 
                             df_sorted = df_clustered.sort_values(['cluster', 'Frame'])
-                            pocket_labels = [
-                                f"C{int(row['cluster'])} | Frame {int(row['Frame'])} (p={row['probability']:.2f})"
-                                for _, row in df_sorted.iterrows()
-                            ]
                             pocket_matrix = df_sorted[filtered_residues].values
 
                             # Mark representative rows
                             rep_frames = set(df_reps['Frame_pocket_index'].values) if 'Frame_pocket_index' in df_reps.columns else set()
                             pocket_labels_marked = []
-                            for i, (_, row) in enumerate(df_sorted.iterrows()):
-                                fp_idx = row.get('Frame_pocket_index', '')
-                                label = pocket_labels[i]
-                                if fp_idx in rep_frames:
+                            for _, row in df_sorted.iterrows():
+                                label = f"C{int(row['cluster'])} | Frame {int(row['Frame'])} (p={row['probability']:.2f})"
+                                if row.get('Frame_pocket_index', '') in rep_frames:
                                     label = "★ " + label
                                 pocket_labels_marked.append(label)
 
@@ -670,7 +847,7 @@ if results_job_id:
 
                         pdb_filename = cluster.get('File name')
                         if pdb_filename:
-                            pdb_path = os.path.join(cluster_output_dir, pdb_filename)
+                            pdb_path = resolve_pdb_path(pdb_filename, results_job_id)
                             if os.path.exists(pdb_path):
                                 show_molecule_3d(pdb_path, style=viz_style)
                             else:
@@ -682,7 +859,7 @@ if results_job_id:
                             st.markdown("#### 📺 Preview: First Cluster")
                             first_cluster = df_reps.iloc[0]
                             pdb_filename = first_cluster['File name']
-                            pdb_path = os.path.join(cluster_output_dir, pdb_filename)
+                            pdb_path = resolve_pdb_path(pdb_filename, results_job_id)
                             if os.path.exists(pdb_path):
                                 show_molecule_3d(pdb_path, width=600, height=400)
 

@@ -81,6 +81,12 @@ class Config:
     CLEANUP_AFTER_DAYS = int(os.getenv('CLEANUP_AFTER_DAYS', 30))
     MAX_DISK_USAGE_GB = int(os.getenv('MAX_DISK_USAGE_GB', 100))
 
+    # Docking resource limits
+    MAX_DOCKING_PDBS = int(os.getenv('MAX_DOCKING_PDBS', 20))
+    MAX_DOCKING_LIGANDS = int(os.getenv('MAX_DOCKING_LIGANDS', 10))
+    MAX_DOCKING_EXHAUSTIVENESS = int(os.getenv('MAX_DOCKING_EXHAUSTIVENESS', 12))
+    DOCKING_TIMEOUT = int(os.getenv('DOCKING_TIMEOUT', 7200))  # 2 hours
+
     # ========================================
     # Rate Limiting
     # ========================================

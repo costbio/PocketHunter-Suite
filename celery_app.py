@@ -18,6 +18,17 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True  # Important for robust startup
 )
 
+# Route docking tasks to dedicated queue to prevent starving pipeline workers
+celery_app.conf.task_routes = {
+    'tasks.run_docking_task': {'queue': 'docking'},
+    'tasks.run_extract_to_pdb_task': {'queue': 'default'},
+    'tasks.run_detect_pockets_task': {'queue': 'default'},
+    'tasks.run_cluster_pockets_task': {'queue': 'default'},
+    'tasks.run_pockethunter_pipeline': {'queue': 'default'},
+}
+celery_app.conf.task_default_queue = 'default'
+celery_app.conf.worker_prefetch_multiplier = 1
+
 # Configure Celery Beat schedule for periodic tasks
 celery_app.conf.beat_schedule = {
     'cleanup-old-jobs': {

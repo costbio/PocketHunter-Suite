@@ -205,38 +205,37 @@ if 'cached_job_ids' not in st.session_state:
     st.session_state.cached_job_ids = {
         'extract': None,
         'detect': None,
-        'cluster': None
+        'cluster': None,
+        'docking': None,
+        'pipeline': None,
     }
 
-# Clear old session state that might cause issues
-def clear_old_session_state():
-    """Clear old session state that might cause Celery errors"""
-    old_keys = [
-        'current_pipeline_job_id', 'pipeline_task_id', 'pipeline_done',
-    ]
-    for key in old_keys:
-        if key in st.session_state:
-            del st.session_state[key]
-
-# Clear old session state
-clear_old_session_state()
-
-# Define the pages (removed Full Pipeline)
+# Define the pages
 pages = {
-    "Step 1: Extract Frames": "extract_frames_app.py", 
+    "Full Pipeline": "pipeline_app.py",
+    "Step 1: Extract Frames": "extract_frames_app.py",
     "Step 2: Detect Pockets": "detect_pockets_app.py",
     "Step 3: Cluster Pockets": "cluster_pockets_app.py",
     "Step 4: Molecular Docking": "docking_app.py",
     "Task Monitor": "task_monitor_app.py"
 }
 
+# Resolve pending navigation. option_menu uses its own JS state for the active tab;
+# the correct way to switch programmatically is via manual_select (integer index).
+_page_names = list(pages.keys())
+_manual_select = None
+if 'pending_nav' in st.session_state and st.session_state.pending_nav in _page_names:
+    _manual_select = _page_names.index(st.session_state.pending_nav)
+    del st.session_state.pending_nav
+
 # Horizontal menu - styles handled by CSS for theme compatibility
 selected = option_menu(
     None,
-    list(pages.keys()),
-    icons=['file-earmark-arrow-down', 'search', 'diagram-3', 'flask', 'activity'],
+    _page_names,
+    icons=['lightning-charge', 'file-earmark-arrow-down', 'search', 'diagram-3', 'flask', 'activity'],
     menu_icon="cast",
     default_index=0,
+    manual_select=_manual_select,
     orientation="horizontal",
     key="main_menu",  # Add unique key to prevent caching issues
     styles={

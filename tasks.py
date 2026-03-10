@@ -4,6 +4,7 @@ import uuid
 import shutil
 import json
 from celery_app import celery_app
+from celery.exceptions import SoftTimeLimitExceeded
 import time
 from datetime import datetime
 import pandas as pd
@@ -163,185 +164,318 @@ def validate_csv_output(csv_path, required_columns=None, min_rows=0):
 
     return result
 
-@celery_app.task(bind=True)
-def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=4, min_prob=0.5, clustering_method='dbscan'):
+def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_name, update_interval=2):
     """
-    PocketHunter full pipeline task for Streamlit app.
+    Run a subprocess stage and poll it, emitting Celery progress updates within [prog_start, prog_end].
+
+    stdout/stderr are redirected to temp files to avoid OS pipe-buffer deadlocks that
+    occur when a subprocess writes more than ~64 KB without being drained.
+
+    Returns (stdout_text, stderr_text) on success; raises Exception on failure or timeout.
     """
-    self.update_state(
-        state='PROGRESS', 
-        meta={
-            'current_step': 'Initializing pipeline...',
-            'progress': 0,
-            'status': 'Pipeline started'
-        }
-    )
+    import tempfile
 
-    output_folder_job = os.path.join(RESULTS_DIR, job_id)
-    os.makedirs(output_folder_job, exist_ok=True)
-    
-    current_working_dir = POCKETHUNTER_DIR
-    
-    command = [
-        'python', POCKETHUNTER_CLI,
-        'full_pipeline',
-        '--xtc', os.path.abspath(xtc_file_path), 
-        '--topology', os.path.abspath(topology_file_path), 
-        '--outfolder', os.path.abspath(output_folder_job), 
-        '--stride', str(stride),
-        '--numthreads', str(num_threads),
-        '--min_prob', str(min_prob),
-        '--method', clustering_method,
-        '--compress',
-        '--overwrite'
-    ]
-    if clustering_method == 'dbscan': 
-        command.append('--hierarchical')
+    start_time = time.time()
+    prog_range = prog_end - prog_start
 
-    self.update_state(
-        state='PROGRESS', 
-        meta={
-            'current_step': 'Running PocketHunter full pipeline',
-            'progress': 10,
-            'status': f'Executing: {" ".join(command)}'
-        }
-    )
+    # Use temp files instead of PIPE to prevent deadlock when subprocess output is large
+    fout = tempfile.NamedTemporaryFile(mode='w', suffix='_stdout.txt', delete=False)
+    ferr = tempfile.NamedTemporaryFile(mode='w', suffix='_stderr.txt', delete=False)
+    stdout_path = fout.name
+    stderr_path = ferr.name
+    fout.close()
+    ferr.close()
 
     try:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=current_working_dir,
-            text=True,
-            encoding='utf-8'
-        )
+        with open(stdout_path, 'w') as fout_h, open(stderr_path, 'w') as ferr_h:
+            process = subprocess.Popen(command, stdout=fout_h, stderr=ferr_h, cwd=cwd)
 
-        # Monitor progress with timeout tracking
-        progress = 10
-        start_time = time.time()
+        last_update = start_time
         while process.poll() is None:
-            # Check for timeout
-            elapsed = time.time() - start_time
-            if elapsed > PIPELINE_TIMEOUT:
+            time.sleep(1)
+            now = time.time()
+            elapsed = now - start_time
+
+            if elapsed > timeout:
                 process.kill()
-                raise subprocess.TimeoutExpired(command, PIPELINE_TIMEOUT)
+                process.wait()
+                raise subprocess.TimeoutExpired(command, timeout)
 
-            time.sleep(5)
-            progress = min(90, progress + 10)
-            self.update_state(
-                state='PROGRESS',
-                meta={
-                    'current_step': 'Processing molecular dynamics data',
-                    'progress': progress,
-                    'status': 'Pipeline running...',
-                    'elapsed': elapsed
-                }
+            if now - last_update >= update_interval:
+                # Logarithmic ramp: fast early, slow late — never quite reaches prog_end
+                frac = min(0.92, 1 - 1 / (1 + elapsed / (timeout * 0.2)))
+                progress = int(prog_start + frac * prog_range)
+                celery_task.update_state(
+                    state='PROGRESS',
+                    meta={
+                        'current_step': f'{stage_name} ({int(elapsed)}s elapsed)',
+                        'progress': progress,
+                        'stage': stage_name,
+                        'elapsed': elapsed,
+                    }
+                )
+                last_update = now
+
+        process.wait()  # ensure returncode is fully set
+
+        with open(stdout_path, 'r', errors='replace') as f:
+            stdout = f.read()
+        with open(stderr_path, 'r', errors='replace') as f:
+            stderr = f.read()
+
+        if process.returncode != 0:
+            raise Exception(
+                f"{stage_name} failed (exit {process.returncode}). Stderr: {stderr[-2000:]}"
             )
+        return stdout, stderr
+    finally:
+        for p in (stdout_path, stderr_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
-        stdout, stderr = process.communicate(timeout=60)  # 60s timeout for final communication
 
-        if process.returncode == 0:
-            # Collect results
-            output_files = []
-            if os.path.exists(output_folder_job):
-                for root, dirs, files in os.walk(output_folder_job):
-                    for file in files:
-                        if file.endswith(('.csv', '.pdb', '.png', '.jpg', '.pdf')):
-                            output_files.append(os.path.join(root, file))
-            
-            results_overview = {
-                'status': 'completed',
-                'output_folder': output_folder_job,
-                'output_files': output_files,
-                'frames_extracted': len([f for f in output_files if f.endswith('.pdb')]),
-                'pockets_detected': 0,  # Will be calculated from pockets.csv
-                'clusters_found': 0,    # Will be calculated from clustered data
-                'representatives': 0,    # Will be calculated from representatives
-                'processing_time': time.time(),
-                'stdout': stdout,
-                'stderr': stderr
-            }
-            
-            # Calculate metrics from output files
-            pockets_csv = os.path.join(output_folder_job, 'pockets', 'pockets.csv')
-            if os.path.exists(pockets_csv):
-                import pandas as pd
-                try:
-                    df = pd.read_csv(pockets_csv)
-                    results_overview['pockets_detected'] = len(df)
-                except Exception as e:
-                    logger.warning(f"Could not read pockets.csv: {e}")
-                    results_overview['pockets_detected'] = 0
-            
-            clustered_csv = os.path.join(output_folder_job, 'pocket_clusters', 'pockets_clustered.csv')
-            if os.path.exists(clustered_csv):
-                import pandas as pd
-                try:
-                    df = pd.read_csv(clustered_csv)
-                    results_overview['clusters_found'] = df['cluster_id'].nunique() if 'cluster_id' in df.columns else 0
-                except Exception as e:
-                    logger.warning(f"Could not read clustered CSV: {e}")
-                    results_overview['clusters_found'] = 0
-            
-            reps_csv = os.path.join(output_folder_job, 'pocket_clusters', 'cluster_representatives.csv')
-            if os.path.exists(reps_csv):
-                import pandas as pd
-                try:
-                    df = pd.read_csv(reps_csv)
-                    results_overview['representatives'] = len(df)
-                except Exception as e:
-                    logger.warning(f"Could not read representatives CSV: {e}")
-                    results_overview['representatives'] = 0
-            
-            self.update_state(state='SUCCESS', meta=results_overview)
-            return results_overview
-        else:
-            error_message = f"PocketHunter pipeline failed. Return code: {process.returncode}"
-            self.update_state(
-                state='FAILURE', 
-                meta={
-                    'status': error_message, 
-                    'stdout': stdout, 
-                    'stderr': stderr, 
-                    'output_folder': output_folder_job
-                }
-            )
-            raise Exception(f"{error_message}. Stderr: {stderr}")
+@celery_app.task(bind=True)
+def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=4,
+                               min_prob=0.5, clustering_method='dbscan', run_docking=False,
+                               ligand_folder=None, num_poses=10, exhaustiveness=8, ph_value=7.4,
+                               box_size_x=20.0, box_size_y=20.0, box_size_z=20.0):
+    """
+    PocketHunter full pipeline: extract → detect → cluster → (optional) dock.
+    Each stage reports real progress via Celery state updates.
 
-    except subprocess.TimeoutExpired as e:
-        error_message = f"Pipeline timed out after {PIPELINE_TIMEOUT} seconds"
-        self.update_state(
-            state='FAILURE',
-            meta={
-                'status': error_message,
-                'output_folder': output_folder_job,
-                'exc_type': type(e).__name__,
-                'exc_message': str(e)
-            }
-        )
-        raise Exception(error_message)
-    except FileNotFoundError as e:
-        self.update_state(
-            state='FAILURE',
-            meta={
-                'status': 'Error: pockethunter.py or python not found. Ensure PocketHunter is properly installed.',
-                'exc_type': type(e).__name__,
-                'exc_message': str(e)
-            }
-        )
-        raise
+    Progress ranges:
+      0  –  25%  Extract frames to PDB
+      25 –  60%  Detect pockets (p2rank)
+      60 –  80%  Cluster pockets
+      80 –  97%  Molecular docking (optional)
+    """
+    pipeline_start = time.time()
+    output_folder_job = os.path.join(RESULTS_DIR, job_id)
+    os.makedirs(output_folder_job, exist_ok=True)
+
+    def _fail(msg, exc=None):
+        _update_status_file(job_id, 'failed', msg, task_id=self.request.id)
+        self.update_state(state='FAILURE', meta={
+            'status': msg,
+            'exc_type': type(exc).__name__ if exc else 'Exception',
+            'exc_message': str(exc) if exc else msg,
+        })
+
+    # ── Stage 1: Extract frames ──────────────────────────────────────────
+    output_pdb_dir = os.path.join(output_folder_job, 'pdbs')
+    os.makedirs(output_pdb_dir, exist_ok=True)
+
+    self.update_state(state='PROGRESS', meta={
+        'current_step': 'Extracting frames from trajectory…',
+        'progress': 0,
+        'stage': 'extract',
+    })
+
+    cmd_extract = [
+        'python', POCKETHUNTER_CLI, 'extract_to_pdb',
+        '--xtc', os.path.abspath(xtc_file_path),
+        '--topology', os.path.abspath(topology_file_path),
+        '--outfolder', os.path.abspath(output_pdb_dir),
+        '--stride', str(stride),
+        '--overwrite',
+    ]
+
+    try:
+        _run_stage(self, cmd_extract, POCKETHUNTER_DIR, EXTRACT_TIMEOUT, 0, 25, 'Extracting frames')
     except Exception as e:
-        meta = {
-            'status': f'Unexpected error occurred: {str(e)}',
-            'output_folder': output_folder_job,
-            'exc_type': type(e).__name__,
-            'exc_message': str(e)
-        }
-        if hasattr(e, 'stdout'): meta['stdout'] = e.stdout
-        if hasattr(e, 'stderr'): meta['stderr'] = e.stderr
-        self.update_state(state='FAILURE', meta=meta)
+        _fail(f'Frame extraction failed: {e}', e)
         raise
+
+    pdb_files = [f for f in os.listdir(output_pdb_dir) if f.endswith('.pdb')]
+    self.update_state(state='PROGRESS', meta={
+        'current_step': f'Extracted {len(pdb_files)} frames — starting pocket detection…',
+        'progress': 25,
+        'stage': 'detect',
+        'frames_extracted': len(pdb_files),
+    })
+
+    # ── Stage 2: Detect pockets ──────────────────────────────────────────
+    output_pockets_dir = os.path.join(output_folder_job, 'pockets')
+    os.makedirs(output_pockets_dir, exist_ok=True)
+
+    cmd_detect = [
+        'python', POCKETHUNTER_CLI, 'detect_pockets',
+        '--infolder', os.path.abspath(output_pdb_dir),
+        '--outfolder', os.path.abspath(output_pockets_dir),
+        '--numthreads', str(num_threads),
+        '--compress',
+        '--overwrite',
+    ]
+
+    try:
+        _run_stage(self, cmd_detect, POCKETHUNTER_DIR, DETECT_TIMEOUT, 25, 60, 'Detecting pockets')
+    except Exception as e:
+        _fail(f'Pocket detection failed: {e}', e)
+        raise
+
+    pockets_csv = os.path.join(output_pockets_dir, 'pockets.csv')
+    pockets_detected = 0
+    if os.path.exists(pockets_csv):
+        try:
+            pockets_detected = len(pd.read_csv(pockets_csv))
+        except Exception:
+            pass
+
+    if not os.path.exists(pockets_csv):
+        _fail(f'Pocket detection produced no output file: {pockets_csv}')
+        raise FileNotFoundError(f'Expected pockets CSV not found: {pockets_csv}')
+
+    self.update_state(state='PROGRESS', meta={
+        'current_step': f'Detected {pockets_detected} pockets — clustering…',
+        'progress': 60,
+        'stage': 'cluster',
+        'pockets_detected': pockets_detected,
+    })
+
+    # ── Stage 3: Cluster pockets ─────────────────────────────────────────
+    output_clusters_dir = os.path.join(output_folder_job, 'pocket_clusters')
+    os.makedirs(output_clusters_dir, exist_ok=True)
+
+    cmd_cluster = [
+        'python', POCKETHUNTER_CLI, 'cluster_pockets',
+        '--infile', os.path.abspath(pockets_csv),
+        '--outfolder', os.path.abspath(output_clusters_dir),
+        '--min_prob', str(min_prob),
+        '--method', clustering_method,
+        '--overwrite',
+    ]
+    if clustering_method == 'dbscan':
+        cmd_cluster.append('--hierarchical')
+
+    try:
+        _run_stage(self, cmd_cluster, POCKETHUNTER_DIR, CLUSTER_TIMEOUT, 60, 80, 'Clustering pockets')
+    except Exception as e:
+        _fail(f'Pocket clustering failed: {e}', e)
+        raise
+
+    reps_csv = os.path.join(output_clusters_dir, 'cluster_representatives.csv')
+    representatives = 0
+    if os.path.exists(reps_csv):
+        try:
+            representatives = len(pd.read_csv(reps_csv))
+        except Exception:
+            pass
+
+    self.update_state(state='PROGRESS', meta={
+        'current_step': f'Found {representatives} cluster representatives',
+        'progress': 80,
+        'stage': 'cluster_done',
+        'representatives': representatives,
+    })
+
+    results_overview = {
+        'status': 'completed',
+        'output_folder': output_folder_job,
+        'frames_extracted': len(pdb_files),
+        'pockets_detected': pockets_detected,
+        'representatives': representatives,
+        'cluster_job_id': job_id,
+        'processing_time': time.time() - pipeline_start,
+    }
+
+    # ── Stage 4: Optional docking ────────────────────────────────────────
+    if run_docking and ligand_folder and os.path.exists(reps_csv):
+        self.update_state(state='PROGRESS', meta={
+            'current_step': 'Starting molecular docking…',
+            'progress': 80,
+            'stage': 'docking',
+        })
+        try:
+            from step4_docking import pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
+            from prody import parsePDB, writePDB
+            import glob as _glob
+
+            df_rep = pd.read_csv(reps_csv)
+            docking_out = os.path.join(output_folder_job, 'docking')
+            os.makedirs(docking_out, exist_ok=True)
+            pdb_source_dir = output_pdb_dir
+
+            ligand_paths = sorted(_glob.glob(os.path.join(ligand_folder, '*.pdbqt')))
+            total_pairs = max(1, len(df_rep) * len(ligand_paths))
+            completed_pairs = 0
+            list_outputs = []
+
+            for rec_idx, (_, pocket_row) in enumerate(df_rep.iterrows()):
+                receptor_pdb_pred = pocket_row['File name']
+                receptor_pdb = receptor_pdb_pred[:-12] if receptor_pdb_pred.endswith('_predictions') else receptor_pdb_pred
+                receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
+
+                if not os.path.exists(receptor_pdb_path):
+                    logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
+                    completed_pairs += len(ligand_paths)
+                    continue
+
+                self.update_state(state='PROGRESS', meta={
+                    'current_step': f'Preparing receptor {rec_idx + 1}/{len(df_rep)}: {receptor_pdb}',
+                    'progress': 80 + int((completed_pairs / total_pairs) * 17),
+                    'stage': 'docking',
+                })
+
+                syst = parsePDB(receptor_pdb_path)
+                protein = syst.select('protein')
+                protein_pdb = os.path.join(docking_out, os.path.basename(receptor_pdb))
+                writePDB(protein_pdb, protein)
+                receptor_pdbqt = protein_pdb[:-4] + '.pdbqt'
+                pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
+
+                box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
+                box_size = [box_size_x, box_size_y, box_size_z]
+                dock_folder = protein_pdb[:-4] + '_smina'
+                os.makedirs(dock_folder, exist_ok=True)
+
+                for lig_path in ligand_paths:
+                    self.update_state(state='PROGRESS', meta={
+                        'current_step': (
+                            f'Docking {os.path.basename(lig_path)} → '
+                            f'receptor {rec_idx + 1}/{len(df_rep)}'
+                        ),
+                        'progress': 80 + int((completed_pairs / total_pairs) * 17),
+                        'stage': 'docking',
+                        'pairs_done': completed_pairs,
+                        'pairs_total': total_pairs,
+                    })
+                    out_path = os.path.join(dock_folder, os.path.basename(lig_path)[:-6] + '_smina.sdf')
+                    try:
+                        output_txt, _ = run_smina(
+                            lig_path, receptor_pdbqt, out_path, box_center, box_size,
+                            Config.SMINA_PATH, num_poses=num_poses, exhaustiveness=exhaustiveness,
+                            log_dir=dock_folder,
+                        )
+                        df_out = parse_smina_log(output_txt)
+                        if not df_out.empty:
+                            df_out['ligand'] = os.path.basename(lig_path)[:-6]
+                            df_out['receptor'] = os.path.basename(receptor_pdb)
+                            df_out['receptor_path'] = receptor_pdbqt
+                            df_out['receptor_pdb_path'] = protein_pdb
+                            df_out['output_sdf'] = out_path
+                            list_outputs.append(df_out)
+                    except Exception as dock_pair_err:
+                        logger.warning(f"Docking pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {dock_pair_err}")
+                    completed_pairs += 1
+
+            if list_outputs:
+                df_dock = pd.concat(list_outputs, ignore_index=True)
+                docking_results_file = os.path.join(docking_out, 'docking_results.csv')
+                df_dock.to_csv(docking_results_file, index=False)
+                results_overview['docking_poses'] = len(df_dock)
+                results_overview['docking_results_file'] = docking_results_file
+            else:
+                results_overview['docking_poses'] = 0
+        except Exception as dock_err:
+            logger.warning(f"Optional docking step failed: {dock_err}")
+            results_overview['docking_error'] = str(dock_err)
+
+    _update_status_file(job_id, 'completed', 'Full pipeline completed', task_id=self.request.id,
+                        result_info=results_overview)
+    self.update_state(state='SUCCESS', meta=results_overview)
+    return results_overview
 
 
 @celery_app.task(bind=True)
@@ -927,7 +1061,12 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
         raise
 
 
-@celery_app.task(bind=True)
+@celery_app.task(
+    bind=True,
+    queue='docking',
+    soft_time_limit=Config.DOCKING_TIMEOUT,
+    time_limit=Config.DOCKING_TIMEOUT + 300,
+)
 def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, smina_exe_path=None, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0, pdb_source_dir=None):
     """
     Molecular docking task for Streamlit app.
@@ -954,38 +1093,24 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         Directory containing source PDB files for receptors.
     """
     start_time = time.time()
-    
-    self.update_state(
-        state='PROGRESS', 
-        meta={
-            'current_step': 'Initializing docking...',
-            'progress': 0,
-            'status': 'Docking started'
-        }
-    )
-
-    # Create output directory
     output_folder_job = os.path.join(RESULTS_DIR, f'dock_{job_id}')
     os.makedirs(output_folder_job, exist_ok=True)
-    
-    # Set default smina path if not provided
+
     if smina_exe_path is None:
-        smina_exe_path = 'smina'  # Assume smina is in PATH
-    
-    self.update_state(
-        state='PROGRESS', 
-        meta={
-            'current_step': 'Reading cluster representatives',
-            'progress': 10,
-            'status': 'Loading pocket data...'
-        }
-    )
+        smina_exe_path = Config.SMINA_PATH
+
+    self.update_state(state='PROGRESS', meta={
+        'current_step': 'Reading cluster representatives…',
+        'progress': 2,
+        'pairs_done': 0,
+        'pairs_total': 0,
+    })
 
     try:
-        # Import docking functions (step4_docking is in the same directory as tasks.py)
-        from step4_docking import dock_ensemble, pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
-        
-        # Read cluster representatives
+        from step4_docking import pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
+        from prody import parsePDB, writePDB
+        import glob as _glob
+
         df_rep_pockets = pd.read_csv(cluster_representatives_csv)
 
         required_columns = {'File name', 'residues'}
@@ -993,52 +1118,133 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         if missing:
             raise ValueError(f"CSV missing required columns: {missing}. Found: {list(df_rep_pockets.columns)}")
 
-        self.update_state(
-            state='PROGRESS', 
-            meta={
-                'current_step': 'Preparing docking calculations',
-                'progress': 20,
-                'status': f'Found {len(df_rep_pockets)} cluster representatives'
-            }
-        )
-        
-        # Run docking ensemble
-        df_outputs = dock_ensemble(
-            df_rep_pockets=df_rep_pockets,
-            ligand_folder=ligand_folder,
-            smina_exe=smina_exe_path,
-            out_folder=output_folder_job,
-            num_poses=num_poses,
-            exhaustiveness=exhaustiveness,
-            ph_value=ph_value,
-            box_size_x=box_size_x,
-            box_size_y=box_size_y,
-            box_size_z=box_size_z,
-            pdb_source_dir=pdb_source_dir
-        )
-        
-        # Save results
+        # Resolve PDB source directory (same logic as dock_ensemble)
+        if pdb_source_dir is None:
+            extract_dirs = sorted(
+                [d for d in os.listdir(RESULTS_DIR) if d.startswith('extract_')
+                 and os.path.isdir(os.path.join(RESULTS_DIR, d))]
+            )
+            if not extract_dirs:
+                raise FileNotFoundError("No extract directories found. Provide pdb_source_dir.")
+            pdb_source_dir = os.path.join(RESULTS_DIR, extract_dirs[-1], 'pdbs')
+
+        ligand_paths = sorted(_glob.glob(os.path.join(ligand_folder, '*.pdbqt')))
+        if not ligand_paths:
+            raise FileNotFoundError(f"No PDBQT ligand files found in {ligand_folder}")
+
+        n_receptors = len(df_rep_pockets)
+        n_ligands = len(ligand_paths)
+        total_pairs = n_receptors * n_ligands
+        completed_pairs = 0
+
+        self.update_state(state='PROGRESS', meta={
+            'current_step': f'Starting docking: {n_receptors} receptors × {n_ligands} ligands = {total_pairs} pairs',
+            'progress': 5,
+            'pairs_done': 0,
+            'pairs_total': total_pairs,
+        })
+
+        list_outputs = []
+
+        for rec_idx, (_, pocket_row) in enumerate(df_rep_pockets.iterrows()):
+            receptor_pdb_pred = pocket_row['File name']
+            receptor_pdb = receptor_pdb_pred[:-12] if receptor_pdb_pred.endswith('_predictions') else receptor_pdb_pred
+            receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
+
+            if not os.path.exists(receptor_pdb_path):
+                logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
+                completed_pairs += n_ligands
+                continue
+
+            # Progress: 5 → 15 during receptor preparation
+            prep_progress = 5 + int((rec_idx / n_receptors) * 10)
+            self.update_state(state='PROGRESS', meta={
+                'current_step': f'Preparing receptor {rec_idx + 1}/{n_receptors}: {receptor_pdb}',
+                'progress': prep_progress,
+                'pairs_done': completed_pairs,
+                'pairs_total': total_pairs,
+            })
+
+            try:
+                syst = parsePDB(receptor_pdb_path)
+                protein = syst.select('protein')
+                protein_pdb = os.path.join(output_folder_job, os.path.basename(receptor_pdb))
+                writePDB(protein_pdb, protein)
+                receptor_pdbqt = protein_pdb[:-4] + '.pdbqt'
+                pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
+                box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
+            except Exception as prep_err:
+                logger.warning(f"Receptor prep failed ({receptor_pdb}): {prep_err}. Skipping.")
+                completed_pairs += n_ligands
+                continue
+
+            box_size = [box_size_x, box_size_y, box_size_z]
+            dock_folder = protein_pdb[:-4] + '_smina'
+            os.makedirs(dock_folder, exist_ok=True)
+
+            for lig_path in ligand_paths:
+                # Progress: 15 → 95 across all pairs
+                pair_frac = completed_pairs / total_pairs
+                progress = 15 + int(pair_frac * 80)
+
+                self.update_state(state='PROGRESS', meta={
+                    'current_step': (
+                        f'Docking {os.path.basename(lig_path)} → '
+                        f'receptor {rec_idx + 1}/{n_receptors} '
+                        f'({completed_pairs + 1}/{total_pairs})'
+                    ),
+                    'progress': progress,
+                    'pairs_done': completed_pairs,
+                    'pairs_total': total_pairs,
+                    'receptor': receptor_pdb,
+                    'ligand': os.path.basename(lig_path),
+                })
+
+                out_path = os.path.join(dock_folder, os.path.basename(lig_path)[:-6] + '_smina.sdf')
+                try:
+                    output_txt, _ = run_smina(
+                        lig_path, receptor_pdbqt, out_path, box_center, box_size,
+                        smina_exe_path, num_poses=num_poses, exhaustiveness=exhaustiveness,
+                        log_dir=dock_folder,
+                    )
+                    df_out = parse_smina_log(output_txt)
+                    if not df_out.empty:
+                        df_out['ligand'] = os.path.basename(lig_path)[:-6]
+                        df_out['receptor'] = os.path.basename(receptor_pdb)
+                        df_out['receptor_path'] = receptor_pdbqt
+                        df_out['receptor_pdb_path'] = protein_pdb
+                        df_out['output_sdf'] = out_path
+                        list_outputs.append(df_out)
+                except SoftTimeLimitExceeded:
+                    elapsed = time.time() - start_time
+                    _update_status_file(job_id, 'failed',
+                                        f'Docking timed out after {elapsed:.0f}s', task_id=self.request.id)
+                    self.update_state(state='FAILURE', meta={
+                        'status': f'Docking timed out after {elapsed:.0f}s',
+                        'exc_type': 'SoftTimeLimitExceeded',
+                        'exc_message': 'Docking exceeded time limit',
+                        'pairs_done': completed_pairs,
+                        'pairs_total': total_pairs,
+                    })
+                    raise
+                except Exception as pair_err:
+                    logger.warning(f"Pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {pair_err}")
+
+                completed_pairs += 1
+
+        if not list_outputs:
+            raise ValueError("No docking results generated. Check that ligands and receptors are valid.")
+
+        df_outputs = pd.concat(list_outputs, ignore_index=True)
         docking_results_file = os.path.join(output_folder_job, 'docking_results.csv')
         df_outputs.to_csv(docking_results_file, index=False)
-        
+
         elapsed = time.time() - start_time
-        
-        # Calculate statistics
         total_docking_poses = len(df_outputs)
         unique_ligands = df_outputs['ligand'].nunique()
         unique_receptors = df_outputs['receptor'].nunique()
         best_affinity = df_outputs['affinity (kcal/mol)'].min()
-        
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'current_step': 'Docking completed',
-                'progress': 100,
-                'status': f'Successfully docked {unique_ligands} ligands to {unique_receptors} receptors',
-                'elapsed': elapsed
-            }
-        )
-        
+
         results_overview = {
             'status': 'completed',
             'docking_output_dir': output_folder_job,
@@ -1049,23 +1255,24 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
             'best_affinity': best_affinity,
             'processing_time': elapsed,
             'num_poses': num_poses,
-            'exhaustiveness': exhaustiveness
+            'exhaustiveness': exhaustiveness,
+            'pairs_done': completed_pairs,
+            'pairs_total': total_pairs,
         }
-        
+
         _update_status_file(job_id, 'completed', 'Molecular docking completed successfully',
-            task_id=self.request.id, result_info=results_overview)
+                            task_id=self.request.id, result_info=results_overview)
         self.update_state(state='SUCCESS', meta=results_overview)
         return results_overview
 
     except Exception as e:
         elapsed = time.time() - start_time
         _update_status_file(job_id, 'failed', str(e), task_id=self.request.id)
-        meta = {
-            'status': f'Error occurred: {str(e)}',
+        self.update_state(state='FAILURE', meta={
+            'status': f'Error: {str(e)}',
             'output_folder': output_folder_job,
             'exc_type': type(e).__name__,
             'exc_message': str(e),
-            'processing_time': elapsed
-        }
-        self.update_state(state='FAILURE', meta=meta)
+            'processing_time': elapsed,
+        })
         raise

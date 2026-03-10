@@ -9,6 +9,7 @@ import json
 import zipfile
 import shutil
 import uuid
+import math
 import glob
 import subprocess
 from pathlib import Path
@@ -261,9 +262,9 @@ with st.sidebar:
     exhaustiveness = st.slider(
         "Exhaustiveness",
         min_value=1,
-        max_value=20,
-        value=8,
-        help="Accuracy of docking calculations (higher = more accurate but slower)"
+        max_value=Config.MAX_DOCKING_EXHAUSTIVENESS,
+        value=min(8, Config.MAX_DOCKING_EXHAUSTIVENESS),
+        help=f"Accuracy of docking calculations (higher = more accurate but slower, max={Config.MAX_DOCKING_EXHAUSTIVENESS})"
     )
 
     # pH for protonation
@@ -324,20 +325,27 @@ with st.sidebar:
         help="Opacity of molecular surface"
     )
 
-def _get_binding_site_residues(pdb_data, sdf_data, distance=5.0):
-    """Find protein residue numbers within distance of ligand atoms."""
-    import math
-    # Parse ligand coordinates from SDF
-    lig_coords = []
+_SDF_ELEMENTS = ('C', 'N', 'O', 'S', 'H', 'F', 'P', 'Cl', 'Br', 'I')
+
+
+def _parse_ligand_coords_from_sdf(sdf_data):
+    """Parse (x, y, z) atom coordinates from an SDF block."""
+    coords = []
     for line in sdf_data.split('\n'):
         parts = line.split()
         if len(parts) >= 4:
             try:
                 x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
-                if parts[3] in ('C','N','O','S','H','F','P','Cl','Br','I'):
-                    lig_coords.append((x, y, z))
+                if parts[3] in _SDF_ELEMENTS:
+                    coords.append((x, y, z))
             except (ValueError, IndexError):
                 pass
+    return coords
+
+
+def _get_binding_site_residues(pdb_data, sdf_data, distance=5.0):
+    """Find protein residue numbers within distance of ligand atoms."""
+    lig_coords = _parse_ligand_coords_from_sdf(sdf_data)
     if not lig_coords:
         return []
     # Parse protein atom coordinates and residue numbers from PDB
@@ -363,18 +371,7 @@ def _compute_pocket_view_quaternion(pdb_data, sdf_data):
 
     Returns (qx, qy, qz, qw) for use with 3Dmol.js setView.
     """
-    import math
-    # Parse ligand coordinates
-    lig_coords = []
-    for line in sdf_data.split('\n'):
-        parts = line.split()
-        if len(parts) >= 4:
-            try:
-                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
-                if parts[3] in ('C','N','O','S','H','F','P','Cl','Br','I'):
-                    lig_coords.append((x, y, z))
-            except (ValueError, IndexError):
-                pass
+    lig_coords = _parse_ligand_coords_from_sdf(sdf_data)
     # Parse protein CA coordinates
     prot_coords = []
     for line in pdb_data.split('\n'):
@@ -623,9 +620,20 @@ with tab_setup:
     # Cluster selection
     st.markdown("### 📁 Select Cluster Results")
 
+    # Handle heatmap pre-selection from Step 3
+    heatmap_preselect = st.session_state.pop('heatmap_preselected_for_docking', None)
+    if heatmap_preselect:
+        st.info(f"Clusters {heatmap_preselect['cluster_ids']} from job `{heatmap_preselect['cluster_job_id']}` pre-selected from heatmap.")
+        default_cluster_job = heatmap_preselect['cluster_job_id']
+        preselected_ids = set(heatmap_preselect['cluster_ids'])
+    else:
+        default_cluster_job = st.session_state.cached_job_ids.get('cluster', '') or ''
+        preselected_ids = set()
+
     # Input for cluster job ID
     cluster_job_id = st.text_input(
         "Cluster Job ID:",
+        value=default_cluster_job,
         placeholder="e.g., cluster_20250815_143022_a1b2c3d4",
         help="Enter the job ID from Step 3: Cluster Pockets that you want to use for docking"
     )
@@ -690,12 +698,17 @@ with tab_setup:
                     st.markdown("#### 🏆 High Probability Pockets (Top 50%)")
                     mid = (len(df_reps_sorted) + 1) // 2
                     high_prob_pdbs = df_reps_sorted.iloc[:mid]
-                    for idx, row in high_prob_pdbs.iterrows():
+                    for pos_idx, (idx, row) in enumerate(high_prob_pdbs.iterrows()):
                         # Use filename + row index key to avoid collisions with duplicate filenames
                         key = get_pdb_selection_key(row['File name'], idx)
                         # Initialize session state if not exists
                         if key not in st.session_state:
-                            st.session_state[key] = True  # Default to selected for high probability
+                            if preselected_ids:
+                                # From heatmap: select only rows whose cluster ID matches
+                                cluster_col = row.get('cluster', row.get('cluster_id', None))
+                                st.session_state[key] = cluster_col in preselected_ids
+                            else:
+                                st.session_state[key] = True  # Default to selected for high probability
 
                         is_selected = st.checkbox(
                             f"{row['File name']} (Prob: {row['probability']:.3f})",
@@ -714,7 +727,11 @@ with tab_setup:
                         key = get_pdb_selection_key(row['File name'], idx)
                         # Initialize session state if not exists
                         if key not in st.session_state:
-                            st.session_state[key] = False  # Default to not selected for low probability
+                            if preselected_ids:
+                                cluster_col = row.get('cluster', row.get('cluster_id', None))
+                                st.session_state[key] = cluster_col in preselected_ids
+                            else:
+                                st.session_state[key] = False  # Default to not selected for low probability
 
                         is_selected = st.checkbox(
                             f"{row['File name']} (Prob: {row['probability']:.3f})",
@@ -724,6 +741,11 @@ with tab_setup:
                         st.session_state[key] = is_selected
                         if is_selected:
                             selected_pdbs.append(row)
+
+                # Enforce MAX_DOCKING_PDBS limit
+                if len(selected_pdbs) > Config.MAX_DOCKING_PDBS:
+                    st.warning(f"⚠️ {len(selected_pdbs)} PDBs selected — capped at {Config.MAX_DOCKING_PDBS} (sorted by probability). Deselect some to remove this cap.")
+                    selected_pdbs = sorted(selected_pdbs, key=lambda r: r['probability'] if hasattr(r, '__getitem__') else r.get('probability', 0), reverse=True)[:Config.MAX_DOCKING_PDBS]
 
                 # Store selected PDFs in session state for use when launching docking
                 st.session_state.docking_selected_pdbs = selected_pdbs
@@ -831,6 +853,14 @@ with tab_setup:
                     ligand_files.append(file_path)
 
         if ligand_files:
+            if len(ligand_files) > Config.MAX_DOCKING_LIGANDS:
+                st.warning(f"⚠️ {len(ligand_files)} ligand files uploaded — capped at {Config.MAX_DOCKING_LIGANDS}. Only the first {Config.MAX_DOCKING_LIGANDS} will be used.")
+                for excess in ligand_files[Config.MAX_DOCKING_LIGANDS:]:
+                    try:
+                        os.remove(excess)
+                    except OSError:
+                        pass
+                ligand_files = ligand_files[:Config.MAX_DOCKING_LIGANDS]
             st.success(f"✅ Successfully loaded {len(ligand_files)} ligand files")
 
             # Show sample ligands with preview
@@ -953,34 +983,37 @@ with tab_results:
 
         if task.state == 'PENDING':
             st.markdown("### 📈 Job Progress")
-            st.info("⏳ Task is pending in queue...")
-            if st.button("🔄 Refresh Status"):
-                st.rerun()
+            st.info("⏳ Docking task is pending in queue…")
+            st.progress(0)
             time.sleep(3)
             st.rerun()
         elif task.state == 'PROGRESS':
             st.markdown("### 📈 Job Progress")
-            progress_data = task.info
-            if isinstance(progress_data, dict):
-                progress = progress_data.get('progress', 0)
-                current_step = progress_data.get('current_step', 'Processing...')
-                status = progress_data.get('status', 'Running...')
+            info = task.info or {}
+            progress = info.get('progress', 0)
+            current_step = info.get('current_step', 'Processing…')
+            pairs_done = info.get('pairs_done', 0)
+            pairs_total = info.get('pairs_total', 0)
 
-                st.progress(progress / 100)
-                st.info(f"🔄 {current_step}")
-                st.write(f"**Status:** {status}")
+            st.progress(progress / 100)
+            st.info(f"🔄 {current_step}")
 
-                if progress < 100:
-                    if st.button("🔄 Refresh Progress"):
-                        st.rerun()
-                    time.sleep(3)
-                    st.rerun()
-                else:
-                    st.success("✅ Docking completed!")
-            else:
-                st.warning("⚠️ Progress data format unexpected")
-                time.sleep(3)
-                st.rerun()
+            if pairs_total > 0:
+                pair_pct = int(pairs_done / pairs_total * 100)
+                col_a, col_b = st.columns(2)
+                col_a.metric("Pairs completed", f"{pairs_done} / {pairs_total}")
+                col_b.metric("Pair progress", f"{pair_pct}%")
+
+                # Mini bar showing pair-level detail
+                st.progress(pairs_done / pairs_total,
+                            text=f"{pairs_done}/{pairs_total} receptor–ligand pairs")
+
+                # Warn if stuck at 5% for a long time (receptor prep phase)
+                if progress <= 15:
+                    st.caption("⏱️ Preparing receptors (converting PDB → PDBQT)…")
+
+            time.sleep(3)
+            st.rerun()
         elif task.state == 'SUCCESS':
             st.success("✅ Docking completed successfully!")
 

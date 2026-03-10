@@ -19,7 +19,8 @@ def initialize_session_state():
             'extract': None,
             'detect': None,
             'cluster': None,
-            'docking': None
+            'docking': None,
+            'pipeline': None,
         }
 
     # Extract Frames state
@@ -46,6 +47,14 @@ def initialize_session_state():
     if 'cluster_status' not in st.session_state:
         st.session_state.cluster_status = 'idle'
 
+    # Full Pipeline state
+    if 'pipeline_job_id' not in st.session_state:
+        st.session_state.pipeline_job_id = None
+    if 'pipeline_task_id' not in st.session_state:
+        st.session_state.pipeline_task_id = None
+    if 'pipeline_status' not in st.session_state:
+        st.session_state.pipeline_status = 'idle'
+
     # Docking state
     if 'docking_job_id' not in st.session_state:
         st.session_state.docking_job_id = None
@@ -59,6 +68,20 @@ def initialize_session_state():
     # Docking PDB selections - stores selected PDB files by filename
     if 'docking_selected_pdbs' not in st.session_state:
         st.session_state.docking_selected_pdbs = {}
+
+    # Heatmap job tracking - used to detect job changes and clear stale state
+    if 'heatmap_last_job_id' not in st.session_state:
+        st.session_state.heatmap_last_job_id = None
+
+    # Heatmap interactive selection state
+    if 'heatmap_selected_cluster_id' not in st.session_state:
+        st.session_state.heatmap_selected_cluster_id = None
+    if 'heatmap_selected_pdb_path' not in st.session_state:
+        st.session_state.heatmap_selected_pdb_path = None
+    if 'heatmap_selected_residues' not in st.session_state:
+        st.session_state.heatmap_selected_residues = []
+    if 'heatmap_docking_clusters' not in st.session_state:
+        st.session_state.heatmap_docking_clusters = []
 
     # 3D Viewer state
     if 'selected_pocket' not in st.session_state:
