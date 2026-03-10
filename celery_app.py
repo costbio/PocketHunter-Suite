@@ -18,9 +18,13 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True  # Important for robust startup
 )
 
-# Route docking tasks to dedicated queue to prevent starving pipeline workers
+# Route docking tasks to dedicated queue to prevent starving pipeline workers.
+# run_docking_task is now a lightweight coordinator (polls sub-tasks), so it
+# runs on the default queue to avoid consuming a docking worker slot.
+# run_single_docking_pair does the actual work on the docking queue.
 celery_app.conf.task_routes = {
-    'tasks.run_docking_task': {'queue': 'docking'},
+    'tasks.run_docking_task': {'queue': 'default'},
+    'tasks.run_single_docking_pair': {'queue': 'docking'},
     'tasks.run_extract_to_pdb_task': {'queue': 'default'},
     'tasks.run_detect_pockets_task': {'queue': 'default'},
     'tasks.run_cluster_pockets_task': {'queue': 'default'},

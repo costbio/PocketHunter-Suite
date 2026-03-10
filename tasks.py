@@ -1063,35 +1063,51 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
 
 @celery_app.task(
     bind=True,
-    queue='docking',
-    soft_time_limit=Config.DOCKING_TIMEOUT,
-    time_limit=Config.DOCKING_TIMEOUT + 300,
+    soft_time_limit=min(Config.DOCKING_TIMEOUT, 3600),
+    time_limit=min(Config.DOCKING_TIMEOUT, 3600) + 120,
 )
-def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, smina_exe_path=None, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0, pdb_source_dir=None):
-    """
-    Molecular docking task for Streamlit app.
+def run_single_docking_pair(self, receptor_pdbqt, receptor_pdb, box_center, box_size,
+                             lig_path, dock_folder, num_poses, exhaustiveness, smina_exe_path):
+    """Run smina docking for a single receptor–ligand pair. Returns list of result row dicts."""
+    try:
+        from step4_docking import run_smina, parse_smina_log
+        out_path = os.path.join(dock_folder, os.path.basename(lig_path)[:-6] + '_smina.sdf')
+        output_txt, _ = run_smina(
+            lig_path, receptor_pdbqt, out_path, box_center, box_size,
+            smina_exe_path, num_poses=num_poses, exhaustiveness=exhaustiveness,
+            log_dir=dock_folder,
+        )
+        df_out = parse_smina_log(output_txt)
+        if not df_out.empty:
+            df_out['ligand'] = os.path.basename(lig_path)[:-6]
+            df_out['receptor'] = os.path.basename(receptor_pdb)
+            df_out['receptor_path'] = receptor_pdbqt
+            df_out['receptor_pdb_path'] = receptor_pdb
+            df_out['output_sdf'] = out_path
+            return df_out.to_dict('records')
+        return []
+    except SoftTimeLimitExceeded:
+        logger.warning(f"Pair timed out: {receptor_pdb} / {os.path.basename(lig_path)}")
+        return []
+    except Exception as e:
+        logger.warning(f"Pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {e}")
+        return []
 
-    Parameters
-    ----------
-    cluster_representatives_csv : str
-        Path to CSV file containing cluster representatives.
-    ligand_folder : str
-        Path to folder containing ligand PDBQT files.
-    job_id : str
-        Unique job identifier.
-    smina_exe_path : str, optional
-        Path to smina executable.
-    num_poses : int
-        Maximum number of poses per docking.
-    exhaustiveness : int
-        Docking accuracy parameter.
-    ph_value : float
-        pH for protonation.
-    box_size_x, box_size_y, box_size_z : float
-        Docking box dimensions.
-    pdb_source_dir : str, optional
-        Directory containing source PDB files for receptors.
+
+@celery_app.task(
+    bind=True,
+    time_limit=Config.DOCKING_TIMEOUT + 600,
+)
+def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id,
+                     smina_exe_path=None, num_poses=10, exhaustiveness=8,
+                     ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0,
+                     pdb_source_dir=None):
     """
+    Coordinator task: prepares receptors then dispatches all receptor–ligand
+    pairs as parallel Celery tasks (run_single_docking_pair) on the docking queue.
+    """
+    from celery import group as celery_group
+
     start_time = time.time()
     output_folder_job = os.path.join(RESULTS_DIR, f'dock_{job_id}')
     os.makedirs(output_folder_job, exist_ok=True)
@@ -1101,13 +1117,11 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
 
     self.update_state(state='PROGRESS', meta={
         'current_step': 'Reading cluster representatives…',
-        'progress': 2,
-        'pairs_done': 0,
-        'pairs_total': 0,
+        'progress': 2, 'pairs_done': 0, 'pairs_total': 0,
     })
 
     try:
-        from step4_docking import pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
+        from step4_docking import pdb_to_pdbqt, calc_box
         from prody import parsePDB, writePDB
         import glob as _glob
 
@@ -1118,7 +1132,6 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         if missing:
             raise ValueError(f"CSV missing required columns: {missing}. Found: {list(df_rep_pockets.columns)}")
 
-        # Resolve PDB source directory (same logic as dock_ensemble)
         if pdb_source_dir is None:
             extract_dirs = sorted(
                 [d for d in os.listdir(RESULTS_DIR) if d.startswith('extract_')
@@ -1134,37 +1147,28 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
 
         n_receptors = len(df_rep_pockets)
         n_ligands = len(ligand_paths)
-        total_pairs = n_receptors * n_ligands
-        completed_pairs = 0
 
         self.update_state(state='PROGRESS', meta={
-            'current_step': f'Starting docking: {n_receptors} receptors × {n_ligands} ligands = {total_pairs} pairs',
-            'progress': 5,
-            'pairs_done': 0,
-            'pairs_total': total_pairs,
+            'current_step': f'Preparing {n_receptors} receptors…',
+            'progress': 5, 'pairs_done': 0, 'pairs_total': n_receptors * n_ligands,
         })
 
-        list_outputs = []
-
+        # ── Phase 1: Prepare all receptors sequentially (fast: PDB → PDBQT + box) ──
+        prepared = []  # (receptor_pdbqt, protein_pdb, box_center, dock_folder)
         for rec_idx, (_, pocket_row) in enumerate(df_rep_pockets.iterrows()):
             receptor_pdb_pred = pocket_row['File name']
             receptor_pdb = receptor_pdb_pred[:-12] if receptor_pdb_pred.endswith('_predictions') else receptor_pdb_pred
             receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
 
-            if not os.path.exists(receptor_pdb_path):
-                logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
-                completed_pairs += n_ligands
-                continue
-
-            # Progress: 5 → 15 during receptor preparation
             prep_progress = 5 + int((rec_idx / n_receptors) * 10)
             self.update_state(state='PROGRESS', meta={
                 'current_step': f'Preparing receptor {rec_idx + 1}/{n_receptors}: {receptor_pdb}',
-                'progress': prep_progress,
-                'pairs_done': completed_pairs,
-                'pairs_total': total_pairs,
+                'progress': prep_progress, 'pairs_done': 0, 'pairs_total': n_receptors * n_ligands,
             })
 
+            if not os.path.exists(receptor_pdb_path):
+                logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
+                continue
             try:
                 syst = parsePDB(receptor_pdb_path)
                 protein = syst.select('protein')
@@ -1173,96 +1177,87 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                 receptor_pdbqt = protein_pdb[:-4] + '.pdbqt'
                 pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
                 box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
+                dock_folder = protein_pdb[:-4] + '_smina'
+                os.makedirs(dock_folder, exist_ok=True)
+                prepared.append((receptor_pdbqt, protein_pdb, box_center, dock_folder))
             except Exception as prep_err:
                 logger.warning(f"Receptor prep failed ({receptor_pdb}): {prep_err}. Skipping.")
-                completed_pairs += n_ligands
                 continue
 
-            box_size = [box_size_x, box_size_y, box_size_z]
-            dock_folder = protein_pdb[:-4] + '_smina'
-            os.makedirs(dock_folder, exist_ok=True)
+        if not prepared:
+            raise ValueError("No receptors could be prepared for docking.")
 
-            for lig_path in ligand_paths:
-                # Progress: 15 → 95 across all pairs
-                pair_frac = completed_pairs / total_pairs
-                progress = 15 + int(pair_frac * 80)
+        box_size = [box_size_x, box_size_y, box_size_z]
+        total_pairs = len(prepared) * n_ligands
 
-                self.update_state(state='PROGRESS', meta={
-                    'current_step': (
-                        f'Docking {os.path.basename(lig_path)} → '
-                        f'receptor {rec_idx + 1}/{n_receptors} '
-                        f'({completed_pairs + 1}/{total_pairs})'
-                    ),
-                    'progress': progress,
-                    'pairs_done': completed_pairs,
-                    'pairs_total': total_pairs,
-                    'receptor': receptor_pdb,
-                    'ligand': os.path.basename(lig_path),
-                })
+        self.update_state(state='PROGRESS', meta={
+            'current_step': f'Dispatching {total_pairs} pairs to docking workers…',
+            'progress': 15, 'pairs_done': 0, 'pairs_total': total_pairs,
+        })
 
-                out_path = os.path.join(dock_folder, os.path.basename(lig_path)[:-6] + '_smina.sdf')
-                try:
-                    output_txt, _ = run_smina(
-                        lig_path, receptor_pdbqt, out_path, box_center, box_size,
-                        smina_exe_path, num_poses=num_poses, exhaustiveness=exhaustiveness,
-                        log_dir=dock_folder,
-                    )
-                    df_out = parse_smina_log(output_txt)
-                    if not df_out.empty:
-                        df_out['ligand'] = os.path.basename(lig_path)[:-6]
-                        df_out['receptor'] = os.path.basename(receptor_pdb)
-                        df_out['receptor_path'] = receptor_pdbqt
-                        df_out['receptor_pdb_path'] = protein_pdb
-                        df_out['output_sdf'] = out_path
-                        list_outputs.append(df_out)
-                except SoftTimeLimitExceeded:
-                    elapsed = time.time() - start_time
-                    _update_status_file(job_id, 'failed',
-                                        f'Docking timed out after {elapsed:.0f}s', task_id=self.request.id)
-                    self.update_state(state='FAILURE', meta={
-                        'status': f'Docking timed out after {elapsed:.0f}s',
-                        'exc_type': 'SoftTimeLimitExceeded',
-                        'exc_message': 'Docking exceeded time limit',
-                        'pairs_done': completed_pairs,
-                        'pairs_total': total_pairs,
-                    })
-                    raise
-                except Exception as pair_err:
-                    logger.warning(f"Pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {pair_err}")
+        # ── Phase 2: Dispatch all pairs in parallel ──────────────────────────────
+        pair_tasks = [
+            run_single_docking_pair.s(
+                receptor_pdbqt=receptor_pdbqt,
+                receptor_pdb=protein_pdb,
+                box_center=box_center,
+                box_size=box_size,
+                lig_path=lig_path,
+                dock_folder=dock_folder,
+                num_poses=num_poses,
+                exhaustiveness=exhaustiveness,
+                smina_exe_path=smina_exe_path,
+            )
+            for receptor_pdbqt, protein_pdb, box_center, dock_folder in prepared
+            for lig_path in ligand_paths
+        ]
 
-                completed_pairs += 1
+        result_group = celery_group(pair_tasks).apply_async()
+
+        # Poll until all pairs are done, updating progress every 2 s
+        while not result_group.ready():
+            done = result_group.completed_count()
+            self.update_state(state='PROGRESS', meta={
+                'current_step': f'Docking: {done}/{total_pairs} pairs complete',
+                'progress': 15 + int(done / total_pairs * 80),
+                'pairs_done': done,
+                'pairs_total': total_pairs,
+            })
+            time.sleep(2)
+
+        # ── Phase 3: Collect and aggregate results ───────────────────────────────
+        pair_results = result_group.get(propagate=False, timeout=Config.DOCKING_TIMEOUT)
+
+        list_outputs = []
+        for result in pair_results:
+            if isinstance(result, list) and result:
+                list_outputs.extend(result)
 
         if not list_outputs:
             raise ValueError("No docking results generated. Check that ligands and receptors are valid.")
 
-        df_outputs = pd.concat(list_outputs, ignore_index=True)
+        df_outputs = pd.DataFrame(list_outputs)
         docking_results_file = os.path.join(output_folder_job, 'docking_results.csv')
         df_outputs.to_csv(docking_results_file, index=False)
 
         elapsed = time.time() - start_time
-        total_docking_poses = len(df_outputs)
-        unique_ligands = df_outputs['ligand'].nunique()
-        unique_receptors = df_outputs['receptor'].nunique()
-        best_affinity = df_outputs['affinity (kcal/mol)'].min()
-
         results_overview = {
             'status': 'completed',
             'docking_output_dir': output_folder_job,
             'docking_results_file': docking_results_file,
-            'total_docking_poses': total_docking_poses,
-            'unique_ligands': unique_ligands,
-            'unique_receptors': unique_receptors,
-            'best_affinity': best_affinity,
+            'total_docking_poses': len(df_outputs),
+            'unique_ligands': df_outputs['ligand'].nunique(),
+            'unique_receptors': df_outputs['receptor'].nunique(),
+            'best_affinity': df_outputs['affinity (kcal/mol)'].min(),
             'processing_time': elapsed,
             'num_poses': num_poses,
             'exhaustiveness': exhaustiveness,
-            'pairs_done': completed_pairs,
+            'pairs_done': total_pairs,
             'pairs_total': total_pairs,
         }
 
         _update_status_file(job_id, 'completed', 'Molecular docking completed successfully',
                             task_id=self.request.id, result_info=results_overview)
-        self.update_state(state='SUCCESS', meta=results_overview)
         return results_overview
 
     except Exception as e:
