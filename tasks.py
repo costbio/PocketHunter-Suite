@@ -1179,7 +1179,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id,
                 box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
                 dock_folder = protein_pdb[:-4] + '_smina'
                 os.makedirs(dock_folder, exist_ok=True)
-                prepared.append((receptor_pdbqt, protein_pdb, box_center, dock_folder))
+                prepared.append((receptor_pdbqt, protein_pdb, box_center.tolist(), dock_folder))
             except Exception as prep_err:
                 logger.warning(f"Receptor prep failed ({receptor_pdb}): {prep_err}. Skipping.")
                 continue
@@ -1226,7 +1226,12 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id,
             time.sleep(2)
 
         # ── Phase 3: Collect and aggregate results ───────────────────────────────
-        pair_results = result_group.get(propagate=False, timeout=Config.DOCKING_TIMEOUT)
+        # allow_join_result() disables Celery's sync-subtask guard. Safe here
+        # because the coordinator runs on 'default' and pairs run on 'docking',
+        # so there is no risk of deadlock.
+        from celery.result import allow_join_result
+        with allow_join_result():
+            pair_results = result_group.get(propagate=False, timeout=Config.DOCKING_TIMEOUT)
 
         list_outputs = []
         for result in pair_results:
@@ -1270,4 +1275,60 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id,
             'exc_message': str(e),
             'processing_time': elapsed,
         })
+        raise
+
+
+@celery_app.task(bind=True, time_limit=600)
+def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job_id):
+    """
+    Celery task: run pharmacophore-based active/decoy discrimination.
+
+    Args:
+        cluster_job_id: Job ID of the completed cluster step (used to locate
+                        cluster_representatives.csv).
+        actives_path: Absolute path to the uploaded actives SDF file.
+        decoys_path: Absolute path to the uploaded decoys SDF file.
+        job_id: Unique ID for this discrimination job (used for output paths).
+    """
+    import sys
+    sys.path.insert(0, POCKETHUNTER_DIR)
+    import discriminate as disc
+
+    output_dir = os.path.join(RESULTS_DIR, job_id, 'discrimination')
+    cluster_dir = os.path.join(RESULTS_DIR, cluster_job_id, 'pocket_clusters')
+
+    _update_status_file(job_id, 'running', step='discrimination', task_id=self.request.id)
+
+    self.update_state(state='PROGRESS', meta={
+        'current_step': 'Loading ligands and computing pharmacophore features…',
+        'progress': 10,
+    })
+
+    try:
+        df_results = disc.run_discrimination(
+            cluster_dir=cluster_dir,
+            actives_sdf=actives_path,
+            decoys_sdf=decoys_path,
+            outfolder=output_dir,
+        )
+
+        self.update_state(state='PROGRESS', meta={
+            'current_step': 'Discrimination complete.',
+            'progress': 95,
+        })
+
+        result_info = {
+            'discrimination_results_csv': os.path.join(output_dir, 'discrimination_results.csv'),
+            'n_conformations': len(df_results),
+            'best_cluster_id': str(df_results.iloc[0]['cluster_id']) if len(df_results) > 0 else None,
+            'best_roc_auc': float(df_results.iloc[0]['roc_auc']) if len(df_results) > 0 else None,
+        }
+
+        _update_status_file(job_id, 'completed', step='discrimination',
+                            task_id=self.request.id, result_info=result_info)
+        return result_info
+
+    except Exception as e:
+        logger.error("Discrimination task failed for job %s: %s", job_id, e)
+        _update_status_file(job_id, 'failed', step='discrimination', task_id=self.request.id)
         raise
