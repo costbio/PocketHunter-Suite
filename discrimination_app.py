@@ -160,6 +160,35 @@ with col2:
         key="disc_decoys_upload"
     )
 
+# ── Decoy quality guidance ───────────────────────────────────────────────────
+
+with st.expander("⚠️ Decoy quality matters — read before running", expanded=False):
+    st.markdown("""
+**Pharmacophore complementarity is a broad-class discriminator.**
+Its ability to separate actives from decoys depends almost entirely on
+how different the decoys are from the actives in feature space.
+
+| Decoy type | Expected ROC-AUC | Example |
+|---|---|---|
+| Drug-like (other targets) | ~0.5–0.6 | ChEMBL GPCR/protease ligands |
+| Property-matched (DUD-E) | ~0.55–0.70 | dude.docking.org sets |
+| Diverse / non-drug-like | ~0.7–0.9 | Fragments, natural products, metabolites |
+
+**Why drug-like decoys fail:** All drug-like molecules share similar pharmacophore
+feature distributions (predominantly hydrophobic, 2–4 H-bond donors/acceptors).
+The 1D residue-counting representation cannot distinguish VEGFR2 inhibitors
+from COX-2 inhibitors — both are mostly hydrophobic with a few polar groups.
+
+**Recommendations:**
+- Use [DUD-E](https://dude.docking.org/) decoys for your target if available —
+  they are property-matched but scaffold-diverse.
+- Include structurally simple molecules (fragments, metabolites) alongside
+  drug-like decoys to broaden the separation.
+- Focus on the **relative ranking** of conformations (which cluster scores
+  highest?) rather than the absolute ROC-AUC value.
+- A ROC-AUC > 0.6 with drug-like decoys is a meaningful result.
+""")
+
 # ── Launch ───────────────────────────────────────────────────────────────────
 
 st.subheader("3. Run Discrimination")
