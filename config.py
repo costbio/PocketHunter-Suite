@@ -86,6 +86,7 @@ class Config:
     MAX_DOCKING_LIGANDS = int(os.getenv('MAX_DOCKING_LIGANDS', 10))
     MAX_DOCKING_EXHAUSTIVENESS = int(os.getenv('MAX_DOCKING_EXHAUSTIVENESS', 12))
     DOCKING_TIMEOUT = int(os.getenv('DOCKING_TIMEOUT', 7200))  # 2 hours
+    DISCRIMINATION_TIMEOUT: int = int(os.getenv('DISCRIMINATION_TIMEOUT', '600'))
 
     # ========================================
     # Rate Limiting

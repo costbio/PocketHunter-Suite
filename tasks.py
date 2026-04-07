@@ -1278,7 +1278,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id,
         raise
 
 
-@celery_app.task(bind=True, time_limit=600)
+@celery_app.task(bind=True, time_limit=Config.DISCRIMINATION_TIMEOUT)
 def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job_id):
     """
     Celery task: run pharmacophore-based active/decoy discrimination.
