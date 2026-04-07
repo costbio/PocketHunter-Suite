@@ -19,7 +19,7 @@ def initialize_session_state():
             'extract': None,
             'detect': None,
             'cluster': None,
-            'docking': None,
+            'discrimination': None,
             'pipeline': None,
         }
 
@@ -55,32 +55,6 @@ def initialize_session_state():
     if 'pipeline_status' not in st.session_state:
         st.session_state.pipeline_status = 'idle'
 
-    # Docking state
-    if 'docking_job_id' not in st.session_state:
-        st.session_state.docking_job_id = None
-    if 'docking_task_id' not in st.session_state:
-        st.session_state.docking_task_id = None
-    if 'docking_display_job_id' not in st.session_state:
-        st.session_state.docking_display_job_id = None
-    if 'view_mode' not in st.session_state:
-        st.session_state.view_mode = 'setup'
-
-    # Docking PDB selections - stores selected PDB files by filename
-    if 'docking_selected_pdbs' not in st.session_state:
-        st.session_state.docking_selected_pdbs = {}
-
-    # Heatmap job tracking - used to detect job changes and clear stale state
-    if 'heatmap_last_job_id' not in st.session_state:
-        st.session_state.heatmap_last_job_id = None
-
-    # Pipeline inline docking state
-    if 'pipe_docking_task_id' not in st.session_state:
-        st.session_state.pipe_docking_task_id = None
-    if 'pipe_docking_job_id' not in st.session_state:
-        st.session_state.pipe_docking_job_id = None
-    if 'pipe_selected_pose' not in st.session_state:
-        st.session_state.pipe_selected_pose = None
-
     # Heatmap interactive selection state
     if 'heatmap_selected_cluster_id' not in st.session_state:
         st.session_state.heatmap_selected_cluster_id = None
@@ -88,8 +62,18 @@ def initialize_session_state():
         st.session_state.heatmap_selected_pdb_path = None
     if 'heatmap_selected_residues' not in st.session_state:
         st.session_state.heatmap_selected_residues = []
-    if 'heatmap_docking_clusters' not in st.session_state:
-        st.session_state.heatmap_docking_clusters = []
+
+    # Heatmap job tracking
+    if 'heatmap_last_job_id' not in st.session_state:
+        st.session_state.heatmap_last_job_id = None
+
+    # Discrimination state
+    if 'discrimination_job_id' not in st.session_state:
+        st.session_state.discrimination_job_id = None
+    if 'discrimination_task_id' not in st.session_state:
+        st.session_state.discrimination_task_id = None
+    if 'discrimination_status' not in st.session_state:
+        st.session_state.discrimination_status = 'idle'
 
     # 3D Viewer state
     if 'selected_pocket' not in st.session_state:
@@ -116,10 +100,3 @@ def get_pdb_selection_key(filename: str, row_index=None) -> str:
     return f"pdb_select_{safe_name}"
 
 
-def clear_docking_selections():
-    """Clear all PDB selections for docking."""
-    st.session_state.docking_selected_pdbs = {}
-    # Also clear any legacy pdb_{idx} keys
-    keys_to_remove = [k for k in st.session_state.keys() if k.startswith('pdb_')]
-    for key in keys_to_remove:
-        del st.session_state[key]

@@ -14,7 +14,7 @@ import shutil
 import uuid
 import sys
 from pathlib import Path
-from tasks import run_pockethunter_pipeline, run_extract_to_pdb_task, run_detect_pockets_task, run_cluster_pockets_task, run_docking_task
+from tasks import run_pockethunter_pipeline, run_extract_to_pdb_task, run_detect_pockets_task, run_cluster_pockets_task, run_discrimination_task
 from celery_app import celery_app
 
 # Page configuration
@@ -206,7 +206,7 @@ if 'cached_job_ids' not in st.session_state:
         'extract': None,
         'detect': None,
         'cluster': None,
-        'docking': None,
+        'discrimination': None,
         'pipeline': None,
     }
 
@@ -216,7 +216,7 @@ pages = {
     "Step 1: Extract Frames": "extract_frames_app.py",
     "Step 2: Detect Pockets": "detect_pockets_app.py",
     "Step 3: Cluster Pockets": "cluster_pockets_app.py",
-    "Step 4: Molecular Docking": "docking_app.py",
+    "Step 4: Discrimination Analysis": "discrimination_app.py",
     "Task Monitor": "task_monitor_app.py"
 }
 
@@ -232,7 +232,7 @@ if 'pending_nav' in st.session_state and st.session_state.pending_nav in _page_n
 selected = option_menu(
     None,
     _page_names,
-    icons=['lightning-charge', 'file-earmark-arrow-down', 'search', 'diagram-3', 'flask', 'activity'],
+    icons=['lightning-charge', 'file-earmark-arrow-down', 'search', 'diagram-3', 'funnel', 'activity'],
     menu_icon="cast",
     default_index=0,
     manual_select=_manual_select,
