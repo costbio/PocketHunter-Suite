@@ -187,6 +187,7 @@ if st.button("▶ Run Discrimination Analysis", disabled=not can_launch,
         actives_path=actives_path,
         decoys_path=decoys_path,
         job_id=job_id,
+        extract_job_id=st.session_state.cached_job_ids.get('extract') or None,
     )
 
     st.session_state.discrimination_task_id = task.id

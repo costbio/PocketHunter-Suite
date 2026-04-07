@@ -1279,7 +1279,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id,
 
 
 @celery_app.task(bind=True, time_limit=Config.DISCRIMINATION_TIMEOUT)
-def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job_id):
+def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job_id, extract_job_id=None):
     """
     Celery task: run pharmacophore-based active/decoy discrimination.
 
@@ -1289,6 +1289,8 @@ def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job
         actives_path: Absolute path to the uploaded actives SDF file.
         decoys_path: Absolute path to the uploaded decoys SDF file.
         job_id: Unique ID for this discrimination job (used for output paths).
+        extract_job_id: Optional job ID of the extract step (used to locate PDB files
+                        for residue name lookup).
     """
     import sys
     sys.path.insert(0, POCKETHUNTER_DIR)
@@ -1296,6 +1298,7 @@ def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job
 
     output_dir = os.path.join(RESULTS_DIR, job_id, 'discrimination')
     cluster_dir = os.path.join(RESULTS_DIR, cluster_job_id, 'pocket_clusters')
+    pdb_dir = os.path.join(RESULTS_DIR, extract_job_id, 'pdbs') if extract_job_id else None
 
     _update_status_file(job_id, 'running', step='discrimination', task_id=self.request.id)
 
@@ -1310,6 +1313,7 @@ def run_discrimination_task(self, cluster_job_id, actives_path, decoys_path, job
             actives_sdf=actives_path,
             decoys_sdf=decoys_path,
             outfolder=output_dir,
+            pdb_dir=pdb_dir,
         )
 
         self.update_state(state='PROGRESS', meta={
