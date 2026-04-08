@@ -1,5 +1,6 @@
 import streamlit as st
 import runpy
+import traceback
 from pathlib import Path
 
 st.set_page_config(
@@ -10,10 +11,13 @@ st.set_page_config(
 )
 
 # ── Global CSS ───────────────────────────────────────────────────────────────
+st.markdown(
+    '<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">',
+    unsafe_allow_html=True,
+)
+
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
-
 html, body, [data-testid="stApp"] {
     font-family: 'Roboto', sans-serif !important;
     background: #F5F6F8 !important;
@@ -138,7 +142,7 @@ if 'active_page' not in st.session_state:
     st.session_state.active_page = 'wizard'
 
 # ── Header ───────────────────────────────────────────────────────────────────
-h_brand, h_gap, h_nav1, h_nav2 = st.columns([5, 2, 1, 1])
+h_brand, _, h_nav1, h_nav2 = st.columns([5, 2, 1, 1])  # middle col is an intentional spacer
 
 with h_brand:
     st.markdown("""
@@ -190,7 +194,6 @@ try:
         run_name='__main__',
     )
 except Exception as e:
-    st.error(f"Error loading page")
-    import traceback
+    st.error(f"Error loading page: {st.session_state.active_page!r}")
     with st.expander("Details"):
         st.code(traceback.format_exc())
