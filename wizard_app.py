@@ -95,10 +95,19 @@ def _badge(text: str, kind: str) -> str:
 
 
 def _panel_open(extra_class: str = "") -> None:
-    st.markdown(f'<div class="ph-panel {extra_class}">', unsafe_allow_html=True)
+    cls = f"ph-panel {extra_class}".strip()
+    st.markdown(f'<div class="{cls}">', unsafe_allow_html=True)
 
 
 def _panel_close() -> None:
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _panel_body_open() -> None:
+    st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+
+
+def _panel_body_close() -> None:
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -118,7 +127,7 @@ def _render_step1_form() -> None:
     """Render Step 1 — input files + parameters form."""
     _panel_open("ph-panel-active")
     _panel_header("Step 1 — Input Files &amp; Parameters", "Active", "active")
-    st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+    _panel_body_open()
 
     col_traj, col_topo = st.columns(2)
     with col_traj:
@@ -149,7 +158,8 @@ def _render_step1_form() -> None:
             "Clustering method", ["dbscan", "kmeans", "hierarchical"], key="wiz_cluster_method"
         )
 
-    st.markdown('</div></div>', unsafe_allow_html=True)  # close panel-body + panel
+    _panel_body_close()
+    _panel_close()
 
     # Launch button (outside panel so it spans full width cleanly)
     if st.button("Run Pipeline", type="primary", use_container_width=True, key="wiz_launch"):
@@ -171,15 +181,20 @@ def _launch_pipeline(traj_file, topo_file, stride, threads, min_prob, clustering
         return
 
     job_id = f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
-    job_upload_dir = os.path.join(UPLOAD_DIR, job_id)
-    os.makedirs(job_upload_dir, exist_ok=True)
 
-    traj_path = os.path.join(job_upload_dir, traj_file.name)
-    topo_path = os.path.join(job_upload_dir, topo_file.name)
-    with open(traj_path, 'wb') as f:
-        f.write(traj_file.getbuffer())
-    with open(topo_path, 'wb') as f:
-        f.write(topo_file.getbuffer())
+    try:
+        traj_path = str(handle_file_upload_secure(traj_file, job_id, "trajectory_"))
+        topo_path = str(handle_file_upload_secure(topo_file, job_id, "topology_"))
+    except RateLimitExceeded as e:
+        st.error(f"Rate limit exceeded: {e}")
+        return
+    except SecurityError as e:
+        st.error(f"File upload failed: {e}")
+        return
+    except Exception as e:
+        st.error(f"Unexpected error during file upload: {e}")
+        logger.error(f"Upload error for job {job_id}: {e}", exc_info=True)
+        return
 
     task = run_pockethunter_pipeline.delay(
         xtc_file_path=traj_path,
