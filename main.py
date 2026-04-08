@@ -1,281 +1,196 @@
 import streamlit as st
-from streamlit_option_menu import option_menu
-import extra_streamlit_components as stx
-import os
-from streamlit_extras.app_logo import add_logo
-import pandas as pd
-import plotly.graph_objs as go
-import plotly.express as px
-from datetime import datetime
-import time
-import json
-import zipfile
-import shutil
-import uuid
-import sys
+import runpy
 from pathlib import Path
-from tasks import run_pockethunter_pipeline, run_extract_to_pdb_task, run_detect_pockets_task, run_cluster_pockets_task, run_discrimination_task
-from celery_app import celery_app
 
-# Page configuration
 st.set_page_config(
     page_title="PocketHunter Suite",
-    page_icon="🧬",
+    page_icon="assets/favicon.ico" if Path("assets/favicon.ico").exists() else None,
     layout="wide",
     initial_sidebar_state="collapsed",
-    menu_items={
-        'Get Help': 'https://github.com/your-repo/pockethunter',
-        'Report a bug': "https://github.com/your-repo/pockethunter/issues",
-        'About': "# PocketHunter Suite\nA modern molecular dynamics pocket detection and analysis tool."
-    }
 )
 
-# Custom CSS for theme-compatible design with molecular dynamics aesthetic
+# ── Global CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Molecular dynamics color palette - adapts to theme */
-    :root {
-        --pocket-primary: #2E7D32;
-        --pocket-secondary: #1565C0;
-        --pocket-accent: #F57C00;
-        --success-bg: rgba(46, 125, 50, 0.15);
-        --error-bg: rgba(198, 40, 40, 0.15);
-        --info-bg: rgba(21, 101, 192, 0.15);
-        --border-opacity: 0.2;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
 
-    /* Main header - molecular structure inspired */
-    .main-header {
-        background: linear-gradient(135deg,
-            var(--pocket-primary) 0%,
-            var(--pocket-secondary) 50%,
-            var(--pocket-accent) 100%);
-        padding: 1.5rem;
-        border-radius: 12px;
-        margin-bottom: 2rem;
-        color: white;
-        text-align: center;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    }
+html, body, [data-testid="stApp"] {
+    font-family: 'Roboto', sans-serif !important;
+    background: #F5F6F8 !important;
+}
+[data-testid="stHeader"]          { display: none !important; }
+#MainMenu, footer, .stDeployButton { display: none !important; }
+.block-container {
+    padding-top: 0.5rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 900px;
+}
 
-    /* Metric cards - theme adaptive with subtle molecular grid pattern */
-    .metric-card {
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.5);
-        backdrop-filter: blur(10px);
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        border-left: 4px solid var(--pocket-primary);
-        border-top: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), var(--border-opacity));
-        margin: 1rem 0;
-        transition: all 0.3s ease;
-    }
+/* ── Panels ── */
+.ph-panel {
+    background: rgba(255,255,255,0.92);
+    border: 2px solid #B0BDD0;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+.ph-panel-active  { border-color: #6B7FA8; box-shadow: 0 4px 20px rgba(107,127,168,.18); }
+.ph-panel-done    { border-color: #c0cad8; }
+.ph-panel-locked  { border-color: #e8e8e8; opacity: .55; }
+.ph-panel-header  { padding: 13px 18px; display: flex; align-items: center; gap: 10px; }
+.ph-panel-title   { font-size: 13px; font-weight: 500; color: #2a3a4a; flex: 1; margin: 0; }
+.ph-panel-body    { padding: 0 18px 18px; }
 
-    .metric-card:hover {
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        transform: translateY(-2px);
-    }
+/* ── Step strip ── */
+.ph-step-strip   { display: flex; align-items: flex-start; margin-bottom: 22px; padding: 0 4px; }
+.ph-step-node    { display: flex; flex-direction: column; align-items: center; min-width: 64px; }
+.ph-step-circle  {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+    border: 2px solid #ddd; background: white; color: #bbb;
+}
+.ph-step-done    { background: #6B7FA8 !important; border-color: #6B7FA8 !important; color: white !important; }
+.ph-step-active  {
+    background: white !important; border-color: #6B7FA8 !important; color: #6B7FA8 !important;
+    box-shadow: 0 0 0 3px rgba(107,127,168,.18);
+}
+.ph-step-locked  { background: #f5f5f5 !important; border-color: #ddd !important; color: #ccc !important; }
+.ph-step-label   { font-size: 10px; color: #999; margin-top: 5px; text-align: center; line-height: 1.3; max-width: 72px; }
+.ph-label-done   { color: #6B7FA8; font-weight: 500; }
+.ph-label-active { color: #5a6e97; font-weight: 500; }
+.ph-step-line    { flex: 1; height: 2px; margin-top: 13px; border-radius: 1px; background: #e0e0e0; }
+.ph-line-done    { background: #6B7FA8; }
 
-    /* Status indicators - theme adaptive */
-    .status-success {
-        background: var(--success-bg);
-        border: 1px solid rgba(46, 125, 50, 0.3);
-        color: var(--text-color);
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #2E7D32;
-    }
+/* ── Badges ── */
+.ph-badge        { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; border: 1px solid; display: inline-block; text-transform: uppercase; letter-spacing: .04em; }
+.ph-badge-active { background: rgba(45,116,218,.08); color: #2d74da; border-color: rgba(45,116,218,.25); }
+.ph-badge-done   { background: rgba(0,168,133,.08);  color: #00a085; border-color: rgba(0,168,133,.25); }
+.ph-badge-locked { background: #f5f5f5; color: #bbb; border-color: #e0e0e0; }
+.ph-badge-ready  { background: rgba(107,127,168,.1); color: #5a6e97; border-color: rgba(107,127,168,.3); }
 
-    .status-error {
-        background: var(--error-bg);
-        border: 1px solid rgba(198, 40, 40, 0.3);
-        color: var(--text-color);
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #C62828;
-    }
+/* ── Job ID banner ── */
+.ph-job-banner   {
+    background: white; border: 1px solid #B0BDD0; border-left: 3px solid #6B7FA8;
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 18px;
+}
+.ph-job-label    { font-size: 10px; font-weight: 700; color: #9aa0b8; text-transform: uppercase; letter-spacing: .06em; }
+.ph-job-value    { font-size: 13px; font-family: monospace; color: #2a3a4a; font-weight: 700; margin-top: 2px; }
+.ph-job-warn     { font-size: 11px; color: #c0863a; margin-top: 4px; }
 
-    .status-info {
-        background: var(--info-bg);
-        border: 1px solid rgba(21, 101, 192, 0.3);
-        color: var(--text-color);
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #1565C0;
-    }
+/* ── Progress ── */
+.ph-prog-outer   { background: #e8ebf0; border-radius: 4px; height: 6px; overflow: hidden; margin: 8px 0; }
+.ph-prog-inner   { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #6B7FA8, #8B9FC8); }
+.ph-prog-meta    { display: flex; justify-content: space-between; align-items: center; }
+.ph-prog-text    { font-size: 12px; color: #888; }
+.ph-prog-pct     { font-size: 12px; font-weight: 700; color: #6B7FA8; }
 
-    /* Upload area - molecular pocket visualization inspired */
-    .upload-area {
-        border: 2px dashed var(--pocket-primary);
-        border-radius: 12px;
-        padding: 2rem;
-        text-align: center;
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3);
-        margin: 1rem 0;
-        transition: all 0.3s ease;
-    }
+/* ── Stage chips ── */
+.ph-chip         { font-size: 11px; padding: 2px 10px; border-radius: 12px; border: 1px solid; display: inline-block; margin: 8px 4px 0 0; }
+.ph-chip-done    { background: rgba(0,168,133,.08);  color: #00a085; border-color: rgba(0,168,133,.25); }
+.ph-chip-active  { background: rgba(45,116,218,.08); color: #2d74da; border-color: rgba(45,116,218,.25); }
+.ph-chip-wait    { background: #f5f5f5; color: #bbb; border-color: #e0e0e0; }
 
-    .upload-area:hover {
-        border-color: var(--pocket-accent);
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.5);
-    }
+/* ── Log box ── */
+.ph-log          { background: #f5f6f8; border: 1px solid #dde2ec; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 11px; color: #777; line-height: 1.9; margin-top: 12px; }
+.ph-log-label    { font-size: 10px; color: #aaa; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
 
-    /* Job ID display - monospace with molecular theme */
-    .job-id-display {
-        background: linear-gradient(135deg,
-            var(--pocket-primary) 0%,
-            var(--pocket-secondary) 100%);
-        color: white;
-        padding: 0.75rem 1.25rem;
-        border-radius: 8px;
-        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-        font-size: 0.9rem;
-        margin: 0.5rem 0;
-        display: inline-block;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        letter-spacing: 0.5px;
-    }
+/* ── Metrics ── */
+.ph-metric       { background: #F5F6F8; border-radius: 8px; padding: 10px 14px; border: 1px solid #dde2ec; text-align: center; }
+.ph-metric-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+.ph-metric-value { font-size: 22px; font-weight: 700; color: #5a6e97; margin-top: 2px; }
 
-    /* Enhanced metrics for molecular data */
-    .stMetric {
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3);
-        padding: 0.5rem;
-        border-radius: 8px;
-        border: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), 0.1);
-    }
+/* ── Resume bar ── */
+.ph-resume       { background: white; border: 1px solid #B0BDD0; border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; }
+.ph-resume-label { font-size: 11px; font-weight: 700; color: #9aa0b8; text-transform: uppercase; letter-spacing: .06em; }
+.ph-resume-desc  { font-size: 13px; color: #666; margin-top: 2px; }
 
-    /* Navigation menu theme compatibility */
-    nav[data-testid="stHorizontalBlock"] {
-        background: transparent !important;
-    }
+/* ── Success banner ── */
+.ph-success {
+    background: rgba(0,168,133,.08); border: 1px solid rgba(0,168,133,.25);
+    border-left: 3px solid #00a085; border-radius: 8px; padding: 14px 18px; margin-bottom: 18px;
+}
 
-    /* Option menu container - theme adaptive */
-    [class*="nav-link"] {
-        color: var(--text-color) !important;
-        background-color: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3) !important;
-        border: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), 0.1) !important;
-        transition: all 0.3s ease !important;
-    }
-
-    [class*="nav-link"]:hover {
-        background-color: rgba(var(--pocket-primary), 0.1) !important;
-        border-color: var(--pocket-primary) !important;
-    }
-
-    /* Selected nav link - visible in both themes */
-    [class*="nav-link-selected"] {
-        background: linear-gradient(135deg, var(--pocket-primary) 0%, var(--pocket-secondary) 100%) !important;
-        color: white !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
-    }
-
-    /* Nav icons - theme adaptive */
-    [class*="nav-link"] svg {
-        color: var(--text-color) !important;
-        opacity: 0.7;
-    }
-
-    [class*="nav-link-selected"] svg {
-        color: white !important;
-        opacity: 1;
-    }
-
-    /* Menu container background */
-    .css-1544g2n, [data-testid="stVerticalBlock"] > div:first-child {
-        background: transparent !important;
-    }
+/* ── Nav button overrides ── */
+[data-testid="stBaseButton-secondary"] {
+    border: 1px solid #B0BDD0 !important;
+    color: #6B7FA8 !important;
+    background: white !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    padding: 5px 14px !important;
+    border-radius: 6px !important;
+}
+[data-testid="stBaseButton-primary"] {
+    background: #f0f2f6 !important;
+    border: 1px solid #B0BDD0 !important;
+    color: #5a6e97 !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    border-radius: 6px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# Header with logo
-st.markdown("""
-<div class="main-header">
-    <h1>🧬 PocketHunter Suite</h1>
-    <p>Advanced Molecular Dynamics Pocket Detection & Analysis</p>
-</div>
-""", unsafe_allow_html=True)
+# ── Session state ────────────────────────────────────────────────────────────
+if 'active_page' not in st.session_state:
+    st.session_state.active_page = 'wizard'
 
-# Initialize session state for job ID caching
-if 'cached_job_ids' not in st.session_state:
-    st.session_state.cached_job_ids = {
-        'extract': None,
-        'detect': None,
-        'cluster': None,
-        'discrimination': None,
-        'pipeline': None,
-    }
+# ── Header ───────────────────────────────────────────────────────────────────
+h_brand, h_gap, h_nav1, h_nav2 = st.columns([5, 2, 1, 1])
 
-# Define the pages
-pages = {
-    "Full Pipeline": "pipeline_app.py",
-    "Step 1: Extract Frames": "extract_frames_app.py",
-    "Step 2: Detect Pockets": "detect_pockets_app.py",
-    "Step 3: Cluster Pockets": "cluster_pockets_app.py",
-    "Step 4: Discrimination Analysis": "discrimination_app.py",
-    "Task Monitor": "task_monitor_app.py"
+with h_brand:
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;">
+        <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6B7FA8,#4a5e87);flex-shrink:0;"></div>
+        <div>
+            <span style="font-size:15px;font-weight:700;color:#2a3a4a;">PocketHunter Suite</span>
+            <span style="font-size:10px;color:#9aa0b8;margin-left:6px;">MD Trajectory Pocket Analysis</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with h_nav1:
+    if st.button(
+        "Analysis",
+        key="nav_wizard",
+        type="primary" if st.session_state.active_page == 'wizard' else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state.active_page = 'wizard'
+        st.rerun()
+
+with h_nav2:
+    if st.button(
+        "Task Monitor",
+        key="nav_monitor",
+        type="primary" if st.session_state.active_page == 'monitor' else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state.active_page = 'monitor'
+        st.rerun()
+
+st.markdown('<hr style="border:none;border-top:2px solid #B0BDD0;margin:0 0 20px;">', unsafe_allow_html=True)
+
+# ── Routing ──────────────────────────────────────────────────────────────────
+_here = Path(__file__).parent
+
+_routes = {
+    'wizard':  _here / 'wizard_app.py',
+    'monitor': _here / 'task_monitor_app.py',
 }
 
-# Resolve pending navigation. option_menu uses its own JS state for the active tab;
-# the correct way to switch programmatically is via manual_select (integer index).
-_page_names = list(pages.keys())
-_manual_select = None
-if 'pending_nav' in st.session_state and st.session_state.pending_nav in _page_names:
-    _manual_select = _page_names.index(st.session_state.pending_nav)
-    del st.session_state.pending_nav
+page_path = _routes.get(st.session_state.active_page, _routes['wizard'])
 
-# Horizontal menu - styles handled by CSS for theme compatibility
-selected = option_menu(
-    None,
-    _page_names,
-    icons=['lightning-charge', 'file-earmark-arrow-down', 'search', 'diagram-3', 'funnel', 'activity'],
-    menu_icon="cast",
-    default_index=0,
-    manual_select=_manual_select,
-    orientation="horizontal",
-    key="main_menu",  # Add unique key to prevent caching issues
-    styles={
-        "container": {"padding": "0!important", "background-color": "transparent"},
-        "icon": {"font-size": "18px"},
-        "nav-link": {"font-size": "16px", "text-align": "left", "margin":"0px"},
-        "nav-link-selected": {},
-    }
-)
-
-# Route to the selected page using runpy for proper namespace isolation
-import runpy
-
-# Map page names to file paths
-PAGE_FILES = pages  # Use the same dict
-
-# Execute the selected page with isolated namespace
-if selected in PAGE_FILES:
-    page_file = PAGE_FILES[selected]
-    page_path = Path(__file__).parent / page_file
-
-    try:
-        # Use runpy.run_path with a fresh namespace that includes streamlit
-        # This prevents namespace pollution between page switches
-        page_globals = {
-            '__name__': '__main__',
-            '__file__': str(page_path),
-            'st': st,  # Pass streamlit module
-        }
-
-        # Run the page file with isolated namespace
-        runpy.run_path(str(page_path), init_globals=page_globals, run_name='__main__')
-
-    except Exception as e:
-        st.error(f"❌ Error loading page '{selected}'")
-        st.exception(e)
-
-        # Show detailed traceback
-        import traceback
-        with st.expander("🐛 Full Error Details"):
-            st.code(traceback.format_exc())
-else:
-    st.error(f"Unknown page: {selected}") 
+try:
+    runpy.run_path(
+        str(page_path),
+        init_globals={'__name__': '__main__', '__file__': str(page_path), 'st': st},
+        run_name='__main__',
+    )
+except Exception as e:
+    st.error(f"Error loading page")
+    import traceback
+    with st.expander("Details"):
+        st.code(traceback.format_exc())
