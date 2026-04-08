@@ -279,22 +279,36 @@ else:
         # Result metrics (completed jobs) — skip paths, job IDs, CSV filenames
         result_info = selected_job.get('result_info', {})
         if isinstance(result_info, dict):
-            _SKIP_SUFFIXES = ('_job_id', '_path', '_dir', '_file', '_csv')
+            _SKIP_SUFFIXES = ('_job_id', '_path', '_dir', '_file', '_csv', '_id')
+            def _fmt_val(key, val):
+                if key == 'processing_time':
+                    v = float(val)
+                    if v >= 3600:
+                        return f"{int(v//3600)}h {int((v%3600)//60)}m"
+                    elif v >= 60:
+                        return f"{int(v//60)}m {int(v%60)}s"
+                    else:
+                        return f"{v:.1f} s"
+                if isinstance(val, float):
+                    return f"{val:.2f}"
+                return str(val)
+
             numeric_items = [
-                (k, v) for k, v in result_info.items()
+                (k, _fmt_val(k, v)) for k, v in result_info.items()
                 if isinstance(v, (int, float))
                 and not any(k.endswith(s) for s in _SKIP_SUFFIXES)
             ]
             if numeric_items:
-                cols = st.columns(min(4, len(numeric_items)))
-                for i, (key, val) in enumerate(numeric_items):
-                    with cols[i]:
-                        label = key.replace('_', ' ').title()
-                        st.markdown(
-                            f'<div class="ph-metric"><div class="ph-metric-label">{label}</div>'
-                            f'<div class="ph-metric-value">{val}</div></div>',
-                            unsafe_allow_html=True,
-                        )
+                cards_html = ''.join(
+                    f'<div class="ph-metric" style="flex:1;min-width:0;">'
+                    f'<div class="ph-metric-label">{k.replace("_", " ").title()}</div>'
+                    f'<div class="ph-metric-value">{v}</div></div>'
+                    for k, v in numeric_items
+                )
+                st.markdown(
+                    f'<div style="display:flex;gap:8px;margin-bottom:12px;">{cards_html}</div>',
+                    unsafe_allow_html=True,
+                )
 
         st.markdown('</div></div>', unsafe_allow_html=True)
 
