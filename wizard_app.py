@@ -592,6 +592,20 @@ def _launch_discrimination(cluster_job_id, actives_file, decoys_file, pipeline_j
     st.session_state.wiz_disc_task_id = task.id
     st.session_state.wiz_stage        = 'disc_running'
     st.session_state.cached_job_ids['discrimination'] = disc_job_id
+
+    # Persist disc IDs into pipeline status file so resume can find them
+    pipeline_status_file = os.path.join(RESULTS_DIR, f"{pipeline_job_id}_status.json")
+    if os.path.exists(pipeline_status_file):
+        try:
+            with open(pipeline_status_file) as f:
+                pipeline_status = json.load(f)
+            pipeline_status['disc_job_id']  = disc_job_id
+            pipeline_status['disc_task_id'] = task.id
+            with open(pipeline_status_file, 'w') as f:
+                json.dump(pipeline_status, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not write disc IDs to pipeline status: {e}")
+
     st.rerun()
 
 
