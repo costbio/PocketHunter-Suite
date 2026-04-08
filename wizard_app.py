@@ -406,6 +406,180 @@ def _render_pipeline_progress(task_id: str, job_id: str) -> None:
         st.rerun()
 
 
+def _render_pipeline_done_panel(result: dict) -> None:
+    """Collapsed Step 2 panel showing pipeline metrics."""
+    frames = result.get('frames_extracted', '—')
+    pockets = result.get('pockets_detected', '—')
+    reps = result.get('representatives', '—')
+
+    _panel_open("ph-panel-done")
+    _panel_header("Step 2 — Extract · Detect · Cluster", "Done", "done")
+    st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.markdown(
+            f'<div class="ph-metric"><div class="ph-metric-label">Frames</div>'
+            f'<div class="ph-metric-value">{frames}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m2:
+        st.markdown(
+            f'<div class="ph-metric"><div class="ph-metric-label">Pockets detected</div>'
+            f'<div class="ph-metric-value">{pockets}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m3:
+        st.markdown(
+            f'<div class="ph-metric"><div class="ph-metric-label">Cluster representatives</div>'
+            f'<div class="ph-metric-value">{reps}</div></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+def _render_disc_form(pipeline_job_id: str) -> None:
+    """Step 3 form: upload actives + decoys, launch discrimination."""
+    result = st.session_state.wiz_pipeline_result or {}
+    cluster_job_id = result.get('cluster_job_id', pipeline_job_id)
+    reps_csv = os.path.join(RESULTS_DIR, cluster_job_id, 'pocket_clusters', 'cluster_representatives.csv')
+    n_reps = 0
+    if os.path.exists(reps_csv):
+        try:
+            n_reps = len(pd.read_csv(reps_csv))
+        except Exception:
+            pass
+
+    _panel_open("ph-panel-active")
+    _panel_header("Step 3 — Discrimination Analysis", "Ready", "ready")
+    st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+
+    if n_reps:
+        st.markdown(
+            f'<div style="font-size:12px;color:#888;margin-bottom:12px;">'
+            f'Upload active and decoy ligand sets to rank {n_reps} cluster representatives.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div style="font-size:12px;color:#888;margin-bottom:12px;">'
+            'Upload active and decoy ligand sets to rank cluster representatives.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    col_act, col_dec = st.columns(2)
+    with col_act:
+        st.markdown("**Active ligands (.sdf) — max 200**")
+        actives_file = st.file_uploader(
+            "Actives", type=["sdf"], label_visibility="collapsed", key="wiz_actives"
+        )
+    with col_dec:
+        st.markdown("**Decoy ligands (.sdf) — max 2000**")
+        decoys_file = st.file_uploader(
+            "Decoys", type=["sdf"], label_visibility="collapsed", key="wiz_decoys"
+        )
+
+    with st.expander("Decoy quality guidance"):
+        st.markdown("""
+**Pharmacophore complementarity is a broad-class discriminator.**
+
+| Decoy type | Expected ROC-AUC |
+|---|---|
+| Drug-like (other targets) | ~0.5–0.6 |
+| Property-matched (DUD-E) | ~0.55–0.70 |
+| Diverse / non-drug-like | ~0.7–0.9 |
+
+Focus on the **relative ranking** of conformations rather than absolute ROC-AUC value.
+        """)
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    can_launch = actives_file is not None and decoys_file is not None
+    if st.button("Run Discrimination Analysis", type="primary",
+                 disabled=not can_launch, use_container_width=True, key="wiz_disc_launch"):
+        _launch_discrimination(cluster_job_id, actives_file, decoys_file, pipeline_job_id)
+
+
+def _launch_discrimination(cluster_job_id, actives_file, decoys_file, pipeline_job_id) -> None:
+    disc_job_id = f"disc_{uuid.uuid4().hex[:8]}"
+    upload_dir  = os.path.join(UPLOAD_DIR, disc_job_id)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    actives_path = os.path.join(upload_dir, 'actives.sdf')
+    decoys_path  = os.path.join(upload_dir, 'decoys.sdf')
+    with open(actives_path, 'wb') as f:
+        f.write(actives_file.getbuffer())
+    with open(decoys_path, 'wb') as f:
+        f.write(decoys_file.getbuffer())
+
+    extract_job_id = st.session_state.cached_job_ids.get('extract') or None
+    task = run_discrimination_task.delay(
+        cluster_job_id=cluster_job_id,
+        actives_path=actives_path,
+        decoys_path=decoys_path,
+        job_id=disc_job_id,
+        extract_job_id=extract_job_id,
+    )
+
+    st.session_state.wiz_disc_job_id  = disc_job_id
+    st.session_state.wiz_disc_task_id = task.id
+    st.session_state.wiz_stage        = 'disc_running'
+    st.session_state.cached_job_ids['discrimination'] = disc_job_id
+    st.rerun()
+
+
+def _render_disc_progress(disc_task_id: str, disc_job_id: str, pipeline_job_id: str) -> None:
+    """Poll discrimination Celery task and render progress."""
+    task  = celery_app.AsyncResult(disc_task_id)
+    state = task.state
+    meta  = task.info or {}
+
+    result = st.session_state.wiz_pipeline_result or {}
+    _render_job_banner(pipeline_job_id, show_warn=False)
+    _render_done_panel_step1()
+    _render_pipeline_done_panel(result)
+
+    _panel_open("ph-panel-active")
+    _panel_header("Step 3 — Discrimination Analysis", "Running", "active")
+    st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+
+    if state in ('PENDING', 'PROGRESS'):
+        pct  = meta.get('progress', 0) if state == 'PROGRESS' else 0
+        text = meta.get('current_step', 'Running…') if state == 'PROGRESS' else 'Queued…'
+        st.markdown(
+            f'<div class="ph-prog-meta">'
+            f'<span class="ph-prog-text">{text}</span>'
+            f'<span class="ph-prog-pct">{pct}%</span></div>'
+            f'<div class="ph-prog-outer"><div class="ph-prog-inner" style="width:{pct}%"></div></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('</div></div>', unsafe_allow_html=True)
+        time.sleep(3)
+        st.rerun()
+
+    elif state == 'SUCCESS':
+        st.session_state.wiz_stage = 'complete'
+        st.markdown('</div></div>', unsafe_allow_html=True)
+        st.rerun()
+
+    elif state in ('FAILURE', 'REVOKED'):
+        err = meta.get('exc_message', str(meta)) if isinstance(meta, dict) else str(meta)
+        st.error(f"Discrimination failed: {err}")
+        st.markdown('</div></div>', unsafe_allow_html=True)
+        st.session_state.wiz_stage = 'error'
+        if st.button("Retry discrimination", key="wiz_disc_retry"):
+            st.session_state.wiz_stage        = 'pipeline_done'
+            st.session_state.wiz_disc_task_id = None
+            st.session_state.wiz_disc_job_id  = None
+            st.rerun()
+
+    else:
+        st.markdown('</div></div>', unsafe_allow_html=True)
+        time.sleep(3)
+        st.rerun()
+
+
 # ── Page render ──────────────────────────────────────────────────────────────
 
 stage = st.session_state.wiz_stage
@@ -424,5 +598,20 @@ elif stage == 'pipeline_running':
         st.session_state.wiz_job_id,
     )
 
+elif stage == 'pipeline_done':
+    _render_step_strip(3)
+    _render_job_banner(st.session_state.wiz_job_id, show_warn=False)
+    _render_done_panel_step1()
+    _render_pipeline_done_panel(st.session_state.wiz_pipeline_result or {})
+    _render_disc_form(st.session_state.wiz_job_id)
+
+elif stage == 'disc_running':
+    _render_step_strip(3)
+    _render_disc_progress(
+        st.session_state.wiz_disc_task_id,
+        st.session_state.wiz_disc_job_id,
+        st.session_state.wiz_job_id,
+    )
+
 else:
-    st.info("Steps 3-4 (Tasks 5-6) — coming soon.")
+    st.info("Step 4 results (Task 6) — coming soon.")
