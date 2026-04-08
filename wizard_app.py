@@ -580,6 +580,208 @@ def _render_disc_progress(disc_task_id: str, disc_job_id: str, pipeline_job_id: 
         st.rerun()
 
 
+# ── Step 4: Results ──────────────────────────────────────────────────────────
+
+def _show_molecule_3d_with_pocket(pdb_path: str, pocket_residues: list,
+                                   width: int = 400, height: int = 380) -> None:
+    """Render a py3Dmol viewer with pocket residues highlighted in orange."""
+    try:
+        with open(pdb_path, 'r') as f:
+            pdb_data = f.read()
+        specs = []
+        for res_str in pocket_residues:
+            parts = res_str.strip().split('_', 1)
+            if len(parts) == 2:
+                try:
+                    specs.append({'chain': parts[0], 'resi': int(parts[1])})
+                except ValueError:
+                    pass
+        view = py3Dmol.view(width=width, height=height)
+        view.addModel(pdb_data, 'pdb')
+        view.setStyle({}, {'cartoon': {'color': 'spectrum'}})
+        for s in specs:
+            view.setStyle({'chain': s['chain'], 'resi': s['resi']},
+                          {'stick': {'color': 'orange', 'radius': 0.3}})
+        if specs:
+            chains = {}
+            for s in specs:
+                chains.setdefault(s['chain'], []).append(s['resi'])
+            for chain, resis in chains.items():
+                view.addSurface(py3Dmol.VDW, {'opacity': 0.4, 'color': 'orange'},
+                                {'chain': chain, 'resi': resis})
+            view.zoomTo({'resi': [s['resi'] for s in specs]})
+        else:
+            view.zoomTo()
+        view.spin(False)
+        html = f'<div style="border-radius:10px;overflow:hidden;">{view._make_html()}</div>'
+        components.html(html, height=height + 40, scrolling=False)
+    except Exception as e:
+        st.warning(f"Could not load 3D structure: {e}")
+
+
+@st.cache_data(ttl=300)
+def _load_disc_results(results_csv: str) -> pd.DataFrame:
+    return pd.read_csv(results_csv)
+
+
+def _render_results(pipeline_job_id: str, disc_job_id: str) -> None:
+    """Render Step 4: ranked table, ROC chart, 3D viewer, download."""
+
+    # Locate results CSV from discrimination status file
+    status_file = os.path.join(RESULTS_DIR, disc_job_id + '_status.json')
+    results_csv = None
+    if os.path.exists(status_file):
+        with open(status_file) as f:
+            status_data = json.load(f)
+        results_csv = status_data.get('result_info', {}).get('discrimination_results_csv')
+
+    # Fallback: look up via Celery result
+    if not results_csv:
+        disc_task_id = st.session_state.wiz_disc_task_id
+        if disc_task_id:
+            res = celery_app.AsyncResult(disc_task_id)
+            if res.state == 'SUCCESS':
+                results_csv = (res.result or {}).get('discrimination_results_csv')
+
+    if not results_csv or not os.path.exists(results_csv):
+        st.warning("Results file not found. The discrimination job may still be finishing.")
+        return
+
+    df = _load_disc_results(results_csv)
+
+    # ── Success banner ──
+    st.markdown(
+        f'<div class="ph-success">'
+        f'<div style="font-size:14px;font-weight:600;color:#00a085;">Analysis complete</div>'
+        f'<div style="font-size:12px;color:#888;margin-top:2px;">'
+        f'{len(df)} conformations ranked by discrimination score'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Results panel ──
+    _panel_open("ph-panel-done")
+    _panel_header("Results — Ranked Conformations", "Done", "done")
+    st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+
+    # Table with colour coding
+    display_cols = [c for c in ['cluster_id', 'frame', 'roc_auc', 'ef1', 'ef5'] if c in df.columns]
+
+    def _colour_auc(val):
+        if val >= 0.7:
+            return 'background-color: rgba(0,168,133,.12)'
+        if val >= 0.6:
+            return 'background-color: rgba(192,134,58,.12)'
+        return ''
+
+    st.dataframe(
+        df[display_cols].style.map(_colour_auc, subset=['roc_auc'] if 'roc_auc' in display_cols else []),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ROC-AUC bar chart
+    if 'roc_auc' in df.columns:
+        labels = [
+            f"Cluster {row['cluster_id']} (Fr.{row['frame']})"
+            if 'cluster_id' in df.columns and 'frame' in df.columns
+            else f"#{i+1}"
+            for i, (_, row) in enumerate(df.iterrows())
+        ]
+        colors = [
+            '#6B7FA8' if v >= 0.7 else '#c0863a' if v >= 0.6 else '#d63031'
+            for v in df['roc_auc']
+        ]
+        fig = go.Figure(go.Bar(x=labels, y=df['roc_auc'], marker_color=colors))
+        fig.update_layout(
+            xaxis_title="Conformation",
+            yaxis_title="ROC-AUC",
+            yaxis=dict(range=[0, 1]),
+            height=300,
+            margin=dict(t=20, b=60),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+        )
+        fig.add_hline(y=0.5, line_dash='dash', line_color='#ccc', annotation_text='Random baseline')
+        st.plotly_chart(fig, use_container_width=True)
+
+    # 3D viewer for top-ranked cluster
+    if len(df) > 0 and 'frame' in df.columns:
+        top_row = df.iloc[0]
+        cluster_job_id = (st.session_state.wiz_pipeline_result or {}).get(
+            'cluster_job_id', pipeline_job_id
+        )
+        reps_csv_path = os.path.join(
+            RESULTS_DIR, cluster_job_id, 'pocket_clusters', 'cluster_representatives.csv'
+        )
+        if os.path.exists(reps_csv_path):
+            reps_df = pd.read_csv(reps_csv_path)
+            top_cluster_id = top_row.get('cluster_id')
+            top_rep = reps_df[reps_df['cluster'] == top_cluster_id].iloc[0] if top_cluster_id is not None else reps_df.iloc[0]
+
+            pdb_name = str(top_rep['File name'])
+            if '_predictions' in pdb_name:
+                pdb_name = pdb_name.replace('_predictions', '')
+            if not pdb_name.endswith('.pdb'):
+                pdb_name += '.pdb'
+            pdb_path = os.path.join(RESULTS_DIR, pipeline_job_id, 'pdbs', pdb_name)
+
+            residues_raw = str(top_rep.get('residues', ''))
+            residues = [r.strip() for r in residues_raw.replace(',', ' ').split() if r.strip()]
+
+            st.markdown(
+                f'<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin:14px 0 6px;">'
+                f'Top-ranked structure — Cluster {top_cluster_id}</div>',
+                unsafe_allow_html=True,
+            )
+            if os.path.exists(pdb_path):
+                _show_molecule_3d_with_pocket(pdb_path, residues)
+            else:
+                st.caption(f"PDB not found: {pdb_path}")
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    # ── Download ──
+    n_top = st.slider("Top conformations to include in ZIP", 1, min(5, len(df)), min(3, len(df)), key="wiz_n_top")
+    if st.button("Prepare download ZIP", key="wiz_prep_zip"):
+        top_df    = df.head(n_top)
+        disc_dir  = os.path.join(RESULTS_DIR, disc_job_id, 'discrimination')
+        os.makedirs(disc_dir, exist_ok=True)
+        zip_path  = os.path.join(disc_dir, 'top_conformations.zip')
+        pdb_dir   = os.path.join(RESULTS_DIR, pipeline_job_id, 'pdbs')
+
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            zf.write(results_csv, 'discrimination_results.csv')
+            for _, row in top_df.iterrows():
+                frame = str(row.get('frame', ''))
+                if pdb_dir and os.path.isdir(pdb_dir):
+                    matches = [f for f in os.listdir(pdb_dir) if f'_{frame}.pdb' in f]
+                    for pdb_file in matches:
+                        zf.write(
+                            os.path.join(pdb_dir, pdb_file),
+                            f"top_conformations/cluster_{row.get('cluster_id', 'x')}_{pdb_file}",
+                        )
+        with open(zip_path, 'rb') as f:
+            st.download_button(
+                "Download ZIP",
+                data=f.read(),
+                file_name=f"top_conformations_{disc_job_id}.zip",
+                mime="application/zip",
+                key="wiz_dl_zip",
+            )
+
+    # ── New analysis ──
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("Start new analysis", key="wiz_new"):
+        for k in ('wiz_stage', 'wiz_job_id', 'wiz_task_id', 'wiz_pipeline_result',
+                  'wiz_disc_job_id', 'wiz_disc_task_id'):
+            if k == 'wiz_stage':
+                st.session_state[k] = 'setup'
+            else:
+                st.session_state[k] = None
+        st.rerun()
+
+
 # ── Page render ──────────────────────────────────────────────────────────────
 
 stage = st.session_state.wiz_stage
@@ -613,5 +815,17 @@ elif stage == 'disc_running':
         st.session_state.wiz_job_id,
     )
 
-else:
-    st.info("Step 4 results (Task 6) — coming soon.")
+elif stage == 'complete':
+    _render_step_strip(4)
+    _render_job_banner(st.session_state.wiz_job_id, show_warn=False)
+    _render_done_panel_step1()
+    _render_pipeline_done_panel(st.session_state.wiz_pipeline_result or {})
+    _render_results(st.session_state.wiz_job_id, st.session_state.wiz_disc_job_id)
+
+elif stage == 'error':
+    st.error("A task failed. Check the error above or start a new analysis.")
+    if st.button("Start new analysis", key="wiz_new_from_error"):
+        for k in ('wiz_stage','wiz_job_id','wiz_task_id','wiz_pipeline_result',
+                  'wiz_disc_job_id','wiz_disc_task_id'):
+            st.session_state[k] = 'setup' if k == 'wiz_stage' else None
+        st.rerun()
