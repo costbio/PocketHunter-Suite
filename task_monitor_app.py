@@ -1,8 +1,7 @@
 import streamlit as st
 import os
 import pandas as pd
-import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import json
 import glob
@@ -43,20 +42,6 @@ def get_all_job_statuses():
     
     return jobs
 
-def format_duration(seconds):
-    """Format duration in seconds to human readable string"""
-    if seconds is None:
-        return "N/A"
-    
-    duration = timedelta(seconds=seconds)
-    if duration.days > 0:
-        return f"{duration.days}d {duration.seconds//3600}h {(duration.seconds%3600)//60}m"
-    elif duration.seconds > 3600:
-        return f"{duration.seconds//3600}h {(duration.seconds%3600)//60}m"
-    elif duration.seconds > 60:
-        return f"{duration.seconds//60}m {duration.seconds%60}s"
-    else:
-        return f"{duration.seconds}s"
 
 def get_job_type(job_id):
     """Determine job type from job ID"""
@@ -116,264 +101,218 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Controls row
-col1, col2 = st.columns([3, 1])
-with col1:
+# Controls
+col_ctl1, col_ctl2 = st.columns([3, 1])
+with col_ctl1:
     auto_refresh = st.checkbox("Auto-refresh (every 5 seconds)", value=True)
-with col2:
-    show_all = st.checkbox("Show all jobs", value=False, help="Show all jobs instead of only cached ones")
+with col_ctl2:
+    show_all = st.checkbox("Show all jobs", value=False, help="Show all jobs instead of only session jobs")
 
-# Search section
-st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Search Jobs</div>', unsafe_allow_html=True)
+# Search
+st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Search</div>', unsafe_allow_html=True)
 search_job_id = st.text_input(
-    "Search by Job ID (shows related jobs too):",
-    placeholder="e.g., cluster_20251213_011228_4c51c6a5",
-    help="Enter a job ID to find it and all related pipeline jobs"
+    "Job ID",
+    placeholder="e.g., pipeline_20260408_ab3f9c12",
+    label_visibility="collapsed",
+    help="Enter a job ID to find it and all related jobs",
+    key="tm_search",
 )
 
-# Get all jobs
+# Load jobs
 all_jobs = get_all_job_statuses()
 
-# Filter jobs based on search or cached status
 if search_job_id:
-    # Smart search: show the searched job and all related jobs
-    related_job_ids = get_related_jobs(search_job_id, all_jobs)
-    jobs = [job for job in all_jobs if job.get('job_id', '') in related_job_ids]
-
+    related_job_ids = get_related_jobs(search_job_id.strip(), all_jobs)
+    jobs = [j for j in all_jobs if j.get('job_id', '') in related_job_ids]
     if not jobs:
-        st.warning(f"Job ID '{search_job_id}' not found.")
+        st.warning(f"No jobs found for: {search_job_id.strip()}")
     else:
         st.success(f"Found {len(jobs)} related job(s)")
 elif show_all:
-    # Show all jobs
     jobs = all_jobs
 else:
-    # Show only cached jobs (jobs from current session)
-    cached_job_ids = st.session_state.get('cached_job_ids', {})
-    cached_ids_list = list(cached_job_ids.values())
-    jobs = [job for job in all_jobs if job.get('job_id', '') in cached_ids_list]
+    cached_ids = list(st.session_state.get('cached_job_ids', {}).values())
+    jobs = [j for j in all_jobs if j.get('job_id', '') in cached_ids]
+    if not jobs and cached_ids:
+        st.info("Cached jobs not found in results directory — they may have been deleted.")
+    elif not cached_ids:
+        st.info("No jobs in this session yet. Enable 'Show all jobs' to browse everything.")
 
-    if not jobs and cached_ids_list:
-        st.info("No cached jobs found in results directory. They may have been deleted.")
-    elif not cached_ids_list:
-        st.info("No cached jobs yet. Run tasks in other steps to see them here, or check 'Show all jobs' to view everything.")
+if not jobs:
+    if auto_refresh:
+        time.sleep(5)
+        st.rerun()
+    st.stop()
 
-if jobs:
-    # Create DataFrame for display
-    job_data = []
-    for job in jobs:
-        job_data.append({
-            'Job ID': job.get('job_id', 'N/A'),
-            'Type': get_job_type(job.get('job_id', '')),
-            'Status': job.get('status', 'Unknown'),
-            'Step': job.get('step', 'N/A'),
-            'Task State': job.get('task_state', 'N/A'),
-            'Last Updated': job.get('last_updated', 'N/A')
-        })
-    
-    df = pd.DataFrame(job_data)
-    
-    # Filter options
-    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Filter</div>', unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        status_filter = st.selectbox(
-            "Filter by Status",
-            options=['All'] + list(df['Status'].unique()),
-            key="status_filter"
-        )
-    
-    with col2:
-        type_filter = st.selectbox(
-            "Filter by Type",
-            options=['All'] + list(df['Type'].unique()),
-            key="type_filter"
-        )
-    
-    with col3:
-        state_filter = st.selectbox(
-            "Filter by Task State",
-            options=['All'] + list(df['Task State'].unique()),
-            key="state_filter"
-        )
-    
-    # Apply filters
-    filtered_df = df.copy()
-    if status_filter != 'All':
-        filtered_df = filtered_df[filtered_df['Status'] == status_filter]
-    if type_filter != 'All':
-        filtered_df = filtered_df[filtered_df['Type'] == type_filter]
-    if state_filter != 'All':
-        filtered_df = filtered_df[filtered_df['Task State'] == state_filter]
-    
-    # Display summary metrics
-    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Summary</div>', unsafe_allow_html=True)
-    if search_job_id:
-        view_label, view_val = "View Mode", "Search"
-    elif show_all:
-        view_label, view_val = "View Mode", "All Jobs"
-    else:
-        view_label, view_val = "Cached Jobs", str(len(st.session_state.get('cached_job_ids', {}).values()))
+# ── Summary metrics ──────────────────────────────────────────────────────────
+total_jobs     = len(jobs)
+running_jobs   = sum(1 for j in jobs if j.get('status') in ('running', 'submitted'))
+completed_jobs = sum(1 for j in jobs if j.get('status') == 'completed')
+failed_jobs    = sum(1 for j in jobs if j.get('status') == 'failed')
 
-    total_jobs   = len(df)
-    running_jobs = len(df[df['Status'].isin(['running', 'submitted'])])
-    completed_jobs = len(df[df['Status'] == 'completed'])
-    failed_jobs  = len(df[df['Status'] == 'failed'])
-
-    col1, col2, col3, col4, col5 = st.columns(5)
-    for col, label, val in zip(
-        [col1, col2, col3, col4, col5],
-        [view_label, "Showing", "Running", "Completed", "Failed"],
-        [view_val, str(total_jobs), str(running_jobs), str(completed_jobs), str(failed_jobs)],
-    ):
-        with col:
-            st.markdown(
-                f'<div class="ph-metric"><div class="ph-metric-label">{label}</div>'
-                f'<div class="ph-metric-value">{val}</div></div>',
-                unsafe_allow_html=True,
-            )
-    
-    # Display tasks table
-    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Task Details</div>', unsafe_allow_html=True)
-    
-    if not filtered_df.empty:
-        # Style the dataframe
-        def color_status(val):
-            if val == 'completed':
-                return 'background-color: rgba(0,168,133,.10); color: #00a085'
-            elif val in ('running', 'submitted'):
-                return 'background-color: rgba(45,116,218,.10); color: #2d74da'
-            elif val == 'failed':
-                return 'background-color: rgba(214,48,49,.10); color: #d63031'
-            else:
-                return 'color: #9aa0b8'
-        
-        styled_df = filtered_df.style.applymap(color_status, subset=['Status'])
-        st.dataframe(styled_df, use_container_width=True)
-        
-        # Detailed view for selected job
-        st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Detailed View</div>', unsafe_allow_html=True)
-        selected_job_id = st.selectbox(
-            "Select a job for detailed information:",
-            options=filtered_df['Job ID'].tolist(),
-            key="selected_job"
+m1, m2, m3, m4 = st.columns(4)
+for col, label, val in zip(
+    [m1, m2, m3, m4],
+    ["Total", "Running", "Completed", "Failed"],
+    [total_jobs, running_jobs, completed_jobs, failed_jobs],
+):
+    with col:
+        st.markdown(
+            f'<div class="ph-metric"><div class="ph-metric-label">{label}</div>'
+            f'<div class="ph-metric-value">{val}</div></div>',
+            unsafe_allow_html=True,
         )
-        
-        if selected_job_id:
-            selected_job = next((job for job in jobs if job.get('job_id') == selected_job_id), None)
-            
-            if selected_job:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Job Information</div>', unsafe_allow_html=True)
-                    st.write(f"**Job ID:** {selected_job.get('job_id', 'N/A')}")
-                    st.write(f"**Type:** {get_job_type(selected_job.get('job_id', ''))}")
-                    st.write(f"**Status:** {selected_job.get('status', 'N/A')}")
-                    st.write(f"**Step:** {selected_job.get('step', 'N/A')}")
-                    st.write(f"**Task State:** {selected_job.get('task_state', 'N/A')}")
-                    
-                    if 'last_updated' in selected_job:
-                        try:
-                            last_updated = datetime.fromisoformat(selected_job['last_updated'])
-                            st.write(f"**Last Updated:** {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
-                        except (ValueError, TypeError):
-                            st.write(f"**Last Updated:** {selected_job['last_updated']}")
-                
-                with col2:
-                    st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Task Information</div>', unsafe_allow_html=True)
-                    if 'task_id' in selected_job:
-                        st.write(f"**Task ID:** {selected_job['task_id']}")
-                        
-                        try:
-                            task = celery_app.AsyncResult(selected_job['task_id'])
-                            st.write(f"**Task State:** {task.state}")
-                            
-                            if task.info:
-                                if isinstance(task.info, dict):
-                                    for key, value in task.info.items():
-                                        if key == 'progress':
-                                            # Type check to prevent crash on non-numeric values
-                                            if isinstance(value, (int, float)):
-                                                st.write(f"**Progress:** {value:.1f}%")
-                                            else:
-                                                st.write(f"**Progress:** {value}")
-                                        elif key == 'current_step':
-                                            st.write(f"**Current Step:** {value}")
-                                        else:
-                                            st.write(f"**{key.title()}:** {value}")
-                                else:
-                                    st.write(f"**Task Info:** {task.info}")
-                        except Exception as e:
-                            st.error(f"Error getting task info: {str(e)}")
-                
-                # Show result information if available
-                if 'result_info' in selected_job:
-                    st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Results</div>', unsafe_allow_html=True)
-                    result_info = selected_job['result_info']
-                    
-                    if isinstance(result_info, dict):
-                        # Display metrics
-                        metrics_cols = st.columns(min(4, len(result_info)))
-                        for i, (key, value) in enumerate(result_info.items()):
-                            with metrics_cols[i % len(metrics_cols)]:
-                                st.metric(key.replace('_', ' ').title(), value)
-                    
-                    # Show output files if available
-                    if 'output_files' in result_info:
-                        st.markdown("**Generated Files:**")
-                        for file_path in result_info['output_files']:
-                            if os.path.exists(file_path):
-                                file_name = os.path.basename(file_path)
-                                st.write(f"• {file_name}")
-                
-                # Action buttons
-                st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Actions</div>', unsafe_allow_html=True)
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    if st.button("Refresh", key=f"refresh_{selected_job_id}"):
-                        st.rerun()
-                
-                with col2:
-                    if st.button("Clear job data", key=f"clear_{selected_job_id}"):
-                        # Remove status file
-                        status_file = selected_job.get('status_file')
-                        if status_file and os.path.exists(status_file):
-                            os.remove(status_file)
-                        st.success("Job data cleared!")
-                        st.rerun()
-                
-                with col3:
-                    if st.button("Download results", key=f"download_{selected_job_id}"):
-                        # Create ZIP of results
-                        job_results_dir = os.path.join(RESULTS_DIR, selected_job_id)
-                        if os.path.exists(job_results_dir):
-                            import zipfile
-                            zip_path = os.path.join(RESULTS_DIR, f"{selected_job_id}_results.zip")
-                            
-                            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                                for root, dirs, files in os.walk(job_results_dir):
-                                    for file in files:
-                                        file_path = os.path.join(root, file)
-                                        arcname = os.path.relpath(file_path, job_results_dir)
-                                        zipf.write(file_path, arcname)
-                            
-                            with open(zip_path, 'rb') as f:
-                                st.download_button(
-                                    label="Download Results (ZIP)",
-                                    data=f.read(),
-                                    file_name=f"{selected_job_id}_results.zip",
-                                    mime="application/zip",
-                                    key=f"download_results_{selected_job_id}"
-                                )
-    else:
-        st.info("No tasks match the selected filters.")
+
+# ── Jobs table ───────────────────────────────────────────────────────────────
+st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:20px 0 8px;">Jobs</div>', unsafe_allow_html=True)
+
+# Filter bar — Status and Type only
+col_f1, col_f2 = st.columns(2)
+job_rows = [
+    {
+        'Job ID':       j.get('job_id', 'N/A'),
+        'Type':         get_job_type(j.get('job_id', '')),
+        'Status':       j.get('status', 'unknown'),
+        'Last Updated': j.get('last_updated', 'N/A'),
+    }
+    for j in jobs
+]
+df = pd.DataFrame(job_rows)
+
+with col_f1:
+    status_filter = st.selectbox("Status", ['All'] + sorted(df['Status'].unique().tolist()), key="tm_sf")
+with col_f2:
+    type_filter = st.selectbox("Type", ['All'] + sorted(df['Type'].unique().tolist()), key="tm_tf")
+
+filtered_df = df.copy()
+if status_filter != 'All':
+    filtered_df = filtered_df[filtered_df['Status'] == status_filter]
+if type_filter != 'All':
+    filtered_df = filtered_df[filtered_df['Type'] == type_filter]
+
+if filtered_df.empty:
+    st.info("No jobs match the selected filters.")
+else:
+    def color_status(val):
+        if val == 'completed':
+            return 'background-color: rgba(0,168,133,.10); color: #00a085'
+        elif val in ('running', 'submitted'):
+            return 'background-color: rgba(45,116,218,.10); color: #2d74da'
+        elif val == 'failed':
+            return 'background-color: rgba(214,48,49,.10); color: #d63031'
+        return 'color: #9aa0b8'
+
+    st.dataframe(
+        filtered_df.style.map(color_status, subset=['Status']),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # ── Detailed panel ────────────────────────────────────────────────────────
+    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:20px 0 8px;">Detail</div>', unsafe_allow_html=True)
+    selected_job_id = st.selectbox(
+        "Select job",
+        options=filtered_df['Job ID'].tolist(),
+        label_visibility="collapsed",
+        key="tm_sel",
+    )
+
+    selected_job = next((j for j in jobs if j.get('job_id') == selected_job_id), None)
+
+    if selected_job:
+        status = selected_job.get('status', 'unknown')
+
+        # Status badge color
+        badge_kind = (
+            'done'   if status == 'completed' else
+            'active' if status in ('running', 'submitted') else
+            'locked' if status == 'failed' else
+            'ready'
+        )
+
+        _panel_class = 'ph-panel-active' if status in ('running', 'submitted') else 'ph-panel-done'
+        st.markdown(f'<div class="ph-panel {_panel_class}">', unsafe_allow_html=True)
+
+        # Header row
+        st.markdown(
+            f'<div class="ph-panel-header">'
+            f'<p class="ph-panel-title">{selected_job_id}</p>'
+            f'<span class="ph-badge ph-badge-{badge_kind}">{status}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="ph-panel-body">', unsafe_allow_html=True)
+
+        # Meta row
+        last_updated = selected_job.get('last_updated', '')
+        try:
+            last_updated = datetime.fromisoformat(last_updated).strftime('%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            pass
+
+        st.markdown(
+            f'<div style="font-size:12px;color:#888;margin-bottom:12px;">'
+            f'Type: <strong>{get_job_type(selected_job_id)}</strong>'
+            f'&nbsp;&nbsp;·&nbsp;&nbsp;Last updated: <strong>{last_updated or "N/A"}</strong>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Live progress if running
+        if status in ('running', 'submitted') and 'task_id' in selected_job:
+            try:
+                task = celery_app.AsyncResult(selected_job['task_id'])
+                meta = task.info or {}
+                if isinstance(meta, dict):
+                    pct  = meta.get('progress', 0)
+                    step = meta.get('current_step', 'Processing...')
+                    st.markdown(
+                        f'<div class="ph-prog-meta">'
+                        f'<span class="ph-prog-text">{step}</span>'
+                        f'<span class="ph-prog-pct">{pct}%</span></div>'
+                        f'<div class="ph-prog-outer"><div class="ph-prog-inner" style="width:{pct}%"></div></div>',
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                pass
+
+        # Result metrics (completed jobs) — skip paths, job IDs, CSV filenames
+        result_info = selected_job.get('result_info', {})
+        if isinstance(result_info, dict):
+            _SKIP_SUFFIXES = ('_job_id', '_path', '_dir', '_file', '_csv')
+            numeric_items = [
+                (k, v) for k, v in result_info.items()
+                if isinstance(v, (int, float))
+                and not any(k.endswith(s) for s in _SKIP_SUFFIXES)
+            ]
+            if numeric_items:
+                cols = st.columns(min(4, len(numeric_items)))
+                for i, (key, val) in enumerate(numeric_items):
+                    with cols[i]:
+                        label = key.replace('_', ' ').title()
+                        st.markdown(
+                            f'<div class="ph-metric"><div class="ph-metric-label">{label}</div>'
+                            f'<div class="ph-metric-value">{val}</div></div>',
+                            unsafe_allow_html=True,
+                        )
+
+        st.markdown('</div></div>', unsafe_allow_html=True)
+
+        # Actions
+        st.markdown('<div style="font-size:12px;color:#9aa0b8;margin:12px 0 6px;">Actions</div>', unsafe_allow_html=True)
+        act1, act2 = st.columns(2)
+        with act1:
+            if st.button("Refresh", key=f"tm_refresh_{selected_job_id}"):
+                st.rerun()
+        with act2:
+            if st.button("Clear job data", key=f"tm_clear_{selected_job_id}"):
+                status_file = selected_job.get('status_file')
+                if status_file and os.path.exists(status_file):
+                    os.remove(status_file)
+                st.success("Job data cleared.")
+                st.rerun()
 
 # Auto-refresh
 if auto_refresh:
     time.sleep(5)
-    st.rerun() 
+    st.rerun()
