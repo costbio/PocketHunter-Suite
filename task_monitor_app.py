@@ -102,14 +102,10 @@ st.markdown(
 )
 
 # Controls
-col_ctl1, col_ctl2 = st.columns([3, 1])
-with col_ctl1:
-    auto_refresh = st.checkbox("Auto-refresh (every 5 seconds)", value=True)
-with col_ctl2:
-    show_all = st.checkbox("Show all jobs", value=False, help="Show all jobs instead of only session jobs")
+auto_refresh = st.checkbox("Auto-refresh (every 5 seconds)", value=True)
 
 # Search
-st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Search</div>', unsafe_allow_html=True)
+st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Look up by Job ID</div>', unsafe_allow_html=True)
 search_job_id = st.text_input(
     "Job ID",
     placeholder="e.g., pipeline_20260408_ab3f9c12",
@@ -118,7 +114,7 @@ search_job_id = st.text_input(
     key="tm_search",
 )
 
-# Load jobs
+# Load jobs — only from this session or explicit search
 all_jobs = get_all_job_statuses()
 
 if search_job_id:
@@ -128,15 +124,13 @@ if search_job_id:
         st.warning(f"No jobs found for: {search_job_id.strip()}")
     else:
         st.success(f"Found {len(jobs)} related job(s)")
-elif show_all:
-    jobs = all_jobs
 else:
     cached_ids = list(st.session_state.get('cached_job_ids', {}).values())
     jobs = [j for j in all_jobs if j.get('job_id', '') in cached_ids]
     if not jobs and cached_ids:
-        st.info("Cached jobs not found in results directory — they may have been deleted.")
+        st.info("Session jobs not found in results directory — they may have been deleted.")
     elif not cached_ids:
-        st.info("No jobs in this session yet. Enable 'Show all jobs' to browse everything.")
+        st.info("No jobs in this session. Enter a Job ID above to look one up.")
 
 if not jobs:
     if auto_refresh:
