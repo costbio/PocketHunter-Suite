@@ -268,8 +268,74 @@ def _resume_from_job_id(job_id: str) -> None:
 
 # Stage detection placeholder — implemented in Task 7
 def _detect_stage_from_disk(job_id: str, results_dir: str) -> dict:
-    """Implemented in Task 7."""
-    return {'valid': False, 'stage': 'unknown'}
+    """
+    Read disk state for job_id and return the wizard stage to restore.
+
+    Returns:
+        {
+          'valid': bool,
+          'stage': 'pipeline_running'|'pipeline_done'|'disc_running'|'complete'|'unknown',
+          'pipeline_task_id': str|None,
+          'pipeline_result': dict|None,
+          'disc_job_id': str|None,
+          'disc_task_id': str|None,
+        }
+    """
+    status_file = os.path.join(results_dir, f"{job_id}_status.json")
+    if not os.path.exists(status_file):
+        return {'valid': False, 'stage': 'unknown'}
+
+    try:
+        with open(status_file) as f:
+            status = json.load(f)
+    except Exception:
+        return {'valid': False, 'stage': 'unknown'}
+
+    pipeline_task_id = status.get('task_id')
+    result_info      = status.get('result_info', {})
+    pipeline_status  = status.get('status', '')
+    disc_job_id      = status.get('disc_job_id')
+    disc_task_id     = status.get('disc_task_id')
+
+    base = {
+        'valid': True,
+        'pipeline_task_id': pipeline_task_id,
+        'pipeline_result': result_info or None,
+        'disc_job_id': disc_job_id,
+        'disc_task_id': disc_task_id,
+    }
+
+    # Pipeline still running
+    if pipeline_status == 'running':
+        return {**base, 'stage': 'pipeline_running'}
+
+    # Pipeline done — check for cluster_representatives.csv
+    reps_csv = os.path.join(results_dir, job_id, 'pocket_clusters', 'cluster_representatives.csv')
+    if not os.path.exists(reps_csv):
+        # Pipeline completed but no cluster results yet — treat as still running
+        return {**base, 'stage': 'pipeline_running'}
+
+    # No discrimination started
+    if not disc_job_id:
+        return {**base, 'stage': 'pipeline_done'}
+
+    # Discrimination started — check its status file
+    disc_status_file = os.path.join(results_dir, f"{disc_job_id}_status.json")
+    if not os.path.exists(disc_status_file):
+        return {**base, 'stage': 'disc_running'}
+
+    try:
+        with open(disc_status_file) as f:
+            disc_status = json.load(f)
+    except Exception:
+        return {**base, 'stage': 'disc_running'}
+
+    if disc_status.get('status') == 'completed':
+        disc_csv = disc_status.get('result_info', {}).get('discrimination_results_csv')
+        if disc_csv and os.path.exists(disc_csv):
+            return {**base, 'stage': 'complete'}
+
+    return {**base, 'stage': 'disc_running', 'disc_task_id': disc_status.get('task_id', disc_task_id)}
 
 
 def _render_job_banner(job_id: str, show_warn: bool = True) -> None:
