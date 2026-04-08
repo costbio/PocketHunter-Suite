@@ -81,6 +81,22 @@ def initialize_session_state():
     if 'selected_pose' not in st.session_state:
         st.session_state.selected_pose = None
 
+    # Wizard state
+    if 'wiz_stage' not in st.session_state:
+        # Stages: 'setup' | 'pipeline_running' | 'pipeline_done' | 'disc_ready'
+        #         | 'disc_running' | 'complete' | 'error'
+        st.session_state.wiz_stage = 'setup'
+    if 'wiz_job_id' not in st.session_state:
+        st.session_state.wiz_job_id = None        # pipeline job ID
+    if 'wiz_task_id' not in st.session_state:
+        st.session_state.wiz_task_id = None       # pipeline Celery task ID
+    if 'wiz_pipeline_result' not in st.session_state:
+        st.session_state.wiz_pipeline_result = None  # dict from successful pipeline
+    if 'wiz_disc_job_id' not in st.session_state:
+        st.session_state.wiz_disc_job_id = None   # discrimination job ID
+    if 'wiz_disc_task_id' not in st.session_state:
+        st.session_state.wiz_disc_task_id = None  # discrimination Celery task ID
+
 
 def get_pdb_selection_key(filename: str, row_index=None) -> str:
     """
