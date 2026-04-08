@@ -272,6 +272,140 @@ def _detect_stage_from_disk(job_id: str, results_dir: str) -> dict:
     return {'valid': False, 'stage': 'unknown'}
 
 
+def _render_job_banner(job_id: str, show_warn: bool = True) -> None:
+    warn_html = (
+        '<div class="ph-job-warn">Your job continues running if you close this tab. '
+        'Save this ID to resume later.</div>'
+    ) if show_warn else ""
+    st.markdown(
+        f'<div class="ph-job-banner">'
+        f'<div class="ph-job-label">Job ID — save this</div>'
+        f'<div class="ph-job-value">{job_id}</div>'
+        f'{warn_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.code(job_id, language=None)  # one-click copy via Streamlit code block
+
+
+def _render_done_panel_step1() -> None:
+    _panel_open("ph-panel-done")
+    _panel_header("Step 1 — Input Files &amp; Parameters", "Done", "done")
+    _panel_close()
+
+
+def _pipeline_stage_chips(stage_name: str) -> str:
+    """Return HTML chips for Extract / Detect / Cluster based on current stage."""
+    stages = [
+        ('extract', 'Frame extraction'),
+        ('detect',  'Pocket detection'),
+        ('cluster', 'Clustering'),
+    ]
+    html = ""
+    for key, label in stages:
+        if stage_name in ('cluster', 'cluster_done') and key in ('extract', 'detect'):
+            cls = "ph-chip-done"
+        elif stage_name == 'detect' and key == 'extract':
+            cls = "ph-chip-done"
+        elif stage_name == key or (stage_name == 'cluster_done' and key == 'cluster'):
+            cls = "ph-chip-active"
+        else:
+            cls = "ph-chip-wait"
+        html += f'<span class="ph-chip {cls}">{label}</span>'
+    return html
+
+
+def _render_pipeline_progress(task_id: str, job_id: str) -> None:
+    """Poll the pipeline Celery task and render progress. Reruns every 3 s while running."""
+    task = celery_app.AsyncResult(task_id)
+    state = task.state
+    meta  = task.info or {}
+
+    _render_job_banner(job_id)
+    _render_done_panel_step1()
+
+    _panel_open("ph-panel-active")
+    _panel_header("Step 2 — Extract · Detect · Cluster", "Running", "active")
+    _panel_body_open()
+
+    if state == 'PENDING':
+        st.markdown(
+            '<div class="ph-prog-meta">'
+            '<span class="ph-prog-text">Waiting in queue…</span>'
+            '<span class="ph-prog-pct">0%</span></div>'
+            '<div class="ph-prog-outer"><div class="ph-prog-inner" style="width:0%"></div></div>',
+            unsafe_allow_html=True,
+        )
+        _panel_body_close()
+        _panel_close()
+        _render_locked_panel("Step 3 — Discrimination Analysis")
+        time.sleep(4)
+        st.rerun()
+
+    elif state == 'PROGRESS':
+        pct       = meta.get('progress', 0)
+        step_text = meta.get('current_step', 'Processing…')
+        stage_key = meta.get('stage', '')
+        frames    = meta.get('frames_extracted')
+        pockets   = meta.get('pockets_detected')
+
+        st.markdown(
+            f'<div class="ph-prog-meta">'
+            f'<span class="ph-prog-text">{step_text}</span>'
+            f'<span class="ph-prog-pct">{pct}%</span>'
+            f'</div>'
+            f'<div class="ph-prog-outer"><div class="ph-prog-inner" style="width:{pct}%"></div></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(_pipeline_stage_chips(stage_key), unsafe_allow_html=True)
+
+        log_lines = []
+        if frames is not None:
+            log_lines.append(f"Extracted {frames} frames → pdbs/")
+        if pockets is not None:
+            log_lines.append(f"{pockets} pockets detected so far")
+        if log_lines:
+            lines_html = "<br>".join(log_lines)
+            st.markdown(
+                f'<div class="ph-log"><div class="ph-log-label">Log</div>{lines_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+        _panel_body_close()
+        _panel_close()
+        _render_locked_panel("Step 3 — Discrimination Analysis")
+        time.sleep(3)
+        st.rerun()
+
+    elif state == 'SUCCESS':
+        result = task.result or {}
+        _panel_body_close()
+        _panel_close()
+        st.session_state.wiz_pipeline_result = result
+        st.session_state.wiz_stage = 'pipeline_done'
+        st.session_state.cached_job_ids['pipeline'] = job_id
+        st.session_state.cached_job_ids['cluster']  = result.get('cluster_job_id', job_id)
+        st.rerun()
+
+    elif state in ('FAILURE', 'REVOKED'):
+        err = meta.get('exc_message', str(meta)) if isinstance(meta, dict) else str(meta)
+        st.error(f"Pipeline failed: {err}")
+        _panel_body_close()
+        _panel_close()
+        st.session_state.wiz_stage = 'error'
+        if st.button("Start over", key="wiz_restart_from_error"):
+            for k in ('wiz_stage','wiz_job_id','wiz_task_id','wiz_pipeline_result',
+                      'wiz_disc_job_id','wiz_disc_task_id'):
+                st.session_state[k] = None if k != 'wiz_stage' else 'setup'
+            st.rerun()
+
+    else:
+        _panel_body_close()
+        _panel_close()
+        time.sleep(3)
+        st.rerun()
+
+
 # ── Page render ──────────────────────────────────────────────────────────────
 
 stage = st.session_state.wiz_stage
@@ -283,5 +417,12 @@ if stage == 'setup':
     _render_locked_panel("Step 2 — Extract · Detect · Cluster")
     _render_locked_panel("Step 3 — Discrimination Analysis")
 
+elif stage == 'pipeline_running':
+    _render_step_strip(2)
+    _render_pipeline_progress(
+        st.session_state.wiz_task_id,
+        st.session_state.wiz_job_id,
+    )
+
 else:
-    st.info("Pipeline stages (Tasks 4-7) — coming in next tasks.")
+    st.info("Steps 3-4 (Tasks 5-6) — coming soon.")
