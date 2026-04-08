@@ -70,6 +70,10 @@ def get_job_type(job_id):
         return 'Cluster Pockets'
     elif job_id.startswith('dock'):
         return 'Molecular Docking'
+    elif job_id.startswith('pipeline_'):
+        return 'Pipeline'
+    elif job_id.startswith('disc_'):
+        return 'Discrimination'
     else:
         return 'Unknown'
 
@@ -104,22 +108,23 @@ def get_related_jobs(job_id, all_jobs):
     return related
 
 # Main UI
-st.markdown("""
-<div class="metric-card">
-    <h2>📊 Task Monitor</h2>
-    <p>Monitor all running and completed PocketHunter tasks</p>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    '<div class="ph-panel ph-panel-active" style="padding:14px 18px;margin-bottom:18px;">'
+    '<span style="font-size:15px;font-weight:600;color:#2a3a4a;">Task Monitor</span>'
+    '<span style="font-size:12px;color:#9aa0b8;margin-left:10px;">All running and completed PocketHunter jobs</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
 
 # Controls row
 col1, col2 = st.columns([3, 1])
 with col1:
-    auto_refresh = st.checkbox("🔄 Auto-refresh (every 5 seconds)", value=True)
+    auto_refresh = st.checkbox("Auto-refresh (every 5 seconds)", value=True)
 with col2:
     show_all = st.checkbox("Show all jobs", value=False, help="Show all jobs instead of only cached ones")
 
 # Search section
-st.markdown("### 🔍 Search Jobs")
+st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Search Jobs</div>', unsafe_allow_html=True)
 search_job_id = st.text_input(
     "Search by Job ID (shows related jobs too):",
     placeholder="e.g., cluster_20251213_011228_4c51c6a5",
@@ -136,9 +141,9 @@ if search_job_id:
     jobs = [job for job in all_jobs if job.get('job_id', '') in related_job_ids]
 
     if not jobs:
-        st.warning(f"❌ Job ID '{search_job_id}' not found.")
+        st.warning(f"Job ID '{search_job_id}' not found.")
     else:
-        st.success(f"✅ Found {len(jobs)} related job(s)")
+        st.success(f"Found {len(jobs)} related job(s)")
 elif show_all:
     # Show all jobs
     jobs = all_jobs
@@ -149,9 +154,9 @@ else:
     jobs = [job for job in all_jobs if job.get('job_id', '') in cached_ids_list]
 
     if not jobs and cached_ids_list:
-        st.info("💡 No cached jobs found in results directory. They may have been deleted.")
+        st.info("No cached jobs found in results directory. They may have been deleted.")
     elif not cached_ids_list:
-        st.info("💡 No cached jobs yet. Run tasks in other steps to see them here, or check 'Show all jobs' to view everything.")
+        st.info("No cached jobs yet. Run tasks in other steps to see them here, or check 'Show all jobs' to view everything.")
 
 if jobs:
     # Create DataFrame for display
@@ -169,7 +174,7 @@ if jobs:
     df = pd.DataFrame(job_data)
     
     # Filter options
-    st.markdown("### 🔍 Filter Tasks")
+    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Filter</div>', unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
     
@@ -204,58 +209,52 @@ if jobs:
         filtered_df = filtered_df[filtered_df['Task State'] == state_filter]
     
     # Display summary metrics
-    st.markdown("### 📈 Summary")
+    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Summary</div>', unsafe_allow_html=True)
+    if search_job_id:
+        view_label, view_val = "View Mode", "Search"
+    elif show_all:
+        view_label, view_val = "View Mode", "All Jobs"
+    else:
+        view_label, view_val = "Cached Jobs", str(len(st.session_state.get('cached_job_ids', {}).values()))
+
+    total_jobs   = len(df)
+    running_jobs = len(df[df['Status'].isin(['running', 'submitted'])])
+    completed_jobs = len(df[df['Status'] == 'completed'])
+    failed_jobs  = len(df[df['Status'] == 'failed'])
 
     col1, col2, col3, col4, col5 = st.columns(5)
-
-    with col1:
-        # Show current view mode
-        if search_job_id:
-            st.metric("View Mode", "Search")
-        elif show_all:
-            st.metric("View Mode", "All Jobs")
-        else:
-            cached_count = len(st.session_state.get('cached_job_ids', {}).values())
-            st.metric("Cached Jobs", cached_count)
-
-    with col2:
-        total_jobs = len(df)
-        st.metric("Showing", total_jobs)
-
-    with col3:
-        running_jobs = len(df[df['Status'].isin(['running', 'submitted'])])
-        st.metric("Running", running_jobs)
-
-    with col4:
-        completed_jobs = len(df[df['Status'] == 'completed'])
-        st.metric("Completed", completed_jobs)
-
-    with col5:
-        failed_jobs = len(df[df['Status'] == 'failed'])
-        st.metric("Failed", failed_jobs)
+    for col, label, val in zip(
+        [col1, col2, col3, col4, col5],
+        [view_label, "Showing", "Running", "Completed", "Failed"],
+        [view_val, str(total_jobs), str(running_jobs), str(completed_jobs), str(failed_jobs)],
+    ):
+        with col:
+            st.markdown(
+                f'<div class="ph-metric"><div class="ph-metric-label">{label}</div>'
+                f'<div class="ph-metric-value">{val}</div></div>',
+                unsafe_allow_html=True,
+            )
     
     # Display tasks table
-    st.markdown("### 📋 Task Details")
+    st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Task Details</div>', unsafe_allow_html=True)
     
     if not filtered_df.empty:
         # Style the dataframe
         def color_status(val):
             if val == 'completed':
-                return 'background-color: #d4edda; color: #155724'
-            elif val == 'running':
-                return 'background-color: #d1ecf1; color: #0c5460'
+                return 'background-color: rgba(0,168,133,.10); color: #00a085'
+            elif val in ('running', 'submitted'):
+                return 'background-color: rgba(45,116,218,.10); color: #2d74da'
             elif val == 'failed':
-                return 'background-color: #f8d7da; color: #721c24'
-            elif val == 'submitted':
-                return 'background-color: #fff3cd; color: #856404'
+                return 'background-color: rgba(214,48,49,.10); color: #d63031'
             else:
-                return ''
+                return 'color: #9aa0b8'
         
         styled_df = filtered_df.style.applymap(color_status, subset=['Status'])
         st.dataframe(styled_df, use_container_width=True)
         
         # Detailed view for selected job
-        st.markdown("### 🔍 Detailed View")
+        st.markdown('<div style="font-size:13px;font-weight:600;color:#2a3a4a;margin:18px 0 8px;">Detailed View</div>', unsafe_allow_html=True)
         selected_job_id = st.selectbox(
             "Select a job for detailed information:",
             options=filtered_df['Job ID'].tolist(),
@@ -269,7 +268,7 @@ if jobs:
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    st.markdown("#### Job Information")
+                    st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Job Information</div>', unsafe_allow_html=True)
                     st.write(f"**Job ID:** {selected_job.get('job_id', 'N/A')}")
                     st.write(f"**Type:** {get_job_type(selected_job.get('job_id', ''))}")
                     st.write(f"**Status:** {selected_job.get('status', 'N/A')}")
@@ -284,7 +283,7 @@ if jobs:
                             st.write(f"**Last Updated:** {selected_job['last_updated']}")
                 
                 with col2:
-                    st.markdown("#### Task Information")
+                    st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Task Information</div>', unsafe_allow_html=True)
                     if 'task_id' in selected_job:
                         st.write(f"**Task ID:** {selected_job['task_id']}")
                         
@@ -312,7 +311,7 @@ if jobs:
                 
                 # Show result information if available
                 if 'result_info' in selected_job:
-                    st.markdown("#### 📊 Results")
+                    st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Results</div>', unsafe_allow_html=True)
                     result_info = selected_job['result_info']
                     
                     if isinstance(result_info, dict):
@@ -331,16 +330,16 @@ if jobs:
                                 st.write(f"• {file_name}")
                 
                 # Action buttons
-                st.markdown("#### ⚡ Actions")
+                st.markdown('<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin-bottom:8px;">Actions</div>', unsafe_allow_html=True)
                 
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    if st.button("🔄 Refresh Job Status", key=f"refresh_{selected_job_id}"):
+                    if st.button("Refresh", key=f"refresh_{selected_job_id}"):
                         st.rerun()
                 
                 with col2:
-                    if st.button("🗑️ Clear Job Data", key=f"clear_{selected_job_id}"):
+                    if st.button("Clear job data", key=f"clear_{selected_job_id}"):
                         # Remove status file
                         status_file = selected_job.get('status_file')
                         if status_file and os.path.exists(status_file):
@@ -349,7 +348,7 @@ if jobs:
                         st.rerun()
                 
                 with col3:
-                    if st.button("📥 Download Results", key=f"download_{selected_job_id}"):
+                    if st.button("Download results", key=f"download_{selected_job_id}"):
                         # Create ZIP of results
                         job_results_dir = os.path.join(RESULTS_DIR, selected_job_id)
                         if os.path.exists(job_results_dir):
