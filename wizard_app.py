@@ -647,7 +647,16 @@ def _render_results(pipeline_job_id: str, disc_job_id: str) -> None:
         st.warning("Results file not found. The discrimination job may still be finishing.")
         return
 
+    _results_dir_real = os.path.realpath(RESULTS_DIR) + os.sep
+    if not os.path.realpath(results_csv).startswith(_results_dir_real):
+        st.error("Invalid results path.")
+        return
+
     df = _load_disc_results(results_csv)
+
+    if df.empty:
+        st.warning("Discrimination results are empty.")
+        return
 
     # ── Success banner ──
     st.markdown(
@@ -717,27 +726,31 @@ def _render_results(pipeline_job_id: str, disc_job_id: str) -> None:
         if os.path.exists(reps_csv_path):
             reps_df = pd.read_csv(reps_csv_path)
             top_cluster_id = top_row.get('cluster_id')
-            top_rep = reps_df[reps_df['cluster'] == top_cluster_id].iloc[0] if top_cluster_id is not None else reps_df.iloc[0]
-
-            pdb_name = str(top_rep['File name'])
-            if '_predictions' in pdb_name:
-                pdb_name = pdb_name.replace('_predictions', '')
-            if not pdb_name.endswith('.pdb'):
-                pdb_name += '.pdb'
-            pdb_path = os.path.join(RESULTS_DIR, pipeline_job_id, 'pdbs', pdb_name)
-
-            residues_raw = str(top_rep.get('residues', ''))
-            residues = [r.strip() for r in residues_raw.replace(',', ' ').split() if r.strip()]
-
-            st.markdown(
-                f'<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin:14px 0 6px;">'
-                f'Top-ranked structure — Cluster {top_cluster_id}</div>',
-                unsafe_allow_html=True,
-            )
-            if os.path.exists(pdb_path):
-                _show_molecule_3d_with_pocket(pdb_path, residues)
+            subset = reps_df[reps_df['cluster'] == top_cluster_id] if top_cluster_id is not None else reps_df
+            if subset.empty:
+                st.caption("Representative structure not found in cluster results.")
             else:
-                st.caption(f"PDB not found: {pdb_path}")
+                top_rep = subset.iloc[0]
+
+                pdb_name = str(top_rep['File name'])
+                if '_predictions' in pdb_name:
+                    pdb_name = pdb_name.replace('_predictions', '')
+                if not pdb_name.endswith('.pdb'):
+                    pdb_name += '.pdb'
+                pdb_path = os.path.join(RESULTS_DIR, pipeline_job_id, 'pdbs', pdb_name)
+
+                residues_raw = str(top_rep.get('residues', ''))
+                residues = [r.strip() for r in residues_raw.replace(',', ' ').split() if r.strip()]
+
+                st.markdown(
+                    f'<div style="font-size:12px;font-weight:600;color:#2a3a4a;margin:14px 0 6px;">'
+                    f'Top-ranked structure — Cluster {top_cluster_id}</div>',
+                    unsafe_allow_html=True,
+                )
+                if os.path.exists(pdb_path):
+                    _show_molecule_3d_with_pocket(pdb_path, residues)
+                else:
+                    st.caption(f"PDB not found: {pdb_path}")
 
     st.markdown('</div></div>', unsafe_allow_html=True)
 
