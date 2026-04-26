@@ -94,9 +94,9 @@ def get_related_jobs(job_id, all_jobs):
 
 # Main UI
 st.markdown(
-    '<div class="ph-panel ph-panel-active" style="padding:14px 18px;margin-bottom:18px;">'
-    '<span style="font-size:15px;font-weight:600;color:#2a3a4a;">Task Monitor</span>'
-    '<span style="font-size:12px;color:#9aa0b8;margin-left:10px;">All running and completed PocketHunter jobs</span>'
+    '<div class="ph-monitor-header">'
+    '<h3>Task Monitor</h3>'
+    '<p>All running and completed PocketHunter jobs</p>'
     '</div>',
     unsafe_allow_html=True,
 )
