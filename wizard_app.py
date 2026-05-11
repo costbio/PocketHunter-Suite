@@ -658,7 +658,7 @@ def _render_disc_progress(disc_task_id: str, disc_job_id: str, pipeline_job_id: 
 
 # ── Step 4: Results ──────────────────────────────────────────────────────────
 
-from visualizaton_utils import show_molecule_3d_with_pocket as _show_molecule_3d_wrapper
+from visualization_utils import show_molecule_3d_with_pocket as _show_molecule_3d_wrapper
 
 def _show_molecule_3d_with_pocket(pdb_path: str, pocket_residues: list,
                                    width: int = 400, height: int = 380) -> None:
