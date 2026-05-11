@@ -8,8 +8,6 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import py3Dmol
-import streamlit.components.v1 as components
 from tasks import run_pockethunter_pipeline
 from celery_app import celery_app
 from config import Config
@@ -80,39 +78,12 @@ def _resolve_pdb_path(file_name, job_id):
     return candidate
 
 
+from visualization_utils import show_molecule_3d_with_pocket as _show_molecule_3d
+
 def _show_molecule_3d_with_pocket(pdb_path, pocket_residues, width=400, height=420):
-    try:
-        with open(pdb_path, 'r') as f:
-            pdb_data = f.read()
-        highlight_specs = []
-        for res_str in pocket_residues:
-            parts = res_str.strip().split('_', 1)
-            if len(parts) == 2:
-                try:
-                    highlight_specs.append({'chain': parts[0], 'resi': int(parts[1])})
-                except ValueError:
-                    pass
-        view = py3Dmol.view(width=width, height=height)
-        view.addModel(pdb_data, 'pdb')
-        view.setStyle({}, {'cartoon': {'color': 'spectrum'}})
-        for spec in highlight_specs:
-            view.setStyle({'chain': spec['chain'], 'resi': spec['resi']},
-                          {'stick': {'color': 'orange', 'radius': 0.3}})
-        if highlight_specs:
-            chains = {}
-            for s in highlight_specs:
-                chains.setdefault(s['chain'], []).append(s['resi'])
-            for chain, resis in chains.items():
-                view.addSurface(py3Dmol.VDW, {'opacity': 0.4, 'color': 'orange'},
-                                {'chain': chain, 'resi': resis})
-            view.zoomTo({'resi': [s['resi'] for s in highlight_specs]})
-        else:
-            view.zoomTo()
-        view.spin(False)
-        html = f'<div style="border-radius:15px;overflow:hidden;">{view._make_html()}</div>'
-        components.html(html, height=height + 50, scrolling=False)
-    except Exception as e:
-        st.error(f"Error loading 3D structure: {e}")
+    """Render pocket 3D viewer with pipeline-specific defaults."""
+    _show_molecule_3d(pdb_path, pocket_residues, width=width, height=height,
+                       border_radius=15, extra_height=50)
 
 
 @st.cache_data(ttl=300)

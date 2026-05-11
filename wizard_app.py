@@ -19,8 +19,6 @@ import time
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import py3Dmol
-import streamlit.components.v1 as components
 from datetime import datetime
 from pathlib import Path
 
@@ -660,41 +658,12 @@ def _render_disc_progress(disc_task_id: str, disc_job_id: str, pipeline_job_id: 
 
 # ── Step 4: Results ──────────────────────────────────────────────────────────
 
+from visualizaton_utils import show_molecule_3d_with_pocket as _show_molecule_3d_wrapper
+
 def _show_molecule_3d_with_pocket(pdb_path: str, pocket_residues: list,
                                    width: int = 400, height: int = 380) -> None:
     """Render a py3Dmol viewer with pocket residues highlighted in orange."""
-    try:
-        with open(pdb_path, 'r') as f:
-            pdb_data = f.read()
-        specs = []
-        for res_str in pocket_residues:
-            parts = res_str.strip().split('_', 1)
-            if len(parts) == 2:
-                try:
-                    specs.append({'chain': parts[0], 'resi': int(parts[1])})
-                except ValueError:
-                    pass
-        view = py3Dmol.view(width=width, height=height)
-        view.addModel(pdb_data, 'pdb')
-        view.setStyle({}, {'cartoon': {'color': 'spectrum'}})
-        for s in specs:
-            view.setStyle({'chain': s['chain'], 'resi': s['resi']},
-                          {'stick': {'color': 'orange', 'radius': 0.3}})
-        if specs:
-            chains = {}
-            for s in specs:
-                chains.setdefault(s['chain'], []).append(s['resi'])
-            for chain, resis in chains.items():
-                view.addSurface(py3Dmol.VDW, {'opacity': 0.4, 'color': 'orange'},
-                                {'chain': chain, 'resi': resis})
-            view.zoomTo({'resi': [s['resi'] for s in specs]})
-        else:
-            view.zoomTo()
-        view.spin(False)
-        html = f'<div style="border-radius:10px;overflow:hidden;">{view._make_html()}</div>'
-        components.html(html, height=height + 40, scrolling=False)
-    except Exception as e:
-        st.warning(f"Could not load 3D structure: {e}")
+    _show_molecule_3d_wrapper(pdb_path, pocket_residues, width=width, height=height)
 
 
 @st.cache_data(ttl=300)

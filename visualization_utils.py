@@ -12,6 +12,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 import py3Dmol
+import streamlit.components.v1 as components
 import stmol  # For py3Dmol visualization in Streamlit
 import time # Added for unique key generation
 
@@ -1199,3 +1200,40 @@ def create_download_section(results_dir, job_id=None):
                     mime="text/csv",
                     key=f"download_clustered_csv{key_suffix}"
                 ) 
+def show_molecule_3d_with_pocket(pdb_path: str, pocket_residues: list,
+                                  width: int = 400, height: int = 380,
+                                  border_radius: int = 10,
+                                  extra_height: int = 40) -> None:
+    """Render a py3Dmol viewer with pocket residues highlighted in orange."""
+    try:
+        with open(pdb_path, 'r') as f:
+            pdb_data = f.read()
+        specs = []
+        for res_str in pocket_residues:
+            parts = res_str.strip().split('_', 1)
+            if len(parts) == 2:
+                try:
+                    specs.append({'chain': parts[0], 'resi': int(parts[1])})
+                except ValueError:
+                    pass
+        view = py3Dmol.view(width=width, height=height)
+        view.addModel(pdb_data, 'pdb')
+        view.setStyle({}, {'cartoon': {'color': 'spectrum'}})
+        for s in specs:
+            view.setStyle({'chain': s['chain'], 'resi': s['resi']},
+                          {'stick': {'color': 'orange', 'radius': 0.3}})
+        if specs:
+            chains = {}
+            for s in specs:
+                chains.setdefault(s['chain'], []).append(s['resi'])
+            for chain, resis in chains.items():
+                view.addSurface(py3Dmol.VDW, {'opacity': 0.4, 'color': 'orange'},
+                                {'chain': chain, 'resi': resis})
+            view.zoomTo({'resi': [s['resi'] for s in specs]})
+        else:
+            view.zoomTo()
+        view.spin(False)
+        html = f'<div style="border-radius:{border_radius}px;overflow:hidden;">{view._make_html()}</div>'
+        components.html(html, height=height + extra_height, scrolling=False)
+    except Exception as e:
+        st.error(f"Error loading 3D structure: {e}")
