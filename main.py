@@ -38,22 +38,25 @@ html, body, [data-testid="stApp"] {
 }
 [data-testid="stHeader"]          { display: none !important; }
 
-/* ── Force dark text on form labels (light-theme, dark-mode safe) ── */
-label, .st-emotion-cache label, [data-testid="stWidgetLabel"] {
-    color: #2a3a4a !important;
-}
-.st-emotion-cache details summary, [data-testid="stExpander"] summary {
-    color: #2a3a4a !important;
-}
-/* File uploader dropzone label */
-[data-testid="stFileUploader"] span, [data-testid="stFileUploader"] label {
-    color: #2a3a4a !important;
-}
-/* Slider/selectbox/number-input labels */
+/* ── Force light theme on form widgets (dark-mode safe) ── */
+label, .st-emotion-cache label, [data-testid="stWidgetLabel"],
+[data-testid="stFileUploader"] span, [data-testid="stFileUploader"] label,
 [data-testid="stSlider"] label, [data-testid="stSelectbox"] label,
-[data-testid="stNumberInput"] label {
+[data-testid="stNumberInput"] label, [data-testid="stExpander"] summary {
     color: #2a3a4a !important;
 }
+/* Input fields — light bg, dark text */
+input, textarea, select, .st-emotion-cache input,
+[data-testid="stTextInput"] input, [data-testid="stFileUploaderDropzone"] {
+    background: #fff !important;
+    color: #1A1A2E !important;
+    border-color: #B0BDD0 !important;
+}
+[data-testid="stFileUploaderDropzone"] {
+    background: #FAFAFA !important;
+}
+/* Slider track background */
+[data-testid="stThumbValue"] { background: #2E7D32 !important; color: #fff !important; }
 #MainMenu, footer, .stDeployButton { display: none !important; }
 .block-container {
     padding-top: 0.5rem !important;
