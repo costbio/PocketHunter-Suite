@@ -220,7 +220,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="docking-header">
-    <h1>🔬 Molecular Docking Suite</h1>
+    <h1>🔬 Step 3: Molecular Docking</h1>
     <p style="font-size: 1.2rem; margin-top: 0.5rem;">Advanced ligand-protein docking with 3D visualization and analysis</p>
 </div>
 """, unsafe_allow_html=True)
@@ -717,7 +717,7 @@ with tab_setup:
     # Cluster selection
     st.markdown("### 📁 Select Cluster Results")
 
-    # Handle heatmap pre-selection from Step 3
+    # Handle heatmap pre-selection from Step 2 (Cluster)
     heatmap_preselect = st.session_state.pop('heatmap_preselected_for_docking', None)
     if heatmap_preselect:
         st.info(f"Clusters {heatmap_preselect['cluster_ids']} from job `{heatmap_preselect['cluster_job_id']}` pre-selected from heatmap.")
@@ -732,7 +732,7 @@ with tab_setup:
         "Cluster Job ID:",
         value=default_cluster_job,
         placeholder="e.g., cluster_20250815_143022_a1b2c3d4",
-        help="Enter the job ID from Step 3: Cluster Pockets that you want to use for docking",
+        help="Enter the job ID from Step 2: Cluster Pockets that you want to use for docking",
         key="docking_cluster_job_id",
     )
 
@@ -740,7 +740,7 @@ with tab_setup:
     extract_job_id = st.text_input(
         "Extract Job ID (optional):",
         placeholder="e.g., extract_20250815_140022_a1b2c3d4",
-        help="Enter the job ID from Step 1: Extract Frames. Required if PDB files cannot be auto-detected.",
+        help="Enter the job ID from Step 1: Find Pockets. Required if PDB files cannot be auto-detected.",
         key="docking_extract_job_id",
     )
 
@@ -824,7 +824,7 @@ with tab_setup:
                     """Compact human-readable label: 'Cluster N · <spatial> · Prob X.XXX'.
 
                     Appends a heatmap-source marker when the row's checkbox state was
-                    seeded from a Step 3 heatmap selection (H8).
+                    seeded from a Step 2 heatmap selection (H8).
                     """
                     _cluster = _row.get('cluster', _row.get('cluster_id', None))
                     _cluster_part = f"Cluster {int(_cluster)}" if _cluster is not None and pd.notna(_cluster) else "Cluster ?"
@@ -837,7 +837,7 @@ with tab_setup:
                 def _row_help(_row, _from_heatmap=False):
                     _msg = f"File: {_row['File name']}"
                     if _from_heatmap:
-                        _msg += " · pre-selected from your Step 3 heatmap selection"
+                        _msg += " · pre-selected from your Step 2 heatmap selection"
                     return _msg
 
                 with col1:
@@ -923,11 +923,11 @@ with tab_setup:
                 st.error(f"Error reading cluster representatives: {e}")
                 logger.error(f"Error reading cluster representatives: {e}", exc_info=True)
         else:
-            st.error(f"❌ Cluster job '{cluster_job_id}' not found or incomplete. Please check the job ID and ensure Step 3: Cluster Pockets has completed successfully.")
-            st.info("💡 **Tip:** You can find your cluster job ID in the Task Monitor page or from the Step 3: Cluster Pockets results.")
+            st.error(f"❌ Cluster job '{cluster_job_id}' not found or incomplete. Please check the job ID and ensure Step 2: Cluster Pockets has completed successfully.")
+            st.info("💡 **Tip:** You can find your cluster job ID in the Task Monitor page or from the Step 2: Cluster Pockets results.")
     else:
-        st.info("ℹ️ **Enter a Cluster Job ID** from Step 3: Cluster Pockets to start docking configuration.")
-        st.info("💡 **Tip:** You can find your cluster job ID in the Task Monitor page or from the Step 3: Cluster Pockets results.")
+        st.info("ℹ️ **Enter a Cluster Job ID** from Step 2: Cluster Pockets to start docking configuration.")
+        st.info("💡 **Tip:** You can find your cluster job ID in the Task Monitor page or from the Step 2: Cluster Pockets results.")
 
     # Ligand upload section
     st.markdown("### 🧪 Ligand Library")

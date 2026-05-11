@@ -118,7 +118,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="cluster-header">
-    <h1>🎯 Step 3: Pocket Clustering</h1>
+    <h1>🎯 Step 2: Pocket Clustering</h1>
     <p style="font-size: 1.2rem; margin-top: 0.5rem;">Group similar pockets to identify representative binding sites</p>
 </div>
 """, unsafe_allow_html=True)
@@ -279,12 +279,16 @@ input_col1, input_col2 = st.columns(2)
 
 with input_col1:
     st.markdown("**Option 1: Use Previous Step**")
-    cached_detect_id = st.session_state.cached_job_ids.get('detect', '')
+    cached_id = (
+        st.session_state.cached_job_ids.get('find_pockets')
+        or st.session_state.cached_job_ids.get('detect')  # legacy fallback
+        or ''
+    )
     detect_job_id = st.text_input(
-        "Job ID from Step 2:",
-        value=cached_detect_id,
+        "Job ID from Step 1 (Find Pockets):",
+        value=cached_id,
         key="cluster_detect_job_id",
-        help="Enter the Job ID from pocket detection"
+        help="Enter the Job ID from Step 1 (or a legacy detect_* job ID)."
     )
 
 with input_col2:
@@ -346,7 +350,7 @@ Higher → fewer, more confident pockets. Lower → more pockets, noisier signal
 
 **If you get 0 clusters (or "no representative pockets found"):**
 1. **Lower `min_prob`** — try 0.3 or 0.2. The threshold may be too strict for this trajectory.
-2. **Extract more frames** in Step 1 (lower the `stride`). DBSCAN needs density to form clusters.
+2. **Extract more frames** in Step 1 (lower the `stride` on Find Pockets). DBSCAN needs density to form clusters.
 3. **Switch to Hierarchical** — it always produces clusters, even on sparse data.
         """.strip()
     )
@@ -363,7 +367,7 @@ if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width
         potential_csv_path = os.path.join(detect_output_dir, "pockets.csv")
         if os.path.exists(potential_csv_path):
             pockets_csv_path = potential_csv_path
-            input_source = f"Step 2 results (Job ID: {detect_job_id.strip()})"
+            input_source = f"Step 1 (Find Pockets) results (Job ID: {detect_job_id.strip()})"
         else:
             st.error(f"pockets.csv not found for Job ID: {detect_job_id.strip()}")
             st.stop()
@@ -787,7 +791,7 @@ average structure**.
                                         'cluster_job_id': results_job_id,
                                         'cluster_ids': list(st.session_state.docking_target_clusters),
                                     }
-                                    st.session_state.pending_nav = "Step 4: Molecular Docking"
+                                    st.session_state.pending_nav = "Step 3: Molecular Docking"
                                     st.rerun()
 
                             # --- Per-pocket heatmap grouped by cluster ---
@@ -985,7 +989,7 @@ average structure**.
                                 )
 
                 st.markdown("---")
-                st.info("💡 Use the cluster representatives CSV in Step 4: Molecular Docking")
+                st.info("💡 Use the cluster representatives CSV in Step 3: Molecular Docking")
 
         except Exception as e:
             st.error(f"Error loading results: {e}")

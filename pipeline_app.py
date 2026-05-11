@@ -1033,7 +1033,7 @@ with st.form("pipeline_form"):
     st.markdown("### 🔬 Optional: Molecular Docking")
     include_docking = st.checkbox("Run docking after clustering", value=False)
     if include_docking:
-        st.info("ℹ️ Docking will run automatically on **all** cluster representatives. To hand-pick specific clusters first, leave this unchecked — then use the heatmap in Step 3 to select clusters before docking.")
+        st.info("ℹ️ Docking will run automatically on **all** cluster representatives. To hand-pick specific clusters first, leave this unchecked — then use the heatmap in Step 2 to select clusters before docking.")
 
     ligand_files_uploaded = None
     num_poses = 10

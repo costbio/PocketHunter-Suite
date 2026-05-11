@@ -479,6 +479,153 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
 
 
 @celery_app.task(bind=True)
+def run_find_pockets_task(
+    self,
+    job_id,
+    xtc_file_path=None,
+    topology_file_path=None,
+    pdb_input_dir=None,
+    stride=10,
+    num_threads=4,
+):
+    """Merged Step 1 + Step 2: extract frames (if needed) then detect pockets.
+
+    Two input modes (validated via find_pockets_helpers.validate_find_pockets_inputs):
+      - trajectory: xtc_file_path + topology_file_path → extract (0-50%) → detect (50-100%)
+      - pdb_dir:    pdb_input_dir → detect (0-100%)
+
+    Same on-disk layout and pockets.csv schema as the legacy two-task flow, so
+    Step 2 (Cluster Pockets) consumes the output unchanged.
+    """
+    from find_pockets_helpers import progress_ranges, validate_find_pockets_inputs
+
+    started = time.time()
+    output_folder_job = os.path.join(RESULTS_DIR, job_id)
+    os.makedirs(output_folder_job, exist_ok=True)
+
+    try:
+        mode = validate_find_pockets_inputs(xtc_file_path, topology_file_path, pdb_input_dir)
+    except ValueError as e:
+        _update_status_file(job_id, 'failed', f'Invalid inputs: {e}', task_id=self.request.id)
+        self.update_state(state='FAILURE', meta={
+            'status': f'Invalid inputs: {e}',
+            'exc_type': 'ValueError',
+            'exc_message': str(e),
+        })
+        raise
+
+    (extract_lo, extract_hi), (detect_lo, detect_hi) = progress_ranges(mode)
+
+    # ── Stage 1: Extract frames (trajectory mode only) ───────────────────
+    if mode == 'trajectory':
+        output_pdb_dir = os.path.join(output_folder_job, 'pdbs')
+        os.makedirs(output_pdb_dir, exist_ok=True)
+
+        self.update_state(state='PROGRESS', meta={
+            'current_step': 'Extracting frames from trajectory…',
+            'progress': extract_lo,
+            'stage': 'extract',
+        })
+
+        cmd_extract = [
+            'python', POCKETHUNTER_CLI, 'extract_to_pdb',
+            '--xtc', os.path.abspath(xtc_file_path),
+            '--topology', os.path.abspath(topology_file_path),
+            '--outfolder', os.path.abspath(output_pdb_dir),
+            '--stride', str(stride),
+            '--overwrite',
+        ]
+        try:
+            _run_stage(self, cmd_extract, POCKETHUNTER_DIR, EXTRACT_TIMEOUT,
+                       extract_lo, extract_hi, 'Extracting frames')
+        except Exception as e:
+            _update_status_file(job_id, 'failed', f'Frame extraction failed: {e}',
+                                task_id=self.request.id)
+            self.update_state(state='FAILURE', meta={
+                'status': f'Frame extraction failed: {e}',
+                'exc_type': type(e).__name__,
+                'exc_message': str(e),
+            })
+            raise
+
+        pdb_files = [f for f in os.listdir(output_pdb_dir) if f.endswith('.pdb')]
+        detect_infolder = output_pdb_dir
+        frames_extracted = len(pdb_files)
+    else:
+        # pdb_dir mode — skip extraction, use the supplied directory directly.
+        detect_infolder = os.path.abspath(pdb_input_dir)
+        frames_extracted = len([f for f in os.listdir(detect_infolder) if f.endswith('.pdb')])
+
+    self.update_state(state='PROGRESS', meta={
+        'current_step': f'Starting pocket detection on {frames_extracted} structures…',
+        'progress': detect_lo,
+        'stage': 'detect',
+        'frames_extracted': frames_extracted,
+    })
+
+    # ── Stage 2: Detect pockets ─────────────────────────────────────────
+    output_pockets_dir = os.path.join(output_folder_job, 'pockets')
+    os.makedirs(output_pockets_dir, exist_ok=True)
+
+    cmd_detect = [
+        'python', POCKETHUNTER_CLI, 'detect_pockets',
+        '--infolder', detect_infolder,
+        '--outfolder', os.path.abspath(output_pockets_dir),
+        '--numthreads', str(num_threads),
+        '--compress',
+        '--overwrite',
+    ]
+    try:
+        _run_stage(self, cmd_detect, POCKETHUNTER_DIR, DETECT_TIMEOUT,
+                   detect_lo, detect_hi, 'Detecting pockets')
+    except Exception as e:
+        _update_status_file(job_id, 'failed', f'Pocket detection failed: {e}',
+                            task_id=self.request.id)
+        self.update_state(state='FAILURE', meta={
+            'status': f'Pocket detection failed: {e}',
+            'exc_type': type(e).__name__,
+            'exc_message': str(e),
+        })
+        raise
+
+    pockets_csv = os.path.join(output_pockets_dir, 'pockets.csv')
+    if not os.path.exists(pockets_csv):
+        msg = f'Pocket detection produced no output file: {pockets_csv}'
+        _update_status_file(job_id, 'failed', msg, task_id=self.request.id)
+        self.update_state(state='FAILURE', meta={'status': msg})
+        raise FileNotFoundError(msg)
+
+    pockets_detected = 0
+    try:
+        pockets_detected = len(pd.read_csv(pockets_csv))
+    except Exception:
+        pass
+
+    elapsed = time.time() - started
+    results_overview = {
+        'status': 'completed',
+        'mode': mode,
+        'output_folder': output_folder_job,
+        'pockets_output_dir_abs': output_pockets_dir,
+        'pockets_csv_abs': pockets_csv,
+        'frames_extracted': frames_extracted,
+        'pockets_detected': pockets_detected,
+        'processing_time': elapsed,
+    }
+
+    _update_status_file(job_id, 'completed', 'Find pockets completed',
+                        task_id=self.request.id,
+                        result_info={
+                            'mode': mode,
+                            'frames_extracted': frames_extracted,
+                            'pockets_detected': pockets_detected,
+                            'processing_time': elapsed,
+                        })
+    self.update_state(state='SUCCESS', meta=results_overview)
+    return results_overview
+
+
+@celery_app.task(bind=True)
 def run_extract_to_pdb_task(self, xtc_file_path, topology_file_path, job_id, stride, num_threads):
     """
     PocketHunter extract_to_pdb step for Streamlit app.

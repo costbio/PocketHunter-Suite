@@ -3,10 +3,14 @@ Centralized session state initialization for PocketHunter Suite.
 
 Conceptual model — three distinct concerns, one source of truth each:
 
-1. **Active jobs** (per-stage): ``extract_job_id``, ``detect_job_id``,
-   ``cluster_job_id``, ``docking_job_id``, ``pipeline_job_id`` plus their
-   ``*_task_id`` and ``*_status`` partners. The ``cached_job_ids`` dict
-   mirrors these so other pages can pre-fill the Job ID inputs.
+1. **Active jobs** (per-stage): ``find_pockets_job_id``, ``cluster_job_id``,
+   ``docking_job_id``, ``pipeline_job_id`` plus their ``*_task_id`` and
+   ``*_status`` partners. The ``cached_job_ids`` dict mirrors these so other
+   pages can pre-fill the Job ID inputs.
+
+   Legacy keys ``extract_job_id`` and ``detect_job_id`` remain in the dict
+   for backward compat (older status files + the Task Monitor surface them)
+   but no live page writes to them after the Step 1+2 merge.
 
 2. **Docking target selection** — which clusters / PDBs the user wants
    to dock against. Single canonical key: ``docking_target_clusters``
@@ -40,28 +44,21 @@ def initialize_session_state():
     # Job ID caching - used to track jobs across steps
     if 'cached_job_ids' not in st.session_state:
         st.session_state.cached_job_ids = {
-            'extract': None,
-            'detect': None,
+            'find_pockets': None,  # merged Step 1+2 (canonical post-merge)
+            'extract': None,       # legacy — preserved for old status files
+            'detect': None,        # legacy — preserved for old status files
             'cluster': None,
             'docking': None,
             'pipeline': None,
         }
 
-    # Extract Frames state
-    if 'extract_job_id' not in st.session_state:
-        st.session_state.extract_job_id = None
-    if 'extract_task_id' not in st.session_state:
-        st.session_state.extract_task_id = None
-    if 'extract_status' not in st.session_state:
-        st.session_state.extract_status = 'idle'
-
-    # Detect Pockets state
-    if 'detect_job_id' not in st.session_state:
-        st.session_state.detect_job_id = None
-    if 'detect_task_id' not in st.session_state:
-        st.session_state.detect_task_id = None
-    if 'detect_status' not in st.session_state:
-        st.session_state.detect_status = 'idle'
+    # Find Pockets state (merged Step 1+2)
+    if 'find_pockets_job_id' not in st.session_state:
+        st.session_state.find_pockets_job_id = None
+    if 'find_pockets_task_id' not in st.session_state:
+        st.session_state.find_pockets_task_id = None
+    if 'find_pockets_status' not in st.session_state:
+        st.session_state.find_pockets_status = 'idle'
 
     # Cluster Pockets state
     if 'cluster_job_id' not in st.session_state:
