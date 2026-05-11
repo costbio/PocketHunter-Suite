@@ -55,6 +55,16 @@ input, textarea, select, .st-emotion-cache input,
 [data-testid="stFileUploaderDropzone"] {
     background: #FAFAFA !important;
 }
+/* Selectbox — dark-mode safe */
+[data-baseweb="select"] > div {
+    background: #fff !important;
+    border-color: #B0BDD0 !important;
+}
+[data-baseweb="select"] * { color: #1A1A2E !important; }
+[data-baseweb="popover"] { background: #fff !important; }
+[data-baseweb="popover"] * { color: #1A1A2E !important; }
+[role="listbox"] { background: #fff !important; }
+[role="listbox"] li { color: #1A1A2E !important; }
 /* Slider track background */
 [data-testid="stThumbValue"] { background: #2E7D32 !important; color: #fff !important; }
 #MainMenu, footer, .stDeployButton { display: none !important; }
