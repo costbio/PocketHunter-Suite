@@ -62,10 +62,12 @@ def get_job_type(job_id):
     """Determine job type from job ID"""
     if job_id.startswith('full_pipeline'):
         return 'Full Pipeline'
+    elif job_id.startswith('find_pockets'):
+        return 'Find Pockets'
     elif job_id.startswith('extract'):
-        return 'Extract Frames'
+        return 'Extract Frames (legacy)'
     elif job_id.startswith('detect'):
-        return 'Detect Pockets'
+        return 'Detect Pockets (legacy)'
     elif job_id.startswith('cluster'):
         return 'Cluster Pockets'
     elif job_id.startswith('dock'):

@@ -70,6 +70,95 @@ def box_size_for_pocket(
     return box_dims_from_minmax(box_min, box_max, padding=padding)
 
 
+def auto_box_for_selection(
+    df_reps: pd.DataFrame,
+    job_id: str,
+    selected_clusters: Optional[Iterable[int]] = None,
+    *,
+    padding: float = 4.0,
+    extra_pdb_source_job_id: Optional[str] = None,
+) -> Optional[tuple[float, float, float, str]]:
+    """Compute ``(sx, sy, sz, label)`` for the top-probability representative.
+
+    Filtering: if ``selected_clusters`` is given, only those clusters are
+    considered. Otherwise the top probability across all of ``df_reps`` wins.
+
+    PDB lookup: tries ``results/<job_id>/pdbs/<file>`` then
+    ``results/<job_id>/pocket_clusters/<file>``. If ``extra_pdb_source_job_id``
+    is supplied (typical for docking_app, where the user may have an upstream
+    extract job ID), that location is tried first.
+
+    Returns ``None`` if any step fails (no rep matches the filter, missing
+    PDB, residues unparseable, etc.) — caller falls back to manual sliders.
+    """
+    try:
+        if df_reps is None or len(df_reps) == 0:
+            return None
+        if "residues" not in df_reps.columns:
+            return None
+
+        sub = df_reps
+        if selected_clusters is not None:
+            ids = [int(c) for c in selected_clusters]
+            if not ids:
+                return None
+            if "cluster" not in df_reps.columns:
+                return None
+            sub = df_reps[df_reps["cluster"].isin(ids)]
+        if sub.empty:
+            return None
+
+        if "probability" in sub.columns:
+            top = sub.sort_values("probability", ascending=False).iloc[0]
+        else:
+            top = sub.iloc[0]
+        residues = str(top.get("residues", "") or "")
+        if not residues.strip():
+            return None
+
+        file_name = str(top.get("File name", "") or "")
+        pdb_path = _resolve_rep_pdb_path(file_name, job_id, extra_pdb_source_job_id)
+        if not pdb_path:
+            return None
+
+        sx, sy, sz = box_size_for_pocket(pdb_path, residues, padding=padding)
+        cluster_id = (
+            int(top.get("cluster", 0)) if "cluster" in sub.columns and pd.notna(top.get("cluster", 0))
+            else 0
+        )
+        return (round(sx, 1), round(sy, 1), round(sz, 1), f"Cluster {cluster_id}")
+    except Exception:
+        return None
+
+
+def _resolve_rep_pdb_path(
+    file_name: str,
+    job_id: str,
+    extra_source: Optional[str] = None,
+) -> Optional[str]:
+    """Locate a representative's PDB file across the conventional output dirs.
+
+    Strips the p2rank ``_predictions`` suffix and ensures the ``.pdb`` extension,
+    then tries ``<source>/pdbs/`` and ``<source>/pocket_clusters/`` for every
+    source in priority order: ``extra_source`` (if given), then ``job_id``.
+    """
+    import os
+    from config import Config
+    results_dir = str(Config.RESULTS_DIR)
+
+    pdb_name = file_name.replace('_predictions', '') if '_predictions' in file_name else file_name
+    if not pdb_name.endswith('.pdb'):
+        pdb_name += '.pdb'
+
+    sources = [s for s in (extra_source, job_id) if s]
+    for source in sources:
+        for subdir in ('pdbs', 'pocket_clusters'):
+            cand = os.path.join(results_dir, source, subdir, pdb_name)
+            if os.path.exists(cand):
+                return cand
+    return None
+
+
 def summarize_selection(
     cluster_ids: Iterable[int],
     df_reps: pd.DataFrame,

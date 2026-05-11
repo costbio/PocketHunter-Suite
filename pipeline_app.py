@@ -130,225 +130,20 @@ def _load_representatives(path):
     return pd.read_csv(path)
 
 
-def _classify_affinity(affinity):
-    if affinity < -10:
-        return "excellent", "🟢"
-    elif affinity < -8:
-        return "good", "🟡"
-    elif affinity < -6:
-        return "moderate", "🟠"
-    else:
-        return "poor", "🔴"
+# The docking 3D viewer + affinity classifier live in docking_visualization.
+# The auto-box helper lives in docking_selection. Aliases kept for in-file
+# callers that already reference the old _underscore names.
+from docking_visualization import (
+    classify_affinity as _classify_affinity,
+    extract_sdf_model as _extract_sdf_model,
+    show_molecule_3d as _show_docking_molecule_3d,
+)
+from docking_selection import auto_box_for_selection as _compute_inline_auto_box_raw
 
 
 def _compute_inline_auto_box(df_reps, results_job_id, selected_clusters):
-    """Box-size suggestion for the inline pipeline docking form.
-
-    Picks the highest-probability rep among the selected clusters, resolves
-    its PDB, and runs ``docking_selection.box_size_for_pocket``. Returns
-    ``(sx, sy, sz, label)`` or ``None`` if anything is missing.
-    """
-    try:
-        if df_reps is None or len(df_reps) == 0 or not selected_clusters:
-            return None
-        if "cluster" in df_reps.columns:
-            sub = df_reps[df_reps["cluster"].isin([int(c) for c in selected_clusters])]
-        else:
-            sub = df_reps
-        if sub.empty:
-            return None
-        top = sub.sort_values("probability", ascending=False).iloc[0]
-        residues = str(top.get("residues", "") or "")
-        if not residues.strip():
-            return None
-        pdb_path = _resolve_pdb_path(str(top.get("File name", "")), results_job_id)
-        if not pdb_path or not os.path.exists(pdb_path):
-            return None
-        from docking_selection import box_size_for_pocket
-        sx, sy, sz = box_size_for_pocket(pdb_path, residues, padding=4.0)
-        cluster_id = int(top.get("cluster", 0)) if pd.notna(top.get("cluster", 0)) else 0
-        return (round(sx, 1), round(sy, 1), round(sz, 1), f"Cluster {cluster_id}")
-    except Exception as e:  # noqa: BLE001 — best-effort
-        logger.warning(f"Pipeline inline auto-box failed: {e}")
-        return None
-
-
-# ── Docking 3D viewer helpers (ported from docking_app.py) ──────────────
-
-_SDF_ELEMENTS = ('C', 'N', 'O', 'S', 'H', 'F', 'P', 'Cl', 'Br', 'I')
-
-
-def _parse_ligand_coords_from_sdf(sdf_data):
-    coords = []
-    for line in sdf_data.split('\n'):
-        parts = line.split()
-        if len(parts) >= 4:
-            try:
-                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
-                if parts[3] in _SDF_ELEMENTS:
-                    coords.append((x, y, z))
-            except (ValueError, IndexError):
-                pass
-    return coords
-
-
-def _get_binding_site_residues(pdb_data, sdf_data, distance=5.0):
-    lig_coords = _parse_ligand_coords_from_sdf(sdf_data)
-    if not lig_coords:
-        return []
-    resis = set()
-    for line in pdb_data.split('\n'):
-        if line.startswith('ATOM') or line.startswith('HETATM'):
-            try:
-                px, py, pz = float(line[30:38]), float(line[38:46]), float(line[46:54])
-                resi = int(line[22:26].strip())
-                for lx, ly, lz in lig_coords:
-                    if math.sqrt((px-lx)**2 + (py-ly)**2 + (pz-lz)**2) <= distance:
-                        resis.add(resi)
-                        break
-            except (ValueError, IndexError):
-                pass
-    return sorted(resis)
-
-
-def _compute_pocket_view_quaternion(pdb_data, sdf_data):
-    lig_coords = _parse_ligand_coords_from_sdf(sdf_data)
-    prot_coords = []
-    for line in pdb_data.split('\n'):
-        if line.startswith('ATOM') and line[12:16].strip() == 'CA':
-            try:
-                prot_coords.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
-            except (ValueError, IndexError):
-                pass
-    if not lig_coords or not prot_coords:
-        return (0, 0, 0, 1)
-    lc = [sum(c[i] for c in lig_coords) / len(lig_coords) for i in range(3)]
-    pc = [sum(c[i] for c in prot_coords) / len(prot_coords) for i in range(3)]
-    dx, dy, dz = lc[0]-pc[0], lc[1]-pc[1], lc[2]-pc[2]
-    mag = math.sqrt(dx*dx + dy*dy + dz*dz)
-    if mag < 0.001:
-        return (0, 0, 0, 1)
-    dx, dy, dz = dx/mag, dy/mag, dz/mag
-    dot = dz
-    if dot > 0.9999:
-        qx, qy, qz, qw = 0, 0, 0, 1
-    elif dot < -0.9999:
-        qx, qy, qz, qw = 0, 1, 0, 0
-    else:
-        qw = 1 + dot
-        qx, qy, qz = dy, -dx, 0
-        norm = math.sqrt(qw*qw + qx*qx + qy*qy + qz*qz)
-        qx, qy, qz, qw = qx/norm, qy/norm, qz/norm, qw/norm
-
-    def _qmul(w1, x1, y1, z1, w2, x2, y2, z2):
-        return (w1*w2 - x1*x2 - y1*y2 - z1*z2,
-                w1*x2 + x1*w2 + y1*z2 - z1*y2,
-                w1*y2 - x1*z2 + y1*w2 + z1*x2,
-                w1*z2 + x1*y2 - y1*x2 + z1*w2)
-    ax = math.radians(35) / 2
-    rw, rx, ry, rz = _qmul(math.cos(ax), math.sin(ax), 0, 0, qw, qx, qy, qz)
-    ay = math.radians(85) / 2
-    rw, rx, ry, rz = _qmul(math.cos(ay), 0, math.sin(ay), 0, rw, rx, ry, rz)
-    return (rx, ry, rz, rw)
-
-
-def _extract_sdf_model(sdf_path, mode):
-    try:
-        if not sdf_path or not os.path.exists(sdf_path):
-            return None
-        with open(sdf_path, 'r') as f:
-            content = f.read()
-        models = [m for m in content.split('$$$$') if m.strip()]
-        idx = int(mode) - 1
-        if 0 <= idx < len(models):
-            model_text = models[idx].lstrip('\n')
-            lines = model_text.split('\n')
-            if lines and 'V2000' not in lines[0] and len(lines) > 2:
-                for i, line in enumerate(lines[:5]):
-                    if 'V2000' in line or 'V3000' in line:
-                        if i < 3:
-                            model_text = '\n' * (3 - i) + model_text
-                        break
-            return model_text + '\n$$$$\n'
-        return None
-    except Exception:
-        return None
-
-
-def _show_docking_molecule_3d(pdb_data, sdf_data=None, width=420, height=380,
-                               style_protein="cartoon"):
-    view = py3Dmol.view(width=width, height=height)
-    if pdb_data:
-        view.addModel(pdb_data, 'pdb')
-    if sdf_data:
-        view.addModel(sdf_data, 'sdf')
-    if pdb_data:
-        if style_protein == "binding site":
-            view.setStyle({'model': 0}, {'stick': {'colorscheme': 'spectrum'}})
-            if sdf_data:
-                binding_resis = _get_binding_site_residues(pdb_data, sdf_data, distance=5.0)
-                if binding_resis:
-                    view.addSurface(py3Dmol.VDW, {'opacity': 0.85, 'color': 'white'},
-                                    {'model': 0, 'resi': binding_resis}, {'model': 0})
-        elif style_protein == "cartoon":
-            view.setStyle({'model': 0}, {'cartoon': {'color': 'spectrum'}})
-        elif style_protein == "surface":
-            view.setStyle({'model': 0}, {'cartoon': {'color': 'spectrum', 'opacity': 0.3}})
-            view.addSurface(py3Dmol.VDW, {'opacity': 0.7, 'color': 'spectrum'}, {'model': 0})
-        elif style_protein == "stick":
-            view.setStyle({'model': 0}, {'stick': {'colorscheme': 'spectrum'}})
-    if sdf_data:
-        view.setStyle({'model': 1}, {'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}})
-        view.center({'model': 1})
-    view.zoomTo()
-    view.spin(False)
-
-    viewer_html = view._make_html()
-    viewer_match = re.search(r'(viewer_\w+)', viewer_html)
-    viewer_var = viewer_match.group(1) if viewer_match else 'viewer'
-
-    has_ligand = sdf_data is not None
-    qx, qy, qz, qw = (0, 0, 0, 1)
-    binding_resis_js = "[]"
-    if has_ligand and pdb_data:
-        qx, qy, qz, qw = _compute_pocket_view_quaternion(pdb_data, sdf_data)
-        resis = _get_binding_site_residues(pdb_data, sdf_data, distance=8.0)
-        if resis:
-            binding_resis_js = str(resis)
-
-    btn_style = ("padding:4px 10px; border:1px solid rgba(255,255,255,0.3); border-radius:6px; "
-                 "background:rgba(0,0,0,0.45); color:white; cursor:pointer; font-size:11px; "
-                 "backdrop-filter:blur(4px); transition:background 0.2s;")
-    btn_disabled_style = btn_style + "opacity:0.3;pointer-events:none;"
-
-    focus_js = (
-        f"var v={viewer_var}.getView();"
-        f"v[4]={qx:.6f};v[5]={qy:.6f};v[6]={qz:.6f};v[7]={qw:.6f};"
-        f"{viewer_var}.setView(v);"
-        f"{viewer_var}.zoomTo({{model:0,resi:{binding_resis_js}}},{{padding:5}});"
-        f"{viewer_var}.render();"
-    )
-
-    buttons_html = f"""
-    <div style="position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
-                display:flex; gap:6px; z-index:10;">
-        <button onclick="{focus_js}"
-            style="{btn_disabled_style if not has_ligand else btn_style}"
-            {'disabled' if not has_ligand else ''}
-            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
-            onmouseout="this.style.background='rgba(0,0,0,0.45)'">🔍 Binding Site</button>
-        <button onclick="{viewer_var}.zoomTo({{model:0}});{viewer_var}.render();"
-            style="{btn_style}"
-            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
-            onmouseout="this.style.background='rgba(0,0,0,0.45)'">🏠 Protein</button>
-        <button onclick="var uri={viewer_var}.pngURI();var a=document.createElement('a');a.href=uri;a.download='docking_snapshot.png';a.click();"
-            style="{btn_style}"
-            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
-            onmouseout="this.style.background='rgba(0,0,0,0.45)'">📸 Snapshot</button>
-    </div>"""
-
-    html = f'<div style="position:relative;">{viewer_html}{buttons_html}</div>'
-    components.html(html, height=height + 50, scrolling=False)
+    """Thin wrapper preserving the original (df_reps, job_id, selected) call shape."""
+    return _compute_inline_auto_box_raw(df_reps, results_job_id, selected_clusters)
 
 
 def _show_pipeline_cluster_inline(results_job_id):
@@ -713,6 +508,7 @@ average structure**.
                                 if receptor_data:
                                     _show_docking_molecule_3d(
                                         receptor_data, ligand_sdf_data,
+                                        width=420, height=380,
                                         style_protein=viz_style,
                                     )
                                 else:

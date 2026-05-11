@@ -3,7 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from unittest.mock import patch
+
 from docking_selection import (
+    auto_box_for_selection,
     box_dims_from_minmax,
     max_box_dims,
     summarize_selection,
@@ -94,3 +97,49 @@ class TestSummarizeSelection:
         df = pd.DataFrame([{"cluster": 0}])  # no residues column
         out = summarize_selection([0], df)
         assert "Cluster 0" in out  # falls through gracefully
+
+
+class TestAutoBoxForSelection:
+    """auto_box_for_selection wraps PDB lookup + box_size_for_pocket; we mock
+    both the path resolver and the box calculator so the test is pure."""
+
+    def _df(self):
+        return pd.DataFrame([
+            {"cluster": 0, "probability": 0.9, "residues": "A_150 A_151", "File name": "frame_0.pdb"},
+            {"cluster": 1, "probability": 0.7, "residues": "A_310 A_311", "File name": "frame_1.pdb"},
+            {"cluster": 2, "probability": 0.4, "residues": "B_35 B_36",   "File name": "frame_2.pdb"},
+        ])
+
+    @patch("docking_selection._resolve_rep_pdb_path", return_value="/fake/frame_0.pdb")
+    @patch("docking_selection.box_size_for_pocket", return_value=(18.0, 28.0, 38.0))
+    def test_picks_top_probability_when_no_filter(self, _box, _resolve):
+        result = auto_box_for_selection(self._df(), "demo_job")
+        assert result is not None
+        sx, sy, sz, label = result
+        assert (sx, sy, sz) == (18.0, 28.0, 38.0)
+        assert label == "Cluster 0"  # top probability
+
+    @patch("docking_selection._resolve_rep_pdb_path", return_value="/fake/frame_2.pdb")
+    @patch("docking_selection.box_size_for_pocket", return_value=(10.0, 10.0, 10.0))
+    def test_filters_to_selected_clusters(self, _box, _resolve):
+        # Only cluster 2 selected → it should win even though its probability is lowest.
+        result = auto_box_for_selection(self._df(), "demo_job", selected_clusters=[2])
+        assert result is not None
+        assert result[3] == "Cluster 2"
+
+    @patch("docking_selection._resolve_rep_pdb_path", return_value=None)
+    def test_returns_none_when_pdb_missing(self, _resolve):
+        assert auto_box_for_selection(self._df(), "demo_job") is None
+
+    def test_empty_dataframe_returns_none(self):
+        assert auto_box_for_selection(pd.DataFrame(), "demo_job") is None
+
+    def test_empty_selected_clusters_returns_none(self):
+        assert auto_box_for_selection(self._df(), "demo_job", selected_clusters=[]) is None
+
+    @patch("docking_selection._resolve_rep_pdb_path", return_value="/fake/frame_1.pdb")
+    @patch("docking_selection.box_size_for_pocket", return_value=(20.0, 20.0, 20.0))
+    def test_rounds_dimensions(self, _box, _resolve):
+        with patch("docking_selection.box_size_for_pocket", return_value=(18.234, 27.567, 38.001)):
+            result = auto_box_for_selection(self._df(), "demo_job")
+            assert result == (18.2, 27.6, 38.0, "Cluster 0")

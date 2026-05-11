@@ -256,53 +256,37 @@ _known_extract = st.session_state.get('docking_extract_job_id', '') or None
 def _compute_auto_box_for_job(cluster_job_id: str, extract_job_id: str | None = None):
     """Compute box dimensions from the highest-probability cluster representative.
 
-    Returns ``(sx, sy, sz, cluster_label)`` or ``None`` if the auto-size cannot
-    be derived (missing CSV, missing PDB, residues unparseable, etc.).
-    Cached in session_state keyed by ``cluster_job_id`` so we don't recompute
-    on every rerun.
+    Thin wrapper around ``docking_selection.auto_box_for_selection`` that adds
+    session-state caching keyed by ``cluster_job_id`` (the helper itself is
+    pure / cacheless). Returns ``(sx, sy, sz, cluster_label)`` or ``None``.
     """
     if not cluster_job_id:
         return None
-    if st.session_state.docking_auto_box_cluster == cluster_job_id and st.session_state.docking_auto_box is not None:
+    if (st.session_state.docking_auto_box_cluster == cluster_job_id
+            and st.session_state.docking_auto_box is not None):
         return st.session_state.docking_auto_box
 
-    reps_csv = os.path.join(RESULTS_DIR, cluster_job_id, "pocket_clusters", "cluster_representatives.csv")
+    reps_csv = os.path.join(RESULTS_DIR, cluster_job_id, "pocket_clusters",
+                            "cluster_representatives.csv")
     if not os.path.exists(reps_csv):
         return None
     try:
         df = pd.read_csv(reps_csv)
-        if df.empty or "residues" not in df.columns:
-            return None
-        top = df.sort_values("probability", ascending=False).iloc[0]
-        residues = str(top.get("residues", "") or "")
-        if not residues.strip():
-            return None
-        # Locate the PDB for the top rep.
-        file_name = str(top.get("File name", "") or "")
-        pdb_path = None
-        for source in [extract_job_id, cluster_job_id]:
-            if not source:
-                continue
-            cand = os.path.join(RESULTS_DIR, source, "pdbs", file_name)
-            if os.path.exists(cand):
-                pdb_path = cand
-                break
-            cand2 = os.path.join(RESULTS_DIR, source, "pocket_clusters", file_name)
-            if os.path.exists(cand2):
-                pdb_path = cand2
-                break
-        if not pdb_path:
-            return None
-        from docking_selection import box_size_for_pocket
-        sx, sy, sz = box_size_for_pocket(pdb_path, residues, padding=4.0)
-        cluster_id = int(top.get("cluster", 0)) if pd.notna(top.get("cluster", 0)) else 0
-        result = (round(sx, 1), round(sy, 1), round(sz, 1), f"Cluster {cluster_id}")
+    except Exception as e:  # noqa: BLE001 — auto-size is best-effort
+        logger.warning(f"Auto-box CSV load failed for {cluster_job_id}: {e}")
+        return None
+
+    from docking_selection import auto_box_for_selection
+    result = auto_box_for_selection(
+        df, cluster_job_id,
+        selected_clusters=None,
+        padding=4.0,
+        extra_pdb_source_job_id=extract_job_id,
+    )
+    if result is not None:
         st.session_state.docking_auto_box = result
         st.session_state.docking_auto_box_cluster = cluster_job_id
-        return result
-    except Exception as e:  # noqa: BLE001 — auto-size is best-effort
-        logger.warning(f"Auto-box computation failed for {cluster_job_id}: {e}")
-        return None
+    return result
 
 
 # Compute (or refresh) the auto-suggested box size for whatever cluster
@@ -422,271 +406,16 @@ with st.sidebar:
         help="Opacity of molecular surface"
     )
 
-_SDF_ELEMENTS = ('C', 'N', 'O', 'S', 'H', 'F', 'P', 'Cl', 'Br', 'I')
 
+# 3D viewer + affinity classifier + multi-model SDF extractor all live in
+# docking_visualization. Local names preserved for downstream call sites.
+from docking_visualization import (
+    classify_affinity,
+    extract_sdf_model,
+    get_binding_site_residues as _get_binding_site_residues,
+    show_molecule_3d,
+)
 
-def _parse_ligand_coords_from_sdf(sdf_data):
-    """Parse (x, y, z) atom coordinates from an SDF block."""
-    coords = []
-    for line in sdf_data.split('\n'):
-        parts = line.split()
-        if len(parts) >= 4:
-            try:
-                x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
-                if parts[3] in _SDF_ELEMENTS:
-                    coords.append((x, y, z))
-            except (ValueError, IndexError):
-                pass
-    return coords
-
-
-def _get_binding_site_residues(pdb_data, sdf_data, distance=5.0):
-    """Find protein residue numbers within distance of ligand atoms."""
-    lig_coords = _parse_ligand_coords_from_sdf(sdf_data)
-    if not lig_coords:
-        return []
-    # Parse protein atom coordinates and residue numbers from PDB
-    resis = set()
-    for line in pdb_data.split('\n'):
-        if line.startswith('ATOM') or line.startswith('HETATM'):
-            try:
-                px = float(line[30:38])
-                py = float(line[38:46])
-                pz = float(line[46:54])
-                resi = int(line[22:26].strip())
-                for lx, ly, lz in lig_coords:
-                    dx, dy, dz = px - lx, py - ly, pz - lz
-                    if math.sqrt(dx*dx + dy*dy + dz*dz) <= distance:
-                        resis.add(resi)
-                        break
-            except (ValueError, IndexError):
-                pass
-    return sorted(resis)
-
-def _compute_pocket_view_quaternion(pdb_data, sdf_data):
-    """Compute a quaternion that orients the camera to look into the binding pocket.
-
-    Returns (qx, qy, qz, qw) for use with 3Dmol.js setView.
-    """
-    lig_coords = _parse_ligand_coords_from_sdf(sdf_data)
-    # Parse protein CA coordinates
-    prot_coords = []
-    for line in pdb_data.split('\n'):
-        if line.startswith('ATOM') and line[12:16].strip() == 'CA':
-            try:
-                prot_coords.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
-            except (ValueError, IndexError):
-                pass
-    if not lig_coords or not prot_coords:
-        return (0, 0, 0, 1)
-    # Centroids
-    lc = [sum(c[i] for c in lig_coords) / len(lig_coords) for i in range(3)]
-    pc = [sum(c[i] for c in prot_coords) / len(prot_coords) for i in range(3)]
-    # Direction from protein center toward ligand (we want camera to look opposite: into pocket)
-    dx, dy, dz = lc[0] - pc[0], lc[1] - pc[1], lc[2] - pc[2]
-    mag = math.sqrt(dx * dx + dy * dy + dz * dz)
-    if mag < 0.001:
-        return (0, 0, 0, 1)
-    dx, dy, dz = dx / mag, dy / mag, dz / mag
-    # Quaternion rotating (dx,dy,dz) to (0,0,1) using half-vector method
-    # src × dst where dst=(0,0,1): cross = (dy, -dx, 0)
-    dot = dz  # src · dst
-    if dot > 0.9999:
-        qx, qy, qz, qw = 0, 0, 0, 1
-    elif dot < -0.9999:
-        qx, qy, qz, qw = 0, 1, 0, 0
-    else:
-        qw = 1 + dot
-        qx, qy, qz = dy, -dx, 0
-        norm = math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
-        qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
-    # Apply 15° tilt around X for depth, then 20° around Y to shift view left
-    def _qmul(w1, x1, y1, z1, w2, x2, y2, z2):
-        return (w1*w2 - x1*x2 - y1*y2 - z1*z2,
-                w1*x2 + x1*w2 + y1*z2 - z1*y2,
-                w1*y2 - x1*z2 + y1*w2 + z1*x2,
-                w1*z2 + x1*y2 - y1*x2 + z1*w2)
-    # X tilt (above)
-    ax = math.radians(35) / 2
-    rw, rx, ry, rz = _qmul(math.cos(ax), math.sin(ax), 0, 0, qw, qx, qy, qz)
-    # Y shift (rotate left)
-    ay = math.radians(85) / 2
-    rw, rx, ry, rz = _qmul(math.cos(ay), 0, math.sin(ay), 0, rw, rx, ry, rz)
-    return (rx, ry, rz, rw)
-
-# Function to display 3D molecule using py3Dmol
-def show_molecule_3d(pdb_data, sdf_data=None, width=800, height=600, style_protein="cartoon", style_ligand="stick", color_scheme="spectrum", surface_opacity=0.7):
-    """
-    Display 3D molecular structure using py3Dmol
-
-    Args:
-        pdb_data: PDB file content as string
-        sdf_data: SDF/PDBQT file content as string (optional, for ligand)
-        width: Viewer width
-        height: Viewer height
-        style_protein: Protein visualization style
-        style_ligand: Ligand visualization style
-        color_scheme: Color scheme for protein visualization
-        surface_opacity: Opacity for surface style
-    """
-    view = py3Dmol.view(width=width, height=height)
-
-    # Add both models first so selectors like 'within' can reference either
-    if pdb_data:
-        view.addModel(pdb_data, 'pdb')
-    if sdf_data:
-        view.addModel(sdf_data, 'sdf')
-
-    # Style protein
-    if pdb_data:
-        if style_protein == "binding site":
-            # Binding site view: all protein as stick, nearby residues as 50% transparent surface
-            view.setStyle({'model': 0}, {'stick': {'colorscheme': color_scheme}})
-            if sdf_data:
-                # 3Dmol.js 'within' doesn't work reliably with addSurface,
-                # so we find binding site residues in Python and select by resi
-                binding_resis = _get_binding_site_residues(pdb_data, sdf_data, distance=5.0)
-                if binding_resis:
-                    view.addSurface(py3Dmol.VDW, {'opacity': 0.85, 'color': 'white'},
-                        {'model': 0, 'resi': binding_resis}, {'model': 0})
-        elif style_protein == "cartoon":
-            view.setStyle({'model': 0}, {'cartoon': {'color': color_scheme}})
-        elif style_protein == "surface":
-            view.setStyle({'model': 0}, {'cartoon': {'color': color_scheme, 'opacity': 0.3}})
-            view.addSurface(py3Dmol.VDW, {'opacity': surface_opacity, 'color': color_scheme}, {'model': 0})
-        elif style_protein == "stick":
-            view.setStyle({'model': 0}, {'stick': {'colorscheme': color_scheme}})
-
-    # Style ligand
-    if sdf_data:
-        # Element-based coloring with green carbons (field standard: PyMOL/Chimera convention)
-        view.setStyle({'model': 1}, {
-            'stick': {'colorscheme': 'greenCarbon', 'radius': 0.2}
-        })
-        view.center({'model': 1})
-
-    view.zoomTo()
-    view.spin(False)
-
-    # Generate HTML with control buttons
-    viewer_html = view._make_html()
-    # Extract viewer variable name for button JS
-    import re as _re
-    viewer_match = _re.search(r'(viewer_\w+)', viewer_html)
-    viewer_var = viewer_match.group(1) if viewer_match else 'viewer'
-
-    has_ligand = sdf_data is not None
-    # Compute pocket view quaternion and binding site residues for the focus button
-    qx, qy, qz, qw = (0, 0, 0, 1)
-    binding_resis_js = "[]"
-    if has_ligand and pdb_data:
-        qx, qy, qz, qw = _compute_pocket_view_quaternion(pdb_data, sdf_data)
-        resis = _get_binding_site_residues(pdb_data, sdf_data, distance=8.0)
-        if resis:
-            binding_resis_js = str(resis)
-
-    btn_style = ("padding:4px 10px; border:1px solid rgba(255,255,255,0.3); border-radius:6px; "
-                 "background:rgba(0,0,0,0.45); color:white; cursor:pointer; font-size:11px; "
-                 "backdrop-filter:blur(4px); transition:background 0.2s;")
-    btn_disabled_style = btn_style + "opacity:0.3;pointer-events:none;"
-
-    # Binding site button: orient to look into pocket, zoom to pocket residues (not just ligand)
-    focus_js = (
-        f"var v={viewer_var}.getView();"
-        f"v[4]={qx:.6f};v[5]={qy:.6f};v[6]={qz:.6f};v[7]={qw:.6f};"
-        f"{viewer_var}.setView(v);"
-        f"{viewer_var}.zoomTo({{model:0,resi:{binding_resis_js}}},{{padding:5}});"
-        f"{viewer_var}.render();"
-    )
-
-    buttons_html = f"""
-    <div style="position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
-                display:flex; gap:6px; z-index:10;">
-        <button onclick="{focus_js}"
-            style="{btn_disabled_style if not has_ligand else btn_style}"
-            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
-            onmouseout="this.style.background='rgba(0,0,0,0.45)'"
-            {'disabled' if not has_ligand else ''}>🔍 Binding Site</button>
-        <button onclick="{viewer_var}.zoomTo({{model:0}});{viewer_var}.render();"
-            style="{btn_style}"
-            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
-            onmouseout="this.style.background='rgba(0,0,0,0.45)'">🏠 Protein</button>
-        <button onclick="
-            var uri = {viewer_var}.pngURI();
-            var a = document.createElement('a');
-            a.href = uri;
-            a.download = 'docking_snapshot.png';
-            a.click();"
-            style="{btn_style}"
-            onmouseover="this.style.background='rgba(0,0,0,0.65)'"
-            onmouseout="this.style.background='rgba(0,0,0,0.45)'">📸 Snapshot</button>
-    </div>"""
-
-    html = f"""
-    <div style="position:relative;">
-        {viewer_html}
-        {buttons_html}
-    </div>
-    """
-    components.html(html, height=height+50, scrolling=False)
-
-def extract_sdf_model(sdf_path, mode):
-    """
-    Extract a single model from a multi-model SDF file.
-
-    Args:
-        sdf_path: Path to the SDF file
-        mode: 1-indexed model number (matching SMINA's 'mode' column)
-
-    Returns:
-        SDF content string for the requested model, or None on failure.
-    """
-    try:
-        if not sdf_path or not os.path.exists(sdf_path):
-            logger.warning(f"SDF file not found: {sdf_path}")
-            return None
-        with open(sdf_path, 'r') as f:
-            content = f.read()
-        models = content.split('$$$$')
-        # Filter out empty entries but preserve internal whitespace
-        # (SDF V2000 header requires blank molecule name line — strip() destroys it)
-        models = [m for m in models if m.strip()]
-        idx = int(mode) - 1  # Convert 1-indexed to 0-indexed
-        if 0 <= idx < len(models):
-            # Ensure model starts with proper SDF header (molecule name line)
-            # Raw split may have leading \n from delimiter — normalize to exactly
-            # one blank molecule name line before the OpenBabel/program line
-            model_text = models[idx].lstrip('\n')
-            # SDF requires: line1=mol_name, line2=program, line3=comment, line4=counts
-            # If first line is the program line (e.g. "OpenBabel..."), prepend blank mol name
-            lines = model_text.split('\n')
-            if lines and 'V2000' not in lines[0] and len(lines) > 2:
-                # Check if counts line is at position 2 (missing mol name) or 3 (correct)
-                for i, line in enumerate(lines[:5]):
-                    if 'V2000' in line or 'V3000' in line:
-                        if i < 3:
-                            # Need to prepend blank lines to push counts to line index 3
-                            model_text = '\n' * (3 - i) + model_text
-                        break
-            return model_text + '\n$$$$\n'
-        logger.warning(f"Model {mode} out of range (file has {len(models)} models): {sdf_path}")
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to extract SDF model {mode} from {sdf_path}: {e}")
-        return None
-
-
-# Function to classify affinity
-def classify_affinity(affinity):
-    """Classify binding affinity into categories"""
-    if affinity < -10:
-        return "excellent", "🟢"
-    elif affinity < -8:
-        return "good", "🟡"
-    elif affinity < -6:
-        return "moderate", "🟠"
-    else:
-        return "poor", "🔴"
 
 # Main content area - Create tabs for different views
 tab_setup, tab_results = st.tabs(["🎯 Setup & Launch", "📊 Results & 3D Viewer"])

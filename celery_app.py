@@ -21,8 +21,7 @@ celery_app.conf.update(
 # Route docking tasks to dedicated queue to prevent starving pipeline workers
 celery_app.conf.task_routes = {
     'tasks.run_docking_task': {'queue': 'docking'},
-    'tasks.run_extract_to_pdb_task': {'queue': 'default'},
-    'tasks.run_detect_pockets_task': {'queue': 'default'},
+    'tasks.run_find_pockets_task': {'queue': 'default'},
     'tasks.run_cluster_pockets_task': {'queue': 'default'},
     'tasks.run_pockethunter_pipeline': {'queue': 'default'},
 }
