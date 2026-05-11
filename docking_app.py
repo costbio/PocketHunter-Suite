@@ -233,10 +233,84 @@ if 'docking_job_id' not in st.session_state:
     st.session_state.docking_job_id = None
 if 'docking_task_id' not in st.session_state:
     st.session_state.docking_task_id = None
-if 'view_mode' not in st.session_state:
-    st.session_state.view_mode = 'setup'
 if 'docking_selected_pdbs' not in st.session_state:
     st.session_state.docking_selected_pdbs = {}
+
+# Cache the auto-suggested box size (computed once per cluster job).
+if 'docking_auto_box' not in st.session_state:
+    st.session_state.docking_auto_box = None
+if 'docking_auto_box_cluster' not in st.session_state:
+    st.session_state.docking_auto_box_cluster = None
+
+# Refresh the auto-suggested box size from the currently-known cluster job, so
+# the sidebar's auto-size button (which renders BEFORE the main content) has
+# the right values to offer.
+_known_cluster = (
+    st.session_state.get('docking_cluster_job_id', '')
+    or st.session_state.cached_job_ids.get('cluster')
+    or ''
+)
+_known_extract = st.session_state.get('docking_extract_job_id', '') or None
+
+
+def _compute_auto_box_for_job(cluster_job_id: str, extract_job_id: str | None = None):
+    """Compute box dimensions from the highest-probability cluster representative.
+
+    Returns ``(sx, sy, sz, cluster_label)`` or ``None`` if the auto-size cannot
+    be derived (missing CSV, missing PDB, residues unparseable, etc.).
+    Cached in session_state keyed by ``cluster_job_id`` so we don't recompute
+    on every rerun.
+    """
+    if not cluster_job_id:
+        return None
+    if st.session_state.docking_auto_box_cluster == cluster_job_id and st.session_state.docking_auto_box is not None:
+        return st.session_state.docking_auto_box
+
+    reps_csv = os.path.join(RESULTS_DIR, cluster_job_id, "pocket_clusters", "cluster_representatives.csv")
+    if not os.path.exists(reps_csv):
+        return None
+    try:
+        df = pd.read_csv(reps_csv)
+        if df.empty or "residues" not in df.columns:
+            return None
+        top = df.sort_values("probability", ascending=False).iloc[0]
+        residues = str(top.get("residues", "") or "")
+        if not residues.strip():
+            return None
+        # Locate the PDB for the top rep.
+        file_name = str(top.get("File name", "") or "")
+        pdb_path = None
+        for source in [extract_job_id, cluster_job_id]:
+            if not source:
+                continue
+            cand = os.path.join(RESULTS_DIR, source, "pdbs", file_name)
+            if os.path.exists(cand):
+                pdb_path = cand
+                break
+            cand2 = os.path.join(RESULTS_DIR, source, "pocket_clusters", file_name)
+            if os.path.exists(cand2):
+                pdb_path = cand2
+                break
+        if not pdb_path:
+            return None
+        from docking_selection import box_size_for_pocket
+        sx, sy, sz = box_size_for_pocket(pdb_path, residues, padding=4.0)
+        cluster_id = int(top.get("cluster", 0)) if pd.notna(top.get("cluster", 0)) else 0
+        result = (round(sx, 1), round(sy, 1), round(sz, 1), f"Cluster {cluster_id}")
+        st.session_state.docking_auto_box = result
+        st.session_state.docking_auto_box_cluster = cluster_job_id
+        return result
+    except Exception as e:  # noqa: BLE001 — auto-size is best-effort
+        logger.warning(f"Auto-box computation failed for {cluster_job_id}: {e}")
+        return None
+
+
+# Compute (or refresh) the auto-suggested box size for whatever cluster
+# the user has previously loaded. Best-effort; if it fails the sidebar
+# falls back to the static 20Å default.
+if _known_cluster:
+    _compute_auto_box_for_job(_known_cluster, _known_extract)
+
 
 # Sidebar for configuration
 with st.sidebar:
@@ -281,12 +355,32 @@ with st.sidebar:
     # Box size parameters
     st.markdown("#### 📦 Binding Site Box")
 
+    auto_box = st.session_state.get('docking_auto_box')
+    if auto_box:
+        sx_auto, sy_auto, sz_auto, cluster_label = auto_box
+        if st.button(
+            f"🎯 Auto-size from {cluster_label}",
+            use_container_width=True,
+            help=(
+                f"Suggested: X={sx_auto}, Y={sy_auto}, Z={sz_auto} Å "
+                "(highest-probability representative + 4 Å padding on each side). "
+                "Values are clamped to the 10–50 Å slider range."
+            ),
+        ):
+            st.session_state['box_x'] = float(min(max(sx_auto, 10.0), 50.0))
+            st.session_state['box_y'] = float(min(max(sy_auto, 10.0), 50.0))
+            st.session_state['box_z'] = float(min(max(sz_auto, 10.0), 50.0))
+            st.rerun()
+    else:
+        st.caption("💡 Load a cluster job below to enable auto-size from the top representative.")
+
     box_size_x = st.slider(
         "Box Size X (Å)",
         min_value=10.0,
         max_value=50.0,
         value=20.0,
         step=1.0,
+        key="box_x",
         help="Size of docking box in X direction"
     )
 
@@ -296,6 +390,7 @@ with st.sidebar:
         max_value=50.0,
         value=20.0,
         step=1.0,
+        key="box_y",
         help="Size of docking box in Y direction"
     )
 
@@ -305,6 +400,7 @@ with st.sidebar:
         max_value=50.0,
         value=20.0,
         step=1.0,
+        key="box_z",
         help="Size of docking box in Z direction"
     )
 
@@ -636,14 +732,16 @@ with tab_setup:
         "Cluster Job ID:",
         value=default_cluster_job,
         placeholder="e.g., cluster_20250815_143022_a1b2c3d4",
-        help="Enter the job ID from Step 3: Cluster Pockets that you want to use for docking"
+        help="Enter the job ID from Step 3: Cluster Pockets that you want to use for docking",
+        key="docking_cluster_job_id",
     )
 
     # Input for extract job ID (for PDB source directory)
     extract_job_id = st.text_input(
         "Extract Job ID (optional):",
         placeholder="e.g., extract_20250815_140022_a1b2c3d4",
-        help="Enter the job ID from Step 1: Extract Frames. Required if PDB files cannot be auto-detected."
+        help="Enter the job ID from Step 1: Extract Frames. Required if PDB files cannot be auto-detected.",
+        key="docking_extract_job_id",
     )
 
     if cluster_job_id:
@@ -656,6 +754,26 @@ with tab_setup:
             try:
                 df_reps = pd.read_csv(representatives_file)
                 st.info(f"📊 Cluster has {len(df_reps)} representative pockets")
+
+                # H3: surface what's actually being targeted. If the user came from
+                # a heatmap selection, summarize those clusters explicitly; otherwise
+                # explain that the default is "top 50% by probability."
+                from docking_selection import summarize_selection
+                if preselected_ids:
+                    _summary = summarize_selection(preselected_ids, df_reps)
+                    st.success(
+                        f"🎯 **{_summary}.**  \n"
+                        "The representatives of these clusters are pre-selected below — "
+                        "adjust the checkboxes if you want to add or remove individual frames."
+                    )
+                elif 'cluster' in df_reps.columns:
+                    _all_clusters = sorted(int(c) for c in df_reps['cluster'].dropna().unique())
+                    _summary = summarize_selection(_all_clusters, df_reps)
+                    st.info(
+                        f"🎯 **{_summary}.**  \n"
+                        "No heatmap selection was passed in, so the top 50% by probability "
+                        "are pre-selected below. Adjust the checkboxes to pick a different subset."
+                    )
 
                 # PDB file selection
                 st.markdown("### 🎯 Select PDB Files for Docking")
@@ -674,58 +792,74 @@ with tab_setup:
                 with col1:
                     if st.button("Select All", use_container_width=True):
                         for idx, row in df_reps_sorted.iterrows():
-                            key = get_pdb_selection_key(row['File name'], idx)
+                            key = get_pdb_selection_key(row['File name'], idx, row_id=row.get('Frame_pocket_index'))
                             st.session_state[key] = True
                         st.rerun()
 
                 with col2:
                     if st.button("Select Top 10", use_container_width=True):
                         for i, (idx, row) in enumerate(df_reps_sorted.iterrows()):
-                            key = get_pdb_selection_key(row['File name'], idx)
+                            key = get_pdb_selection_key(row['File name'], idx, row_id=row.get('Frame_pocket_index'))
                             st.session_state[key] = i < 10
                         st.rerun()
 
                 with col3:
                     if st.button("Clear All", use_container_width=True):
                         for idx, row in df_reps_sorted.iterrows():
-                            key = get_pdb_selection_key(row['File name'], idx)
+                            key = get_pdb_selection_key(row['File name'], idx, row_id=row.get('Frame_pocket_index'))
                             st.session_state[key] = False
                         st.rerun()
 
                 # Create columns for better layout
                 col1, col2 = st.columns(2)
 
-                def _row_label(_row):
-                    """Compact human-readable label: 'Cluster N · <spatial> · Prob X.XXX'."""
+                def _is_from_heatmap(_row):
+                    """True if this row's checkbox state came from a heatmap preselection."""
+                    if not preselected_ids:
+                        return False
+                    _cluster = _row.get('cluster', _row.get('cluster_id', None))
+                    return _cluster is not None and pd.notna(_cluster) and int(_cluster) in preselected_ids
+
+                def _row_label(_row, _from_heatmap=False):
+                    """Compact human-readable label: 'Cluster N · <spatial> · Prob X.XXX'.
+
+                    Appends a heatmap-source marker when the row's checkbox state was
+                    seeded from a Step 3 heatmap selection (H8).
+                    """
                     _cluster = _row.get('cluster', _row.get('cluster_id', None))
                     _cluster_part = f"Cluster {int(_cluster)}" if _cluster is not None and pd.notna(_cluster) else "Cluster ?"
                     _spatial = describe_cluster_spatially(_row.get('residues'))
-                    return f"{_cluster_part} · {_spatial} · Prob {_row['probability']:.3f}"
+                    _base = f"{_cluster_part} · {_spatial} · Prob {_row['probability']:.3f}"
+                    if _from_heatmap:
+                        _base += "  ← heatmap"
+                    return _base
 
-                def _row_help(_row):
-                    return f"File: {_row['File name']}"
+                def _row_help(_row, _from_heatmap=False):
+                    _msg = f"File: {_row['File name']}"
+                    if _from_heatmap:
+                        _msg += " · pre-selected from your Step 3 heatmap selection"
+                    return _msg
 
                 with col1:
                     st.markdown("#### 🏆 High Probability Pockets (Top 50%)")
                     mid = (len(df_reps_sorted) + 1) // 2
                     high_prob_pdbs = df_reps_sorted.iloc[:mid]
                     for pos_idx, (idx, row) in enumerate(high_prob_pdbs.iterrows()):
-                        # Use filename + row index key to avoid collisions with duplicate filenames
-                        key = get_pdb_selection_key(row['File name'], idx)
+                        # Stable per-row session_state key (L6)
+                        key = get_pdb_selection_key(row['File name'], idx, row_id=row.get('Frame_pocket_index'))
+                        _from_heatmap = _is_from_heatmap(row)
                         # Initialize session state if not exists
                         if key not in st.session_state:
                             if preselected_ids:
-                                # From heatmap: select only rows whose cluster ID matches
-                                cluster_col = row.get('cluster', row.get('cluster_id', None))
-                                st.session_state[key] = cluster_col in preselected_ids
+                                st.session_state[key] = _from_heatmap
                             else:
                                 st.session_state[key] = True  # Default to selected for high probability
 
                         is_selected = st.checkbox(
-                            _row_label(row),
+                            _row_label(row, _from_heatmap),
                             value=st.session_state[key],
                             key=f"{key}_checkbox",
-                            help=_row_help(row),
+                            help=_row_help(row, _from_heatmap),
                         )
                         st.session_state[key] = is_selected
                         if is_selected:
@@ -735,21 +869,21 @@ with tab_setup:
                     st.markdown("#### 📊 Lower Probability Pockets")
                     low_prob_pdbs = df_reps_sorted.iloc[mid:]
                     for idx, row in low_prob_pdbs.iterrows():
-                        # Use filename + row index key to avoid collisions with duplicate filenames
-                        key = get_pdb_selection_key(row['File name'], idx)
+                        # Stable per-row session_state key (L6)
+                        key = get_pdb_selection_key(row['File name'], idx, row_id=row.get('Frame_pocket_index'))
+                        _from_heatmap = _is_from_heatmap(row)
                         # Initialize session state if not exists
                         if key not in st.session_state:
                             if preselected_ids:
-                                cluster_col = row.get('cluster', row.get('cluster_id', None))
-                                st.session_state[key] = cluster_col in preselected_ids
+                                st.session_state[key] = _from_heatmap
                             else:
                                 st.session_state[key] = False  # Default to not selected for low probability
 
                         is_selected = st.checkbox(
-                            _row_label(row),
+                            _row_label(row, _from_heatmap),
                             value=st.session_state[key],
                             key=f"{key}_checkbox",
-                            help=_row_help(row),
+                            help=_row_help(row, _from_heatmap),
                         )
                         st.session_state[key] = is_selected
                         if is_selected:

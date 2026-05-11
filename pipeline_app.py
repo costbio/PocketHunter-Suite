@@ -141,6 +141,38 @@ def _classify_affinity(affinity):
         return "poor", "🔴"
 
 
+def _compute_inline_auto_box(df_reps, results_job_id, selected_clusters):
+    """Box-size suggestion for the inline pipeline docking form.
+
+    Picks the highest-probability rep among the selected clusters, resolves
+    its PDB, and runs ``docking_selection.box_size_for_pocket``. Returns
+    ``(sx, sy, sz, label)`` or ``None`` if anything is missing.
+    """
+    try:
+        if df_reps is None or len(df_reps) == 0 or not selected_clusters:
+            return None
+        if "cluster" in df_reps.columns:
+            sub = df_reps[df_reps["cluster"].isin([int(c) for c in selected_clusters])]
+        else:
+            sub = df_reps
+        if sub.empty:
+            return None
+        top = sub.sort_values("probability", ascending=False).iloc[0]
+        residues = str(top.get("residues", "") or "")
+        if not residues.strip():
+            return None
+        pdb_path = _resolve_pdb_path(str(top.get("File name", "")), results_job_id)
+        if not pdb_path or not os.path.exists(pdb_path):
+            return None
+        from docking_selection import box_size_for_pocket
+        sx, sy, sz = box_size_for_pocket(pdb_path, residues, padding=4.0)
+        cluster_id = int(top.get("cluster", 0)) if pd.notna(top.get("cluster", 0)) else 0
+        return (round(sx, 1), round(sy, 1), round(sz, 1), f"Cluster {cluster_id}")
+    except Exception as e:  # noqa: BLE001 — best-effort
+        logger.warning(f"Pipeline inline auto-box failed: {e}")
+        return None
+
+
 # ── Docking 3D viewer helpers (ported from docking_app.py) ──────────────
 
 _SDF_ELEMENTS = ('C', 'N', 'O', 'S', 'H', 'F', 'P', 'Cl', 'Br', 'I')
@@ -330,10 +362,10 @@ def _show_pipeline_cluster_inline(results_job_id):
 
     # Clear heatmap state when job changes
     if st.session_state.get('heatmap_last_job_id') != results_job_id:
-        st.session_state.heatmap_selected_cluster_id = None
-        st.session_state.heatmap_selected_pdb_path = None
-        st.session_state.heatmap_selected_residues = []
-        st.session_state.heatmap_docking_clusters = []
+        st.session_state.cluster_preview_id = None
+        st.session_state.cluster_preview_pdb = None
+        st.session_state.cluster_preview_residues = []
+        st.session_state.docking_target_clusters = []
         st.session_state.heatmap_last_job_id = results_job_id
 
     try:
@@ -470,14 +502,14 @@ average structure**.
                         _pdb_path = _resolve_pdb_path(_rep['File name'], _rj)
                         _res_raw = str(_rep.get('residues', ''))
                         _res_list = [r.strip() for r in _res_raw.replace(',', ' ').split() if r.strip()]
-                        st.session_state.heatmap_selected_cluster_id = _cid
-                        st.session_state.heatmap_selected_pdb_path = _pdb_path
-                        st.session_state.heatmap_selected_residues = _res_list
+                        st.session_state.cluster_preview_id = _cid
+                        st.session_state.cluster_preview_pdb = _pdb_path
+                        st.session_state.cluster_preview_residues = _res_list
                     else:
-                        if st.session_state.heatmap_selected_cluster_id == _cid:
-                            st.session_state.heatmap_selected_cluster_id = None
-                            st.session_state.heatmap_selected_pdb_path = None
-                            st.session_state.heatmap_selected_residues = []
+                        if st.session_state.cluster_preview_id == _cid:
+                            st.session_state.cluster_preview_id = None
+                            st.session_state.cluster_preview_pdb = None
+                            st.session_state.cluster_preview_residues = []
 
                 _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
                 st.checkbox(
@@ -500,10 +532,10 @@ average structure**.
             )
 
         with viewer_col:
-            sel_id = st.session_state.heatmap_selected_cluster_id
+            sel_id = st.session_state.cluster_preview_id
             if sel_id is not None:
-                sel_path = st.session_state.heatmap_selected_pdb_path
-                sel_residues = st.session_state.heatmap_selected_residues
+                sel_path = st.session_state.cluster_preview_pdb
+                sel_residues = st.session_state.cluster_preview_residues
                 rep = cluster_to_rep.get(sel_id)
                 _spatial = describe_cluster_spatially(rep.get('residues') if rep is not None else None)
                 st.markdown(f"**Cluster {sel_id}** · {_spatial}")
@@ -512,13 +544,13 @@ average structure**.
                     m1, m2 = st.columns(2)
                     m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
                     m2.metric("Residues", len(sel_residues))
-                is_selected = sel_id in st.session_state.heatmap_docking_clusters
+                is_selected = sel_id in st.session_state.docking_target_clusters
                 if st.checkbox("Select for Docking", value=is_selected, key=f"pipe_dock_sel_{sel_id}"):
-                    if sel_id not in st.session_state.heatmap_docking_clusters:
-                        st.session_state.heatmap_docking_clusters.append(sel_id)
+                    if sel_id not in st.session_state.docking_target_clusters:
+                        st.session_state.docking_target_clusters.append(sel_id)
                 else:
-                    if sel_id in st.session_state.heatmap_docking_clusters:
-                        st.session_state.heatmap_docking_clusters.remove(sel_id)
+                    if sel_id in st.session_state.docking_target_clusters:
+                        st.session_state.docking_target_clusters.remove(sel_id)
                 if sel_path and os.path.exists(sel_path):
                     _show_molecule_3d_with_pocket(sel_path, sel_residues)
                 else:
@@ -723,7 +755,7 @@ average structure**.
 
         else:
             # ── Docking input form (shown when no task is running) ──────────
-            selected_clusters = st.session_state.heatmap_docking_clusters
+            selected_clusters = st.session_state.docking_target_clusters
             if selected_clusters:
                 selected_str = ", ".join(str(c) for c in selected_clusters)
                 st.info(f"Clusters selected for docking: **{selected_str}**")
@@ -737,7 +769,7 @@ average structure**.
                 )
 
                 st.markdown("#### ⚙️ Docking Parameters")
-                dc1, dc2, dc3, dc4 = st.columns(4)
+                dc1, dc2, dc3 = st.columns(3)
                 with dc1:
                     d_poses = st.slider("Poses per Ligand", 1, 20, 10, key="pipe_dock_poses")
                 with dc2:
@@ -747,8 +779,35 @@ average structure**.
                     )
                 with dc3:
                     d_ph = st.slider("pH", 4.0, 10.0, 7.4, step=0.1, key="pipe_dock_ph")
-                with dc4:
-                    d_box = st.slider("Box Size (Å)", 10.0, 50.0, 20.0, step=1.0, key="pipe_dock_box")
+
+                # Compute auto-sized box from the highest-probability selected
+                # cluster's representative. Best-effort; falls back to 20Å on
+                # any failure.
+                _pipe_auto_box = _compute_inline_auto_box(
+                    df_reps, results_job_id, selected_clusters
+                )
+                if _pipe_auto_box:
+                    _ax, _ay, _az, _alab = _pipe_auto_box
+                    if st.button(
+                        f"🎯 Auto-size box from {_alab}",
+                        use_container_width=True,
+                        key="pipe_auto_box_btn",
+                        help=(
+                            f"Suggested: X={_ax}, Y={_ay}, Z={_az} Å — top-probability "
+                            "rep + 4 Å padding. Values are clamped to 10–50 Å."
+                        ),
+                    ):
+                        st.session_state['pipe_dock_box_x'] = float(min(max(_ax, 10.0), 50.0))
+                        st.session_state['pipe_dock_box_y'] = float(min(max(_ay, 10.0), 50.0))
+                        st.session_state['pipe_dock_box_z'] = float(min(max(_az, 10.0), 50.0))
+                        st.rerun()
+                bx1, bx2, bx3 = st.columns(3)
+                with bx1:
+                    d_box_x = st.slider("Box X (Å)", 10.0, 50.0, 20.0, step=1.0, key="pipe_dock_box_x")
+                with bx2:
+                    d_box_y = st.slider("Box Y (Å)", 10.0, 50.0, 20.0, step=1.0, key="pipe_dock_box_y")
+                with bx3:
+                    d_box_z = st.slider("Box Z (Å)", 10.0, 50.0, 20.0, step=1.0, key="pipe_dock_box_z")
 
                 if st.button("🚀 Start Docking with Selected Clusters", type="primary",
                              use_container_width=True, key="pipe_start_docking"):
@@ -803,9 +862,9 @@ average structure**.
                             num_poses=d_poses,
                             exhaustiveness=d_exhaust,
                             ph_value=d_ph,
-                            box_size_x=d_box,
-                            box_size_y=d_box,
-                            box_size_z=d_box,
+                            box_size_x=d_box_x,
+                            box_size_y=d_box_y,
+                            box_size_z=d_box_z,
                             pdb_source_dir=pdb_source_dir,
                         )
                         st.session_state.pipe_docking_task_id = dock_task_obj.id
@@ -927,8 +986,8 @@ if st.session_state.pipeline_task_id:
         st.session_state.pipeline_status = 'idle'
         st.session_state.pipe_docking_task_id = None
         st.session_state.pipe_docking_job_id = None
-        st.session_state.heatmap_docking_clusters = []
-        st.session_state.heatmap_selected_cluster_id = None
+        st.session_state.docking_target_clusters = []
+        st.session_state.cluster_preview_id = None
         st.rerun()
 
     st.stop()

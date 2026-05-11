@@ -449,10 +449,10 @@ with st.expander("📂 Load previous results"):
 if results_job_id:
     # Clear heatmap selection state whenever the active job changes
     if st.session_state.get('heatmap_last_job_id') != results_job_id:
-        st.session_state.heatmap_selected_cluster_id = None
-        st.session_state.heatmap_selected_pdb_path = None
-        st.session_state.heatmap_selected_residues = []
-        st.session_state.heatmap_docking_clusters = []
+        st.session_state.cluster_preview_id = None
+        st.session_state.cluster_preview_pdb = None
+        st.session_state.cluster_preview_residues = []
+        st.session_state.docking_target_clusters = []
         st.session_state.heatmap_last_job_id = results_job_id
 
     cluster_output_dir = os.path.join(RESULTS_DIR, results_job_id, "pocket_clusters")
@@ -714,14 +714,14 @@ average structure**.
                                             _pdb_path = resolve_pdb_path(_pdb_file, _rj)
                                             _res_raw = str(_rep.get('residues', ''))
                                             _res_list = [r.strip() for r in _res_raw.replace(',', ' ').split() if r.strip()]
-                                            st.session_state.heatmap_selected_cluster_id = _cid
-                                            st.session_state.heatmap_selected_pdb_path = _pdb_path
-                                            st.session_state.heatmap_selected_residues = _res_list
+                                            st.session_state.cluster_preview_id = _cid
+                                            st.session_state.cluster_preview_pdb = _pdb_path
+                                            st.session_state.cluster_preview_residues = _res_list
                                         else:
-                                            if st.session_state.heatmap_selected_cluster_id == _cid:
-                                                st.session_state.heatmap_selected_cluster_id = None
-                                                st.session_state.heatmap_selected_pdb_path = None
-                                                st.session_state.heatmap_selected_residues = []
+                                            if st.session_state.cluster_preview_id == _cid:
+                                                st.session_state.cluster_preview_id = None
+                                                st.session_state.cluster_preview_pdb = None
+                                                st.session_state.cluster_preview_residues = []
 
                                     _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
                                     st.checkbox(
@@ -748,10 +748,10 @@ average structure**.
                                 )
 
                             with viewer_col:
-                                sel_id = st.session_state.heatmap_selected_cluster_id
+                                sel_id = st.session_state.cluster_preview_id
                                 if sel_id is not None:
-                                    sel_path = st.session_state.heatmap_selected_pdb_path
-                                    sel_residues = st.session_state.heatmap_selected_residues
+                                    sel_path = st.session_state.cluster_preview_pdb
+                                    sel_residues = st.session_state.cluster_preview_residues
                                     rep = cluster_to_rep.get(sel_id)
 
                                     _spatial = describe_cluster_spatially(rep.get('residues') if rep is not None else None)
@@ -762,13 +762,13 @@ average structure**.
                                         m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
                                         m2.metric("Residues", len(sel_residues))
 
-                                    is_selected = sel_id in st.session_state.heatmap_docking_clusters
+                                    is_selected = sel_id in st.session_state.docking_target_clusters
                                     if st.checkbox("Select for Docking", value=is_selected, key=f"dock_sel_{sel_id}"):
-                                        if sel_id not in st.session_state.heatmap_docking_clusters:
-                                            st.session_state.heatmap_docking_clusters.append(sel_id)
+                                        if sel_id not in st.session_state.docking_target_clusters:
+                                            st.session_state.docking_target_clusters.append(sel_id)
                                     else:
-                                        if sel_id in st.session_state.heatmap_docking_clusters:
-                                            st.session_state.heatmap_docking_clusters.remove(sel_id)
+                                        if sel_id in st.session_state.docking_target_clusters:
+                                            st.session_state.docking_target_clusters.remove(sel_id)
 
                                     if sel_path and os.path.exists(sel_path):
                                         show_molecule_3d_with_pocket(sel_path, sel_residues, width=400, height=420)
@@ -777,15 +777,15 @@ average structure**.
                                 else:
                                     st.info("← Check a cluster to view its 3D structure here")
 
-                            if st.session_state.heatmap_docking_clusters:
-                                selected_str = ", ".join(str(c) for c in st.session_state.heatmap_docking_clusters)
+                            if st.session_state.docking_target_clusters:
+                                selected_str = ", ".join(str(c) for c in st.session_state.docking_target_clusters)
                                 st.info(f"Clusters selected for docking: **{selected_str}**")
                                 if st.button("Start Docking with Selected Clusters", type="primary",
                                              use_container_width=True, key="heatmap_goto_docking"):
                                     st.session_state.cached_job_ids['cluster'] = results_job_id
                                     st.session_state.heatmap_preselected_for_docking = {
                                         'cluster_job_id': results_job_id,
-                                        'cluster_ids': list(st.session_state.heatmap_docking_clusters),
+                                        'cluster_ids': list(st.session_state.docking_target_clusters),
                                     }
                                     st.session_state.pending_nav = "Step 4: Molecular Docking"
                                     st.rerun()

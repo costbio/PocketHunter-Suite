@@ -1,8 +1,32 @@
 """
 Centralized session state initialization for PocketHunter Suite.
 
-This module provides consistent session state initialization across all app modules
-to prevent key collisions and ensure proper defaults.
+Conceptual model — three distinct concerns, one source of truth each:
+
+1. **Active jobs** (per-stage): ``extract_job_id``, ``detect_job_id``,
+   ``cluster_job_id``, ``docking_job_id``, ``pipeline_job_id`` plus their
+   ``*_task_id`` and ``*_status`` partners. The ``cached_job_ids`` dict
+   mirrors these so other pages can pre-fill the Job ID inputs.
+
+2. **Docking target selection** — which clusters / PDBs the user wants
+   to dock against. Single canonical key: ``docking_target_clusters``
+   (the list of cluster IDs the user picked, from the heatmap or
+   elsewhere). Per-PDB checkboxes use stable keys keyed off
+   Frame_pocket_index (see ``get_pdb_selection_key``).
+
+3. **Preview state** — what the user has currently expanded in the
+   3D viewer on Step 3 / Pipeline. Single canonical group:
+   ``cluster_preview_id`` / ``cluster_preview_pdb`` /
+   ``cluster_preview_residues``. Strictly UI-local; not consumed by
+   any Celery task.
+
+Renames from earlier iterations:
+- ``heatmap_docking_clusters`` → ``docking_target_clusters``
+- ``heatmap_selected_cluster_id`` → ``cluster_preview_id``
+- ``heatmap_selected_pdb_path`` → ``cluster_preview_pdb``
+- ``heatmap_selected_residues`` → ``cluster_preview_residues``
+
+The unused ``view_mode`` key has been removed (was never read).
 """
 
 import streamlit as st
@@ -62,10 +86,8 @@ def initialize_session_state():
         st.session_state.docking_task_id = None
     if 'docking_display_job_id' not in st.session_state:
         st.session_state.docking_display_job_id = None
-    if 'view_mode' not in st.session_state:
-        st.session_state.view_mode = 'setup'
 
-    # Docking PDB selections - stores selected PDB files by filename
+    # Docking PDB selections - stores selected PDB files by Frame_pocket_index
     if 'docking_selected_pdbs' not in st.session_state:
         st.session_state.docking_selected_pdbs = {}
 
@@ -81,15 +103,19 @@ def initialize_session_state():
     if 'pipe_selected_pose' not in st.session_state:
         st.session_state.pipe_selected_pose = None
 
-    # Heatmap interactive selection state
-    if 'heatmap_selected_cluster_id' not in st.session_state:
-        st.session_state.heatmap_selected_cluster_id = None
-    if 'heatmap_selected_pdb_path' not in st.session_state:
-        st.session_state.heatmap_selected_pdb_path = None
-    if 'heatmap_selected_residues' not in st.session_state:
-        st.session_state.heatmap_selected_residues = []
-    if 'heatmap_docking_clusters' not in st.session_state:
-        st.session_state.heatmap_docking_clusters = []
+    # Docking target selection — which clusters the user picked to dock against.
+    # Populated by the cluster-page heatmap or the pipeline inline heatmap.
+    if 'docking_target_clusters' not in st.session_state:
+        st.session_state.docking_target_clusters = []
+
+    # Cluster preview state — what the Step 3 / pipeline 3D viewer is showing.
+    # Strictly UI-local: not consumed by any Celery task.
+    if 'cluster_preview_id' not in st.session_state:
+        st.session_state.cluster_preview_id = None
+    if 'cluster_preview_pdb' not in st.session_state:
+        st.session_state.cluster_preview_pdb = None
+    if 'cluster_preview_residues' not in st.session_state:
+        st.session_state.cluster_preview_residues = []
 
     # 3D Viewer state
     if 'selected_pocket' not in st.session_state:
@@ -98,18 +124,18 @@ def initialize_session_state():
         st.session_state.selected_pose = None
 
 
-def get_pdb_selection_key(filename: str, row_index=None) -> str:
-    """
-    Generate a unique session state key for PDB file selection.
+def get_pdb_selection_key(filename: str, row_index=None, row_id=None) -> str:
+    """Stable per-row session_state key for a PDB selection checkbox.
 
-    Args:
-        filename: The PDB filename
-        row_index: Optional DataFrame row index to disambiguate duplicate filenames
-
-    Returns:
-        A unique key string for session state
+    Prefers ``row_id`` (the ``Frame_pocket_index`` from the
+    cluster_representatives.csv — a unique row identifier that survives
+    DataFrame resorts). Falls back to a sanitized ``filename`` + ``row_index``
+    when ``row_id`` is None/empty, preserving backward compatibility with
+    older CSVs that don't carry Frame_pocket_index.
     """
-    # Sanitize filename to create valid key
+    if row_id is not None and str(row_id).strip():
+        safe = "".join(c if (c.isalnum() or c == "_") else "_" for c in str(row_id))
+        return f"pdb_select_{safe}"
     safe_name = filename.replace('.', '_').replace(' ', '_').replace('-', '_')
     if row_index is not None:
         return f"pdb_select_{safe_name}_{row_index}"
