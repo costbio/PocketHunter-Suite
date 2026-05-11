@@ -214,7 +214,12 @@ if st.session_state.find_pockets_task_id:
         st.session_state.find_pockets_status = "completed"
         st.session_state.cached_job_ids["find_pockets"] = st.session_state.find_pockets_job_id
     elif state == "FAILURE":
-        st.error(f"Task failed: {info.get('exc_message') or info.get('status') or task.result}")
+        from failure_view import load_status_json, render_task_failure
+        render_task_failure(
+            info,
+            load_status_json(st.session_state.find_pockets_job_id),
+            st.session_state.find_pockets_job_id,
+        )
         st.session_state.find_pockets_status = "failed"
 
     # Cancel option for live tasks

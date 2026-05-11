@@ -974,9 +974,13 @@ if st.session_state.pipeline_task_id:
                 _show_pipeline_cluster_inline(cluster_job)
         elif _task.state == 'FAILURE':
             show_stage_indicators(0, 'Pipeline failed')
-            st.error("❌ Pipeline failed.")
-            _info = _task.info or {}
-            st.error(f"Error: {_info.get('exc_message', str(_task.info))}")
+            from failure_view import load_status_json, render_task_failure
+            _info = _task.info if isinstance(_task.info, dict) else {}
+            render_task_failure(
+                _info,
+                load_status_json(st.session_state.pipeline_job_id),
+                st.session_state.pipeline_job_id,
+            )
     except Exception as e:
         st.warning(f"Could not retrieve task status: {e}")
 

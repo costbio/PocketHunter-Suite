@@ -111,6 +111,21 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+
+def _render_failure_summary(jobs_list):
+    """F5 — summarize recent failures by stage. Quick triage for the user."""
+    from collections import Counter
+    failed = [j for j in jobs_list if j.get('status') == 'failed']
+    if not failed:
+        return
+    stages = Counter()
+    for j in failed:
+        stage = (j.get('error') or {}).get('stage') or 'unknown'
+        stages[stage] += 1
+    parts = " · ".join(f"**{s}**: {n}" for s, n in stages.most_common())
+    st.warning(f"⚠️ {len(failed)} failed job(s) on disk — by stage: {parts}")
+
+
 # Controls row
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -128,6 +143,9 @@ search_job_id = st.text_input(
 
 # Get all jobs
 all_jobs = get_all_job_statuses()
+
+# F5 — failure summary banner (uses the full set, not the filtered view)
+_render_failure_summary(all_jobs)
 
 # Filter jobs based on search or cached status
 if search_job_id:
@@ -264,10 +282,23 @@ if jobs:
         
         if selected_job_id:
             selected_job = next((job for job in jobs if job.get('job_id') == selected_job_id), None)
-            
+
             if selected_job:
+                # F5 — if this job failed, lead with the structured failure panel.
+                if selected_job.get('status') == 'failed':
+                    from failure_view import render_task_failure
+                    st.markdown("#### Why this job failed")
+                    task_info_for_render = selected_job.get('task_info')
+                    if not isinstance(task_info_for_render, dict):
+                        task_info_for_render = {}
+                    render_task_failure(
+                        task_info_for_render,
+                        selected_job,  # status_json — has the 'error' dict written by _fail_job
+                        selected_job.get('job_id'),
+                    )
+
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     st.markdown("#### Job Information")
                     st.write(f"**Job ID:** {selected_job.get('job_id', 'N/A')}")
@@ -287,26 +318,29 @@ if jobs:
                     st.markdown("#### Task Information")
                     if 'task_id' in selected_job:
                         st.write(f"**Task ID:** {selected_job['task_id']}")
-                        
+
                         try:
                             task = celery_app.AsyncResult(selected_job['task_id'])
                             st.write(f"**Task State:** {task.state}")
-                            
+
                             if task.info:
-                                if isinstance(task.info, dict):
-                                    for key, value in task.info.items():
-                                        if key == 'progress':
-                                            # Type check to prevent crash on non-numeric values
-                                            if isinstance(value, (int, float)):
-                                                st.write(f"**Progress:** {value:.1f}%")
+                                # The raw dump is now a debug expander, not the
+                                # default. The structured failure panel above is
+                                # the primary view for failed jobs.
+                                with st.expander("Raw task info (debug)"):
+                                    if isinstance(task.info, dict):
+                                        for key, value in task.info.items():
+                                            if key == 'progress':
+                                                if isinstance(value, (int, float)):
+                                                    st.write(f"**Progress:** {value:.1f}%")
+                                                else:
+                                                    st.write(f"**Progress:** {value}")
+                                            elif key == 'current_step':
+                                                st.write(f"**Current Step:** {value}")
                                             else:
-                                                st.write(f"**Progress:** {value}")
-                                        elif key == 'current_step':
-                                            st.write(f"**Current Step:** {value}")
-                                        else:
-                                            st.write(f"**{key.title()}:** {value}")
-                                else:
-                                    st.write(f"**Task Info:** {task.info}")
+                                                st.write(f"**{key.title()}:** {value}")
+                                    else:
+                                        st.write(f"**Task Info:** {task.info}")
                         except Exception as e:
                             st.error(f"Error getting task info: {str(e)}")
                 

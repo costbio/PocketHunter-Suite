@@ -260,7 +260,13 @@ if st.session_state.cluster_task_id:
             st.session_state.cluster_status = 'completed'
             st.session_state.cached_job_ids['cluster'] = st.session_state.cluster_job_id
         elif _task.state == 'FAILURE':
-            st.error(f"❌ Clustering failed: {_task.info}")
+            from failure_view import load_status_json, render_task_failure
+            _info = _task.info if isinstance(_task.info, dict) else {}
+            render_task_failure(
+                _info,
+                load_status_json(st.session_state.cluster_job_id),
+                st.session_state.cluster_job_id,
+            )
             st.session_state.cluster_status = 'failed'
     except Exception as e:
         logger.error(f"Status banner error: {e}")

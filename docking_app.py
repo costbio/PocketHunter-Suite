@@ -1475,10 +1475,13 @@ with tab_results:
                                             )
 
         elif task.state == 'FAILURE':
-            st.error("❌ Docking job failed!")
-            error_msg = task.info.get('exc_message', 'Unknown error') if isinstance(task.info, dict) else str(task.info) if task.info else 'Unknown error'
-            st.error(f"Error: {error_msg}")
-            st.info("💡 Check the Task Monitor for detailed error logs.")
+            from failure_view import load_status_json, render_task_failure
+            _info = task.info if isinstance(task.info, dict) else {}
+            render_task_failure(
+                _info,
+                load_status_json(st.session_state.docking_job_id),
+                st.session_state.docking_job_id,
+            )
     elif st.session_state.docking_job_id and not st.session_state.docking_task_id:
         # Load results directly from disk (no Celery task ID — e.g. loaded by job ID)
         docking_output_dir = os.path.join(RESULTS_DIR, f'dock_{st.session_state.docking_job_id}')

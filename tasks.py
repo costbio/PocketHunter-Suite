@@ -26,8 +26,14 @@ CLUSTER_TIMEOUT = 1800   # 30 minutes for clustering
 logger = setup_logging(__name__)
 
 
-def _update_status_file(job_id, status, step=None, task_id=None, result_info=None, prefix=''):
-    """Update the job status JSON file on disk. Called by Celery tasks on completion/failure."""
+def _update_status_file(job_id, status, step=None, task_id=None, result_info=None,
+                        prefix='', error=None):
+    """Update the job status JSON file on disk.
+
+    On failure, pass an ``error`` dict containing at minimum ``exc_type``,
+    ``exc_message``, and ``stage`` so the UI can render a structured failure
+    panel without consulting the Celery result backend (which expires).
+    """
     try:
         filename = f'{prefix}{job_id}_status.json' if prefix else f'{job_id}_status.json'
         status_file = os.path.join(RESULTS_DIR, filename)
@@ -45,12 +51,38 @@ def _update_status_file(job_id, status, step=None, task_id=None, result_info=Non
             current_status['task_id'] = task_id
         if result_info:
             current_status['result_info'] = result_info
+        if error is not None:
+            current_status['error'] = error
         current_status['last_updated'] = datetime.now().isoformat()
         with open(status_file, 'w') as f:
             json.dump(current_status, f, indent=4)
         logger.info(f"Status file updated: {status_file} -> {status}")
     except Exception as e:
         logger.warning(f"Failed to update status file for {job_id}: {e}")
+
+
+def _fail_job(celery_task, job_id, stage, exc, log_path=None):
+    """Single chokepoint for marking a Celery task FAILED on disk + backend.
+
+    Writes a structured ``error`` dict into ``<job>_status.json`` and emits
+    the matching Celery FAILURE meta. Returns nothing; caller still re-raises.
+    """
+    err = {
+        'exc_type': type(exc).__name__,
+        'exc_message': str(exc),
+        'stage': stage,
+    }
+    if log_path:
+        err['log_path'] = log_path
+    _update_status_file(job_id, 'failed', f'{stage} failed: {exc}',
+                        task_id=celery_task.request.id, error=err)
+    celery_task.update_state(state='FAILURE', meta={
+        'status': f'{stage} failed: {exc}',
+        'exc_type': err['exc_type'],
+        'exc_message': err['exc_message'],
+        'stage': stage,
+        **({'log_path': log_path} if log_path else {}),
+    })
 
 
 def validate_pockethunter_output(output_dir, expected_files=None, expected_dirs=None):
@@ -164,12 +196,17 @@ def validate_csv_output(csv_path, required_columns=None, min_rows=0):
 
     return result
 
-def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_name, update_interval=2):
+def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_name,
+               update_interval=2, job_id=None):
     """
     Run a subprocess stage and poll it, emitting Celery progress updates within [prog_start, prog_end].
 
     stdout/stderr are redirected to temp files to avoid OS pipe-buffer deadlocks that
     occur when a subprocess writes more than ~64 KB without being drained.
+
+    On non-zero exit *and* when ``job_id`` is supplied, the captured stderr is also
+    written to ``results/<job_id>/error.log`` before the temp files are cleaned up,
+    so the UI can offer it as a download.
 
     Returns (stdout_text, stderr_text) on success; raises Exception on failure or timeout.
     """
@@ -224,6 +261,22 @@ def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_n
             stderr = f.read()
 
         if process.returncode != 0:
+            # Persist the full stderr + stdout tail to the job folder so the UI
+            # can offer it as a download. Best-effort: if it fails, fall back to
+            # the inline truncated stderr.
+            if job_id:
+                try:
+                    job_dir = os.path.join(RESULTS_DIR, job_id)
+                    os.makedirs(job_dir, exist_ok=True)
+                    error_log = os.path.join(job_dir, 'error.log')
+                    with open(error_log, 'w', errors='replace') as f:
+                        f.write(f"=== {stage_name} (exit {process.returncode}) ===\n\n")
+                        f.write("--- STDOUT (tail 4000 chars) ---\n")
+                        f.write(stdout[-4000:])
+                        f.write("\n\n--- STDERR (full) ---\n")
+                        f.write(stderr)
+                except OSError as log_err:
+                    logger.warning(f"Could not write error.log for {job_id}: {log_err}")
             raise Exception(
                 f"{stage_name} failed (exit {process.returncode}). Stderr: {stderr[-2000:]}"
             )
@@ -251,17 +304,12 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
       60 –  80%  Cluster pockets
       80 –  97%  Molecular docking (optional)
     """
+    from task_errors import ClusteringFoundNoClusters, DetectionProducedNoOutput
+
     pipeline_start = time.time()
     output_folder_job = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(output_folder_job, exist_ok=True)
-
-    def _fail(msg, exc=None):
-        _update_status_file(job_id, 'failed', msg, task_id=self.request.id)
-        self.update_state(state='FAILURE', meta={
-            'status': msg,
-            'exc_type': type(exc).__name__ if exc else 'Exception',
-            'exc_message': str(exc) if exc else msg,
-        })
+    error_log_path = os.path.join(output_folder_job, 'error.log')
 
     # ── Stage 1: Extract frames ──────────────────────────────────────────
     output_pdb_dir = os.path.join(output_folder_job, 'pdbs')
@@ -283,9 +331,10 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
     ]
 
     try:
-        _run_stage(self, cmd_extract, POCKETHUNTER_DIR, EXTRACT_TIMEOUT, 0, 25, 'Extracting frames')
+        _run_stage(self, cmd_extract, POCKETHUNTER_DIR, EXTRACT_TIMEOUT, 0, 25,
+                   'Extracting frames', job_id=job_id)
     except Exception as e:
-        _fail(f'Frame extraction failed: {e}', e)
+        _fail_job(self, job_id, 'extract', e, log_path=error_log_path)
         raise
 
     pdb_files = [f for f in os.listdir(output_pdb_dir) if f.endswith('.pdb')]
@@ -310,9 +359,10 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
     ]
 
     try:
-        _run_stage(self, cmd_detect, POCKETHUNTER_DIR, DETECT_TIMEOUT, 25, 60, 'Detecting pockets')
+        _run_stage(self, cmd_detect, POCKETHUNTER_DIR, DETECT_TIMEOUT, 25, 60,
+                   'Detecting pockets', job_id=job_id)
     except Exception as e:
-        _fail(f'Pocket detection failed: {e}', e)
+        _fail_job(self, job_id, 'detect', e, log_path=error_log_path)
         raise
 
     pockets_csv = os.path.join(output_pockets_dir, 'pockets.csv')
@@ -323,9 +373,15 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
         except Exception:
             pass
 
-    if not os.path.exists(pockets_csv):
-        _fail(f'Pocket detection produced no output file: {pockets_csv}')
-        raise FileNotFoundError(f'Expected pockets CSV not found: {pockets_csv}')
+    # F1 — silent p2rank failure detection (exit 0 but missing/empty CSV)
+    if not os.path.exists(pockets_csv) or pockets_detected == 0:
+        err = DetectionProducedNoOutput(
+            f"Pocket detection produced no usable output for job {job_id}. "
+            f"pockets.csv exists={os.path.exists(pockets_csv)}, rows={pockets_detected}. "
+            "p2rank may have crashed silently — see the error log."
+        )
+        _fail_job(self, job_id, 'detect', err, log_path=error_log_path)
+        raise err
 
     self.update_state(state='PROGRESS', meta={
         'current_step': f'Detected {pockets_detected} pockets — clustering…',
@@ -350,9 +406,10 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
         cmd_cluster.append('--hierarchical')
 
     try:
-        _run_stage(self, cmd_cluster, POCKETHUNTER_DIR, CLUSTER_TIMEOUT, 60, 80, 'Clustering pockets')
+        _run_stage(self, cmd_cluster, POCKETHUNTER_DIR, CLUSTER_TIMEOUT, 60, 80,
+                   'Clustering pockets', job_id=job_id)
     except Exception as e:
-        _fail(f'Pocket clustering failed: {e}', e)
+        _fail_job(self, job_id, 'cluster', e, log_path=error_log_path)
         raise
 
     reps_csv = os.path.join(output_clusters_dir, 'cluster_representatives.csv')
@@ -362,6 +419,16 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
             representatives = len(pd.read_csv(reps_csv))
         except Exception:
             pass
+
+    # F2 — DBSCAN zero-clusters detection
+    if not os.path.exists(reps_csv) or representatives == 0:
+        err = ClusteringFoundNoClusters(
+            f"Clustering produced no representatives for job {job_id} at min_prob={min_prob}. "
+            "Lower min_prob (try 0.3 or 0.2), reduce the trajectory stride, "
+            "or switch to the Hierarchical method."
+        )
+        _fail_job(self, job_id, 'cluster', err, log_path=error_log_path)
+        raise err
 
     self.update_state(state='PROGRESS', meta={
         'current_step': f'Found {representatives} cluster representatives',
@@ -498,6 +565,7 @@ def run_find_pockets_task(
     Step 2 (Cluster Pockets) consumes the output unchanged.
     """
     from find_pockets_helpers import progress_ranges, validate_find_pockets_inputs
+    from task_errors import DetectionProducedNoOutput
 
     started = time.time()
     output_folder_job = os.path.join(RESULTS_DIR, job_id)
@@ -506,12 +574,7 @@ def run_find_pockets_task(
     try:
         mode = validate_find_pockets_inputs(xtc_file_path, topology_file_path, pdb_input_dir)
     except ValueError as e:
-        _update_status_file(job_id, 'failed', f'Invalid inputs: {e}', task_id=self.request.id)
-        self.update_state(state='FAILURE', meta={
-            'status': f'Invalid inputs: {e}',
-            'exc_type': 'ValueError',
-            'exc_message': str(e),
-        })
+        _fail_job(self, job_id, 'input_validation', e)
         raise
 
     (extract_lo, extract_hi), (detect_lo, detect_hi) = progress_ranges(mode)
@@ -537,15 +600,10 @@ def run_find_pockets_task(
         ]
         try:
             _run_stage(self, cmd_extract, POCKETHUNTER_DIR, EXTRACT_TIMEOUT,
-                       extract_lo, extract_hi, 'Extracting frames')
+                       extract_lo, extract_hi, 'Extracting frames', job_id=job_id)
         except Exception as e:
-            _update_status_file(job_id, 'failed', f'Frame extraction failed: {e}',
-                                task_id=self.request.id)
-            self.update_state(state='FAILURE', meta={
-                'status': f'Frame extraction failed: {e}',
-                'exc_type': type(e).__name__,
-                'exc_message': str(e),
-            })
+            _fail_job(self, job_id, 'extract', e,
+                      log_path=os.path.join(output_folder_job, 'error.log'))
             raise
 
         pdb_files = [f for f in os.listdir(output_pdb_dir) if f.endswith('.pdb')]
@@ -577,29 +635,30 @@ def run_find_pockets_task(
     ]
     try:
         _run_stage(self, cmd_detect, POCKETHUNTER_DIR, DETECT_TIMEOUT,
-                   detect_lo, detect_hi, 'Detecting pockets')
+                   detect_lo, detect_hi, 'Detecting pockets', job_id=job_id)
     except Exception as e:
-        _update_status_file(job_id, 'failed', f'Pocket detection failed: {e}',
-                            task_id=self.request.id)
-        self.update_state(state='FAILURE', meta={
-            'status': f'Pocket detection failed: {e}',
-            'exc_type': type(e).__name__,
-            'exc_message': str(e),
-        })
+        _fail_job(self, job_id, 'detect', e,
+                  log_path=os.path.join(output_folder_job, 'error.log'))
         raise
 
+    # F1 — catch silent p2rank failures: even on exit 0, the CSV may be
+    # missing or empty (the underlying CLI suppresses p2rank's stderr).
     pockets_csv = os.path.join(output_pockets_dir, 'pockets.csv')
-    if not os.path.exists(pockets_csv):
-        msg = f'Pocket detection produced no output file: {pockets_csv}'
-        _update_status_file(job_id, 'failed', msg, task_id=self.request.id)
-        self.update_state(state='FAILURE', meta={'status': msg})
-        raise FileNotFoundError(msg)
-
     pockets_detected = 0
-    try:
-        pockets_detected = len(pd.read_csv(pockets_csv))
-    except Exception:
-        pass
+    if os.path.exists(pockets_csv):
+        try:
+            pockets_detected = len(pd.read_csv(pockets_csv))
+        except Exception:
+            pockets_detected = 0
+    if not os.path.exists(pockets_csv) or pockets_detected == 0:
+        err = DetectionProducedNoOutput(
+            f"Pocket detection produced no usable output for job {job_id}. "
+            f"pockets.csv exists={os.path.exists(pockets_csv)}, rows={pockets_detected}. "
+            "p2rank may have crashed silently — see the error log."
+        )
+        _fail_job(self, job_id, 'detect', err,
+                  log_path=os.path.join(output_folder_job, 'error.log'))
+        raise err
 
     elapsed = time.time() - started
     results_overview = {
@@ -1136,7 +1195,21 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                 except Exception as e:
                     logger.debug(f"Error reading representatives_csv: {e}")
                     pass
-            
+
+            # F2 — Detect "DBSCAN found no clusters" as a real failure.
+            # The subprocess returned 0, but if the representatives CSV is missing
+            # or empty, the user got a useless success. Convert to an actionable error.
+            if not os.path.exists(representatives_csv_abs) or representatives == 0:
+                from task_errors import ClusteringFoundNoClusters
+                err = ClusteringFoundNoClusters(
+                    f"Clustering produced no representatives for job {job_id} at min_prob={min_prob}. "
+                    "Lower min_prob (try 0.3 or 0.2), reduce the trajectory stride, "
+                    "or switch to the Hierarchical method."
+                )
+                _fail_job(self, job_id, 'cluster', err,
+                          log_path=os.path.join(RESULTS_DIR, job_id, 'error.log'))
+                raise err
+
             # Final success update
             self.update_state(
                 state='PROGRESS',
