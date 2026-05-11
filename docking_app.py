@@ -58,170 +58,17 @@ def update_job_status(job_id, status, step=None, task_id=None, result_info=None)
 
 # Page configuration is handled by main.py
 
-# Custom CSS for docking page with enhanced styling
+# Brutalist header — matches main.py .bh* pattern, no per-page CSS needed.
 st.markdown("""
-<style>
-    .docking-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-        padding: 2rem;
-        border-radius: 20px;
-        margin-bottom: 2rem;
-        color: white;
-        text-align: center;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-    }
-
-    .docking-header h1 {
-        margin: 0;
-        font-size: 2.5rem;
-        font-weight: 700;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-    }
-
-    .docking-card {
-        background: rgba(255, 255, 255, 0.95);
-        backdrop-filter: blur(10px);
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 8px 32px rgba(31, 38, 135, 0.15);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        margin: 1.5rem 0;
-        transition: all 0.3s ease;
-    }
-
-    .docking-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 12px 48px rgba(31, 38, 135, 0.2);
-    }
-
-    .ligand-upload {
-        border: 3px dashed #667eea;
-        border-radius: 20px;
-        padding: 2.5rem;
-        text-align: center;
-        background: linear-gradient(135deg, #f5f7fa 0%, #e8ebf5 100%);
-        margin: 1.5rem 0;
-        transition: all 0.3s ease;
-    }
-
-    .ligand-upload:hover {
-        border-color: #764ba2;
-        background: linear-gradient(135deg, #e8ebf5 0%, #dce1f0 100%);
-        transform: scale(1.01);
-    }
-
-    .results-table {
-        background: white;
-        border-radius: 15px;
-        overflow: hidden;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-    }
-
-    .affinity-badge {
-        display: inline-block;
-        padding: 0.4rem 1rem;
-        border-radius: 25px;
-        font-size: 0.85rem;
-        font-weight: 600;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-
-    .affinity-excellent {
-        background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
-        color: white;
-    }
-
-    .affinity-good {
-        background: linear-gradient(135deg, #55efc4 0%, #00b894 100%);
-        color: white;
-    }
-
-    .affinity-moderate {
-        background: linear-gradient(135deg, #fdcb6e 0%, #e17055 100%);
-        color: white;
-    }
-
-    .affinity-poor {
-        background: linear-gradient(135deg, #ff7675 0%, #d63031 100%);
-        color: white;
-    }
-
-    .job-id-display {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1.2rem;
-        border-radius: 15px;
-        font-family: 'Courier New', monospace;
-        font-size: 1.1rem;
-        text-align: center;
-        margin: 1.5rem 0;
-        box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    .metric-card {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
-        text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
-    }
-
-    .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-    }
-
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #667eea;
-        margin: 0.5rem 0;
-    }
-
-    .metric-label {
-        font-size: 0.9rem;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: #f5f7fa;
-        border-radius: 10px;
-        padding: 0 24px;
-        font-weight: 600;
-    }
-
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-    }
-
-    /* 3D viewer container */
-    .viewer-container {
-        border-radius: 15px;
-        overflow: hidden;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        margin: 1rem 0;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Header
-st.markdown("""
-<div class="docking-header">
-    <h1>🔬 Step 3: Molecular Docking</h1>
-    <p style="font-size: 1.2rem; margin-top: 0.5rem;">Advanced ligand-protein docking with 3D visualization and analysis</p>
+<div class="bh" style="margin-top: 4px;">
+    <div class="bh-row">
+        <span class="bh-title">Step 3 / Molecular Docking</span>
+        <span class="bh-version">[CLUSTERS → DOCK]</span>
+    </div>
+    <div class="bh-rule"></div>
+    <div class="bh-stages">
+        Ligand–protein docking with 3D visualization
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -431,11 +278,7 @@ with tab_setup:
     # Display job ID with reset button
     col_id, col_reset = st.columns([4, 1])
     with col_id:
-        st.markdown(f"""
-        <div class="job-id-display">
-            <strong>🎯 Job ID:</strong> {job_id}
-        </div>
-        """, unsafe_allow_html=True)
+        st.caption(f"Current docking job: `{job_id}`")
     with col_reset:
         if st.button("🔄 New Job", help="Generate a new job ID for a fresh docking configuration"):
             st.session_state.docking_display_job_id = f"docking_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"

@@ -28,45 +28,44 @@ RESULTS_DIR = str(Config.RESULTS_DIR)
 
 logger = setup_logging(__name__)
 
-# Custom CSS
+# Brutalist progress-strip CSS — only the .stage-* classes survive from the
+# legacy gradient styling. Page header below uses the global .bh* pattern.
 st.markdown("""
 <style>
-    .pipeline-header {
-        background: linear-gradient(135deg, #2E7D32 0%, #1565C0 50%, #F57C00 100%);
-        padding: 2rem;
-        border-radius: 20px;
-        margin-bottom: 2rem;
-        color: white;
-        text-align: center;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-    }
-    .pipeline-header h1 { margin: 0; font-size: 2.2rem; font-weight: 700; }
     .stage-indicator {
         display: flex;
         justify-content: space-between;
-        margin: 1.5rem 0;
+        margin: 1rem 0 1.5rem 0;
+        gap: 4px;
     }
     .stage-box {
         flex: 1;
         text-align: center;
-        padding: 0.8rem;
-        border-radius: 10px;
-        margin: 0 4px;
-        font-size: 0.85rem;
+        padding: 8px 12px;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 0.78rem;
         font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border: 2px solid #000;
     }
-    .stage-done { background: #C8E6C9; color: #1B5E20; }
-    .stage-active { background: #1565C0; color: white; }
-    .stage-pending { background: #E0E0E0; color: #757575; }
+    .stage-done    { background: #fff; color: #000; }
+    .stage-active  { background: #d4ff00; color: #000; }
+    .stage-pending { background: #f0f0f0; color: #666; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<div class="pipeline-header">
-    <h1>⚡ Full Pipeline</h1>
-    <p style="font-size: 1.1rem; margin-top: 0.5rem;">
-        Extract → Detect → Cluster → (optional) Dock — all in one shot
-    </p>
+<div class="bh" style="margin-top: 4px;">
+    <div class="bh-row">
+        <span class="bh-title">Full Pipeline</span>
+        <span class="bh-version">[MD → DOCK]</span>
+    </div>
+    <div class="bh-rule"></div>
+    <div class="bh-stages">
+        Extract <span class="sep">►</span> Detect <span class="sep">►</span>
+        Cluster <span class="sep">►</span> optional Dock
+    </div>
 </div>
 """, unsafe_allow_html=True)
 

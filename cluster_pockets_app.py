@@ -28,98 +28,17 @@ RESULTS_DIR = str(Config.RESULTS_DIR)
 # Setup logging
 logger = setup_logging(__name__)
 
-# Custom CSS for enhanced UI
+# Brutalist header — matches main.py .bh* pattern, no per-page CSS needed.
 st.markdown("""
-<style>
-    .cluster-header {
-        background: linear-gradient(135deg, #FFA726 0%, #FB8C00 50%, #EF6C00 100%);
-        padding: 2rem;
-        border-radius: 20px;
-        margin-bottom: 2rem;
-        color: white;
-        text-align: center;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-    }
-
-    .cluster-header h1 {
-        margin: 0;
-        font-size: 2.5rem;
-        font-weight: 700;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-    }
-
-    .cluster-card {
-        background: rgba(255, 255, 255, 0.95);
-        backdrop-filter: blur(10px);
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 8px 32px rgba(31, 38, 135, 0.15);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        margin: 1.5rem 0;
-        transition: all 0.3s ease;
-    }
-
-    .metric-card {
-        background: linear-gradient(135deg, #FFF3E0 0%, #FFE0B2 100%);
-        padding: 1.5rem;
-        border-radius: 15px;
-        text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        transition: all 0.3s ease;
-    }
-
-    .metric-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-    }
-
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #F57C00;
-        margin: 0.5rem 0;
-    }
-
-    .metric-label {
-        font-size: 0.9rem;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-
-    .job-id-display {
-        background: linear-gradient(135deg, #FFA726 0%, #FB8C00 100%);
-        color: white;
-        padding: 1.2rem;
-        border-radius: 15px;
-        font-family: 'Courier New', monospace;
-        font-size: 1.1rem;
-        text-align: center;
-        margin: 1.5rem 0;
-        box-shadow: 0 4px 20px rgba(255, 167, 38, 0.3);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    .cluster-badge {
-        display: inline-block;
-        padding: 0.4rem 1rem;
-        border-radius: 25px;
-        font-size: 0.85rem;
-        font-weight: 600;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        background: linear-gradient(135deg, #FFA726 0%, #FB8C00 100%);
-        color: white;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Header
-st.markdown("""
-<div class="cluster-header">
-    <h1>🎯 Step 2: Pocket Clustering</h1>
-    <p style="font-size: 1.2rem; margin-top: 0.5rem;">Group similar pockets to identify representative binding sites</p>
+<div class="bh" style="margin-top: 4px;">
+    <div class="bh-row">
+        <span class="bh-title">Step 2 / Cluster Pockets</span>
+        <span class="bh-version">[POCKETS → CLUSTERS]</span>
+    </div>
+    <div class="bh-rule"></div>
+    <div class="bh-stages">
+        Group similar pockets into representative binding sites
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -275,11 +194,7 @@ if st.session_state.cluster_task_id:
 st.markdown("### 📁 Input Configuration")
 
 if st.session_state.cluster_job_id:
-    st.markdown(f"""
-    <div class="job-id-display">
-        🔑 Current Job ID: {st.session_state.cluster_job_id}
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption(f"Current job: `{st.session_state.cluster_job_id}`")
 
 input_col1, input_col2 = st.columns(2)
 
@@ -508,34 +423,10 @@ average structure**.
 
                 # Overview metrics
                 col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Total Clusters</div>
-                        <div class="metric-value">{len(df_reps)}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                with col2:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Avg Probability</div>
-                        <div class="metric-value">{df_reps['probability'].mean():.3f}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                with col3:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Avg Residues</div>
-                        <div class="metric-value">{df_reps['num_residues'].mean():.0f}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                with col4:
-                    st.markdown(f"""
-                    <div class="metric-card">
-                        <div class="metric-label">Best Probability</div>
-                        <div class="metric-value">{df_reps['probability'].max():.3f}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                col1.metric("Total Clusters", len(df_reps))
+                col2.metric("Avg Probability", f"{df_reps['probability'].mean():.3f}")
+                col3.metric("Avg Residues", f"{df_reps['num_residues'].mean():.0f}")
+                col4.metric("Best Probability", f"{df_reps['probability'].max():.3f}")
 
                 # Load full clustered pockets for heatmap (if available)
                 clustered_file = os.path.join(cluster_output_dir, "pockets_clustered.csv")
@@ -912,16 +803,11 @@ average structure**.
                     if 'selected_cluster' in st.session_state and st.session_state.selected_cluster:
                         cluster = st.session_state.selected_cluster
 
-                        st.markdown(f"""
-                        <div class="cluster-card">
-                            <h4>🎯 Selected Cluster</h4>
-                            <p><strong>File:</strong> {cluster.get('File name', 'N/A')}</p>
-                            <p><strong>Probability:</strong> <span class="cluster-badge">
-                                {cluster.get('probability', 0):.3f}
-                            </span></p>
-                            <p><strong>Residues:</strong> {cluster.get('num_residues', 0)}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown("**Selected Cluster**")
+                        sc1, sc2, sc3 = st.columns(3)
+                        sc1.write(f"**File:** `{cluster.get('File name', 'N/A')}`")
+                        sc2.metric("Probability", f"{cluster.get('probability', 0):.3f}")
+                        sc3.metric("Residues", cluster.get('num_residues', 0))
 
                         viz_style = st.selectbox(
                             "Visualization Style:",
