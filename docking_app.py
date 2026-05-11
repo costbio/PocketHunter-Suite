@@ -20,6 +20,7 @@ from security import FileValidator, SecurityError
 from rate_limiter import RateLimitExceeded, check_task_rate_limit, check_upload_rate_limit
 from logging_config import setup_logging
 from session_state import initialize_session_state, get_pdb_selection_key
+from cluster_labels import describe_cluster_spatially
 import py3Dmol
 import streamlit.components.v1 as components
 
@@ -694,6 +695,16 @@ with tab_setup:
                 # Create columns for better layout
                 col1, col2 = st.columns(2)
 
+                def _row_label(_row):
+                    """Compact human-readable label: 'Cluster N · <spatial> · Prob X.XXX'."""
+                    _cluster = _row.get('cluster', _row.get('cluster_id', None))
+                    _cluster_part = f"Cluster {int(_cluster)}" if _cluster is not None and pd.notna(_cluster) else "Cluster ?"
+                    _spatial = describe_cluster_spatially(_row.get('residues'))
+                    return f"{_cluster_part} · {_spatial} · Prob {_row['probability']:.3f}"
+
+                def _row_help(_row):
+                    return f"File: {_row['File name']}"
+
                 with col1:
                     st.markdown("#### 🏆 High Probability Pockets (Top 50%)")
                     mid = (len(df_reps_sorted) + 1) // 2
@@ -711,9 +722,10 @@ with tab_setup:
                                 st.session_state[key] = True  # Default to selected for high probability
 
                         is_selected = st.checkbox(
-                            f"{row['File name']} (Prob: {row['probability']:.3f})",
+                            _row_label(row),
                             value=st.session_state[key],
-                            key=f"{key}_checkbox"
+                            key=f"{key}_checkbox",
+                            help=_row_help(row),
                         )
                         st.session_state[key] = is_selected
                         if is_selected:
@@ -734,9 +746,10 @@ with tab_setup:
                                 st.session_state[key] = False  # Default to not selected for low probability
 
                         is_selected = st.checkbox(
-                            f"{row['File name']} (Prob: {row['probability']:.3f})",
+                            _row_label(row),
                             value=st.session_state[key],
-                            key=f"{key}_checkbox"
+                            key=f"{key}_checkbox",
+                            help=_row_help(row),
                         )
                         st.session_state[key] = is_selected
                         if is_selected:
@@ -757,8 +770,16 @@ with tab_setup:
                     # Show selected files in expandable section
                     with st.expander(f"📋 View Selected PDB Files ({len(selected_pdbs)})"):
                         selected_df = pd.DataFrame(selected_pdbs)
+                        if 'residues' in selected_df.columns:
+                            selected_df['Location'] = selected_df['residues'].apply(describe_cluster_spatially)
+                        _preview_cols = ['File name', 'probability']
+                        if 'cluster' in selected_df.columns:
+                            selected_df['Cluster'] = selected_df['cluster'].astype('Int64')
+                            _preview_cols = ['Cluster', 'Location', 'File name', 'probability']
+                        elif 'Location' in selected_df.columns:
+                            _preview_cols = ['Location', 'File name', 'probability']
                         st.dataframe(
-                            selected_df[['File name', 'residues', 'probability']].sort_values('probability', ascending=False),
+                            selected_df[_preview_cols].sort_values('probability', ascending=False),
                             use_container_width=True
                         )
                 else:

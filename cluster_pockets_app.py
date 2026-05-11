@@ -19,6 +19,7 @@ import py3Dmol
 import streamlit.components.v1 as components
 from pathlib import Path
 from session_state import initialize_session_state
+from cluster_labels import describe_cluster_spatially
 
 # Use Config for directories
 UPLOAD_DIR = str(Config.UPLOAD_DIR)
@@ -330,6 +331,26 @@ if clustering_method == "dbscan":
 else:
     dbscan_hierarchical = False
 
+with st.expander("ℹ️ About these parameters & what to do if clustering returns 0 clusters"):
+    st.markdown(
+        """
+**`min_prob`** filters out pockets below this p2rank probability *before* clustering.
+Higher → fewer, more confident pockets. Lower → more pockets, noisier signal.
+
+**Clustering method:**
+- **DBSCAN** — density-based; only groups dense regions, marks isolated pockets as
+  *noise*. Its internal `epsilon` and `min_samples` are auto-tuned in the backend by
+  silhouette score; they cannot be set manually from this UI.
+- **Hierarchical** — tree-based; groups every pocket. No noise concept. Use this if
+  DBSCAN keeps returning zero clusters.
+
+**If you get 0 clusters (or "no representative pockets found"):**
+1. **Lower `min_prob`** — try 0.3 or 0.2. The threshold may be too strict for this trajectory.
+2. **Extract more frames** in Step 1 (lower the `stride`). DBSCAN needs density to form clusters.
+3. **Switch to Hierarchical** — it always produces clusters, even on sparse data.
+        """.strip()
+    )
+
 # Run button
 st.markdown("---")
 if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width=True):
@@ -457,6 +478,24 @@ if results_job_id:
                 st.markdown("---")
                 st.markdown("### 🎯 Clustering Results")
 
+                with st.expander("ℹ️ Reading these results — what's a 'representative'?"):
+                    st.markdown(
+                        """
+Each cluster groups pockets that touch a similar set of residues across
+trajectory frames. The **representative** is the *single PDB frame* whose
+pocket is closest (by Hamming distance on the residue-presence vector) to all
+other pockets in that cluster — i.e. the most typical member, **not an
+average structure**.
+
+- The 3D Viewer and the docking step operate on this one representative frame.
+- The **Residue Heatmap** shows residue *frequency across all pockets in the
+  cluster*, so the representative's exact residues may not match the brightest
+  spots on the heatmap.
+- The full footprint of a cluster (the union of residues across every member
+  pocket) can be larger than what the representative alone shows.
+                        """.strip()
+                    )
+
                 # Overview metrics
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -518,20 +557,40 @@ if results_job_id:
                             return "🔴 Low"
 
                     df_display['Quality'] = df_display['probability'].apply(get_quality_badge)
+                    if 'residues' in df_display.columns:
+                        df_display['Location'] = df_display['residues'].apply(describe_cluster_spatially)
+                    else:
+                        df_display['Location'] = "—"
 
+                    _table_cols = ['File name', 'Location', 'probability', 'num_residues', 'Quality']
+                    if 'cluster' in df_display.columns:
+                        df_display['Cluster'] = df_display['cluster'].astype('Int64')
+                        _table_cols = ['Cluster'] + _table_cols
                     st.dataframe(
-                        df_display[['File name', 'probability', 'num_residues', 'Quality']],
+                        df_display[_table_cols],
                         use_container_width=True,
                         height=400
                     )
 
                     if len(df_display) > 0:
                         st.markdown("---")
-                        st.markdown("**Select a cluster to view in 3D:**")
+                        st.markdown("**Preview a cluster in the 3D Viewer tab:**")
+                        st.caption(
+                            "This selection only drives the 3D Viewer tab below. "
+                            "To pick clusters for **docking**, use the Residue Heatmap tab "
+                            "and tick `Select for Docking` next to the cluster you want."
+                        )
+
+                        def _table_label(x):
+                            _row = df_display.loc[x]
+                            _cluster = _row.get('cluster', _row.get('Cluster', None))
+                            _cluster_part = f"Cluster {int(_cluster)} · " if _cluster is not None and pd.notna(_cluster) else ""
+                            return f"{_cluster_part}{_row['Location']} · Prob {_row['probability']:.3f}"
+
                         selected_idx = st.selectbox(
-                            "Choose cluster:",
+                            "Preview which cluster?",
                             df_display.index,
-                            format_func=lambda x: f"{df_display.loc[x, 'File name']} (Prob: {df_display.loc[x, 'probability']:.3f})"
+                            format_func=_table_label
                         )
                         if selected_idx is not None:
                             st.session_state.selected_cluster = df_display.loc[selected_idx].to_dict()
@@ -568,8 +627,10 @@ if results_job_id:
                                 clust_data = df_clustered[df_clustered['cluster'] == clust]
                                 freq = clust_data[residue_cols].mean()
                                 consensus_rows.append(freq.values)
+                                _rep = cluster_to_rep.get(int(clust))
+                                _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
                                 cluster_labels.append(
-                                    f"Cluster {clust}  ({len(clust_data)} pockets, avg prob: {clust_data['probability'].mean():.3f})"
+                                    f"Cluster {clust} · {_spatial}  ({len(clust_data)} pockets, avg prob: {clust_data['probability'].mean():.3f})"
                                 )
 
                             consensus_matrix = np.array(consensus_rows)
@@ -662,10 +723,12 @@ if results_job_id:
                                                 st.session_state.heatmap_selected_pdb_path = None
                                                 st.session_state.heatmap_selected_residues = []
 
+                                    _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
                                     st.checkbox(
-                                        f"Cluster {_cid}  ({_n} pockets, avg prob: {_avg:.3f})",
+                                        f"Cluster {_cid} · {_spatial}",
                                         key=f"cluster_cb_{_cid}",
                                         on_change=_on_change,
+                                        help=f"{_n} pockets · avg probability {_avg:.3f}",
                                     )
                                     # Gap between checkboxes to match heatmap row height
                                     st.markdown(
@@ -676,8 +739,12 @@ if results_job_id:
                             with heat_col:
                                 st.plotly_chart(fig_heat, use_container_width=True, key="consensus_heatmap")
                                 st.caption(
-                                    "Each row = a cluster. Each column = a residue. "
-                                    "Color = how consistently the residue appears (0 = never, 1 = always)."
+                                    "Each row = a cluster. Each column = a residue "
+                                    "(labels are `chain_residueNumber` — e.g. `A_807` = chain A, residue 807). "
+                                    "Color = how often that residue appears across the cluster's pockets "
+                                    "(0 = never, 1 = always). "
+                                    "**The representative pocket may not include every bright residue here** — "
+                                    "scroll down to the per-pocket heatmap (★ rows) to see its exact residues."
                                 )
 
                             with viewer_col:
@@ -687,7 +754,9 @@ if results_job_id:
                                     sel_residues = st.session_state.heatmap_selected_residues
                                     rep = cluster_to_rep.get(sel_id)
 
-                                    st.markdown(f"**Cluster {sel_id}** — Representative Structure")
+                                    _spatial = describe_cluster_spatially(rep.get('residues') if rep is not None else None)
+                                    st.markdown(f"**Cluster {sel_id}** · {_spatial}")
+                                    st.caption("Representative structure (medoid pocket)")
                                     if rep is not None:
                                         m1, m2 = st.columns(2)
                                         m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
@@ -763,6 +832,11 @@ if results_job_id:
                                 margin=dict(l=20, r=20, b=100),
                             )
                             st.plotly_chart(fig_detail, use_container_width=True)
+                            st.caption(
+                                "One row per individual pocket. Residue labels are `chain_residueNumber` "
+                                "(e.g. `A_807` = chain A, residue 807). "
+                                "★ marks the medoid frame that was elected representative for each cluster."
+                            )
                         else:
                             st.warning("No residue columns found in clustered data.")
                     else:

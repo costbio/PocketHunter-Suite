@@ -21,6 +21,7 @@ from security import handle_file_upload_secure, SecurityError
 from rate_limiter import RateLimitExceeded, check_task_rate_limit
 from logging_config import setup_logging
 from session_state import initialize_session_state
+from cluster_labels import describe_cluster_spatially
 
 UPLOAD_DIR = str(Config.UPLOAD_DIR)
 RESULTS_DIR = str(Config.RESULTS_DIR)
@@ -351,6 +352,24 @@ def _show_pipeline_cluster_inline(results_job_id):
         st.markdown("---")
         st.markdown("### 🗺️ Clustering Results")
 
+        with st.expander("ℹ️ Reading these results — what's a 'representative'?"):
+            st.markdown(
+                """
+Each cluster groups pockets that touch a similar set of residues across
+trajectory frames. The **representative** is the *single PDB frame* whose
+pocket is closest (by Hamming distance on the residue-presence vector) to all
+other pockets in that cluster — i.e. the most typical member, **not an
+average structure**.
+
+- The 3D Viewer and the docking step operate on this one representative frame.
+- The **Residue Heatmap** shows residue *frequency across all pockets in the
+  cluster*, so the representative's exact residues may not match the brightest
+  spots on the heatmap.
+- The full footprint of a cluster (the union of residues across every member
+  pocket) can be larger than what the representative alone shows.
+                """.strip()
+            )
+
         clustered_file = os.path.join(cluster_output_dir, "pockets_clustered.csv")
         if not os.path.exists(clustered_file):
             st.info("Heatmap requires pockets_clustered.csv — not found for this job.")
@@ -382,8 +401,10 @@ def _show_pipeline_cluster_inline(results_job_id):
         for clust in unique_clusters:
             clust_data = df_clustered[df_clustered['cluster'] == clust]
             consensus_rows.append(clust_data[residue_cols].mean().values)
+            _rep = cluster_to_rep.get(int(clust))
+            _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
             cluster_labels.append(
-                f"Cluster {clust}  ({len(clust_data)} pockets, avg prob: {clust_data['probability'].mean():.3f})"
+                f"Cluster {clust} · {_spatial}  ({len(clust_data)} pockets, avg prob: {clust_data['probability'].mean():.3f})"
             )
         consensus_matrix = np.array(consensus_rows)
         col_mask = consensus_matrix.sum(axis=0) > 0
@@ -458,18 +479,24 @@ def _show_pipeline_cluster_inline(results_job_id):
                             st.session_state.heatmap_selected_pdb_path = None
                             st.session_state.heatmap_selected_residues = []
 
+                _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
                 st.checkbox(
-                    f"Cluster {_cid}  ({_n} pockets, avg prob: {_avg:.3f})",
+                    f"Cluster {_cid} · {_spatial}",
                     key=f"pipe_cluster_cb_{_cid}",
                     on_change=_on_change,
+                    help=f"{_n} pockets · avg probability {_avg:.3f}",
                 )
                 st.markdown(f'<div style="height:{_gap:.0f}px"></div>', unsafe_allow_html=True)
 
         with heat_col:
             st.plotly_chart(fig_heat, use_container_width=True, key="pipe_consensus_heatmap")
             st.caption(
-                "Each row = a cluster. Each column = a residue. "
-                "Color = how consistently the residue appears (0 = never, 1 = always)."
+                "Each row = a cluster. Each column = a residue "
+                "(labels are `chain_residueNumber` — e.g. `A_807` = chain A, residue 807). "
+                "Color = how often that residue appears across the cluster's pockets "
+                "(0 = never, 1 = always). "
+                "**The representative pocket may not include every bright residue here** — "
+                "its exact residues are listed in the 3D viewer panel to the right."
             )
 
         with viewer_col:
@@ -478,7 +505,9 @@ def _show_pipeline_cluster_inline(results_job_id):
                 sel_path = st.session_state.heatmap_selected_pdb_path
                 sel_residues = st.session_state.heatmap_selected_residues
                 rep = cluster_to_rep.get(sel_id)
-                st.markdown(f"**Cluster {sel_id}** — Representative Structure")
+                _spatial = describe_cluster_spatially(rep.get('residues') if rep is not None else None)
+                st.markdown(f"**Cluster {sel_id}** · {_spatial}")
+                st.caption("Representative structure (medoid pocket)")
                 if rep is not None:
                     m1, m2 = st.columns(2)
                     m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
