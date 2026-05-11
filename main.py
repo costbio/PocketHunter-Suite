@@ -30,173 +30,91 @@ st.set_page_config(
     }
 )
 
-# Custom CSS for theme-compatible design with molecular dynamics aesthetic
+# Brutalist scientific aesthetic — bespoke header + option_menu overrides only.
+# Global theming (fonts, colors, borders, radii) lives in .streamlit/config.toml.
 st.markdown("""
 <style>
-    /* Molecular dynamics color palette - adapts to theme */
-    :root {
-        --pocket-primary: #2E7D32;
-        --pocket-secondary: #1565C0;
-        --pocket-accent: #F57C00;
-        --success-bg: rgba(46, 125, 50, 0.15);
-        --error-bg: rgba(198, 40, 40, 0.15);
-        --info-bg: rgba(21, 101, 192, 0.15);
-        --border-opacity: 0.2;
+    .bh {
+        border: 2px solid #000;
+        padding: 18px 22px;
+        margin: 0 0 28px 0;
+        background: #fff;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
     }
-
-    /* Main header - molecular structure inspired */
-    .main-header {
-        background: linear-gradient(135deg,
-            var(--pocket-primary) 0%,
-            var(--pocket-secondary) 50%,
-            var(--pocket-accent) 100%);
-        padding: 1.5rem;
-        border-radius: 12px;
-        margin-bottom: 2rem;
-        color: white;
-        text-align: center;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    .bh-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 16px;
     }
-
-    /* Metric cards - theme adaptive with subtle molecular grid pattern */
-    .metric-card {
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.5);
-        backdrop-filter: blur(10px);
-        padding: 1.5rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        border-left: 4px solid var(--pocket-primary);
-        border-top: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), var(--border-opacity));
-        margin: 1rem 0;
-        transition: all 0.3s ease;
+    .bh-title {
+        font-size: 1.55rem;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+        text-transform: uppercase;
+        color: #000;
     }
-
-    .metric-card:hover {
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        transform: translateY(-2px);
+    .bh-version {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #000;
+        background: #d4ff00;
+        padding: 3px 10px;
+        border: 2px solid #000;
+        white-space: nowrap;
     }
-
-    /* Status indicators - theme adaptive */
-    .status-success {
-        background: var(--success-bg);
-        border: 1px solid rgba(46, 125, 50, 0.3);
-        color: var(--text-color);
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #2E7D32;
+    .bh-rule { border-top: 1px solid #000; margin: 10px 0 10px 0; }
+    .bh-bar {
+        height: 10px;
+        margin: 8px 0 14px 0;
+        background-image: repeating-linear-gradient(
+            90deg,
+            #d4ff00 0 14px,
+            #000 14px 16px
+        );
     }
-
-    .status-error {
-        background: var(--error-bg);
-        border: 1px solid rgba(198, 40, 40, 0.3);
-        color: var(--text-color);
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #C62828;
+    .bh-stages {
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        color: #000;
+        text-transform: uppercase;
     }
+    .bh-stages span.sep { color: #d4ff00; padding: 0 6px; }
 
-    .status-info {
-        background: var(--info-bg);
-        border: 1px solid rgba(21, 101, 192, 0.3);
-        color: var(--text-color);
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #1565C0;
-    }
-
-    /* Upload area - molecular pocket visualization inspired */
-    .upload-area {
-        border: 2px dashed var(--pocket-primary);
-        border-radius: 12px;
-        padding: 2rem;
-        text-align: center;
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3);
-        margin: 1rem 0;
-        transition: all 0.3s ease;
-    }
-
-    .upload-area:hover {
-        border-color: var(--pocket-accent);
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.5);
-    }
-
-    /* Job ID display - monospace with molecular theme */
-    .job-id-display {
-        background: linear-gradient(135deg,
-            var(--pocket-primary) 0%,
-            var(--pocket-secondary) 100%);
-        color: white;
-        padding: 0.75rem 1.25rem;
-        border-radius: 8px;
-        font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-        font-size: 0.9rem;
-        margin: 0.5rem 0;
-        display: inline-block;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        letter-spacing: 0.5px;
-    }
-
-    /* Enhanced metrics for molecular data */
-    .stMetric {
-        background: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3);
-        padding: 0.5rem;
-        border-radius: 8px;
-        border: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), 0.1);
-    }
-
-    /* Navigation menu theme compatibility */
-    nav[data-testid="stHorizontalBlock"] {
-        background: transparent !important;
-    }
-
-    /* Option menu container - theme adaptive */
+    /* option_menu navigation — brutalist override (theme.toml can't reach it) */
     [class*="nav-link"] {
-        color: var(--text-color) !important;
-        background-color: rgba(var(--secondary-background-color-rgb, 240, 242, 246), 0.3) !important;
-        border: 1px solid rgba(var(--text-color-rgb, 49, 51, 63), 0.1) !important;
-        transition: all 0.3s ease !important;
+        color: #000 !important;
+        background-color: #fff !important;
+        border: 2px solid #000 !important;
+        border-radius: 0 !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.04em !important;
+        transition: none !important;
     }
-
     [class*="nav-link"]:hover {
-        background-color: rgba(var(--pocket-primary), 0.1) !important;
-        border-color: var(--pocket-primary) !important;
+        background-color: #d4ff00 !important;
+        color: #000 !important;
     }
-
-    /* Selected nav link - visible in both themes */
     [class*="nav-link-selected"] {
-        background: linear-gradient(135deg, var(--pocket-primary) 0%, var(--pocket-secondary) 100%) !important;
-        color: white !important;
-        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        background-color: #000 !important;
+        color: #fff !important;
+        border: 2px solid #000 !important;
     }
-
-    /* Nav icons - theme adaptive */
-    [class*="nav-link"] svg {
-        color: var(--text-color) !important;
-        opacity: 0.7;
-    }
-
-    [class*="nav-link-selected"] svg {
-        color: white !important;
-        opacity: 1;
-    }
-
-    /* Menu container background */
-    .css-1544g2n, [data-testid="stVerticalBlock"] > div:first-child {
-        background: transparent !important;
-    }
+    [class*="nav-link"] svg { color: inherit !important; opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
-# Header with logo
 st.markdown("""
-<div class="main-header">
-    <h1>🧬 PocketHunter Suite</h1>
-    <p>Advanced Molecular Dynamics Pocket Detection & Analysis</p>
+<div class="bh">
+    <div class="bh-row">
+        <span class="bh-title">PocketHunter/Suite</span>
+        <span class="bh-version">[v.1.0]</span>
+    </div>
+    <div class="bh-rule"></div>
+    <div class="bh-bar"></div>
+    <div class="bh-stages">MD<span class="sep">►</span>POCKETS<span class="sep">►</span>CLUSTERS<span class="sep">►</span>DOCK</div>
 </div>
 """, unsafe_allow_html=True)
 

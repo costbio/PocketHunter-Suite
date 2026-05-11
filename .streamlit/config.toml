@@ -1,0 +1,50 @@
+# Brutalist scientific theme — JetBrains Mono, B&W, acid yellow accent
+# Zero radius, hard 2px-equivalent borders, no shadows.
+
+[theme]
+base = "light"
+
+primaryColor = "#000000"             # Buttons: black bg, white text — peak brutalist
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f4f4"
+textColor = "#000000"
+linkColor = "#000000"
+borderColor = "#000000"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "none"
+buttonRadius = "none"
+linkUnderline = true
+
+font = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap"
+headingFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700;800&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+codeFontSize = "13px"
+baseFontSize = 14
+baseFontWeight = 400
+headingFontSizes = ["28px", "22px", "18px", "15px", "13px", "12px"]
+headingFontWeights = [800, 700, 700, 600, 600, 600]
+
+# Semantic palette — preserve status legibility, but harsh
+redColor = "#cc0000"
+greenColor = "#000000"
+yellowColor = "#d4ff00"
+yellowBackgroundColor = "#d4ff00"
+yellowTextColor = "#000000"
+orangeColor = "#000000"
+blueColor = "#000000"
+violetColor = "#000000"
+grayColor = "#666666"
+
+chartCategoricalColors = ["#000000", "#d4ff00", "#666666", "#cc0000", "#999999", "#333333", "#cccccc"]
+
+# Dataframe — black borders, but keep header readable
+dataframeBorderColor = "#000000"
+dataframeHeaderBackgroundColor = "#f4f4f4"
+
+[theme.sidebar]
+backgroundColor = "#f4f4f4"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#000000"
+borderColor = "#000000"
+primaryColor = "#000000"
