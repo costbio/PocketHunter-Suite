@@ -71,7 +71,7 @@ input, textarea, select, .st-emotion-cache input,
 .block-container {
     padding-top: 0.5rem !important;
     padding-bottom: 2rem !important;
-    max-width: 900px;
+    max-width: 1100px;
 }
 
 /* ── Panels ── */
