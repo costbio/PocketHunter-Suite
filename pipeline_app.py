@@ -464,15 +464,13 @@ if submitted:
     job_upload_dir = os.path.join(UPLOAD_DIR, job_id)
     os.makedirs(job_upload_dir, exist_ok=True)
 
-    # Save trajectory
-    traj_path = os.path.join(job_upload_dir, traj_file.name)
-    with open(traj_path, 'wb') as f:
-        f.write(traj_file.getbuffer())
-
-    # Save topology
-    topo_path = os.path.join(job_upload_dir, topo_file.name)
-    with open(topo_path, 'wb') as f:
-        f.write(topo_file.getbuffer())
+    # Save trajectory (validated + sanitized)
+    try:
+        traj_path = str(handle_file_upload_secure(traj_file, job_id, "trajectory_"))
+        topo_path = str(handle_file_upload_secure(topo_file, job_id, "topology_"))
+    except SecurityError as e:
+        st.error(f"File validation failed: {e}")
+        st.stop()
 
     # Submit Celery task
     task = run_pockethunter_pipeline.delay(

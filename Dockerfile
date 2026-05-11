@@ -23,8 +23,11 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p uploads results logs
+# Create necessary directories and non-root user
+RUN mkdir -p uploads results logs && \
+    useradd -m -s /bin/bash pockethunter && \
+    chown -R pockethunter:pockethunter /app
+USER pockethunter
 
 # Expose Streamlit port
 EXPOSE 8501

@@ -2,8 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pockethunter-redis
-    ports:
-      - "6379:6379"
+    # Redis internal-only — no host port exposure
     volumes:
       - redis_data:/data
     healthcheck:
@@ -79,7 +78,6 @@ services:
       - ./uploads:/app/uploads
       - ./results:/app/results
       - ./logs:/app/logs
-      - .:/app
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
       interval: 30s

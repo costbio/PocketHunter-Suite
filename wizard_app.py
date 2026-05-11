@@ -569,15 +569,13 @@ Focus on the **relative ranking** of conformations rather than absolute ROC-AUC 
 
 def _launch_discrimination(cluster_job_id, actives_file, decoys_file, pipeline_job_id) -> None:
     disc_job_id = f"disc_{uuid.uuid4().hex[:8]}"
-    upload_dir  = os.path.join(UPLOAD_DIR, disc_job_id)
-    os.makedirs(upload_dir, exist_ok=True)
 
-    actives_path = os.path.join(upload_dir, 'actives.sdf')
-    decoys_path  = os.path.join(upload_dir, 'decoys.sdf')
-    with open(actives_path, 'wb') as f:
-        f.write(actives_file.getbuffer())
-    with open(decoys_path, 'wb') as f:
-        f.write(decoys_file.getbuffer())
+    try:
+        actives_path = str(handle_file_upload_secure(actives_file, disc_job_id, "actives_"))
+        decoys_path  = str(handle_file_upload_secure(decoys_file, disc_job_id, "decoys_"))
+    except SecurityError as e:
+        st.error(f"File validation failed: {e}")
+        st.stop()
 
     extract_job_id = st.session_state.cached_job_ids.get('extract') or None
     task = run_discrimination_task.delay(
