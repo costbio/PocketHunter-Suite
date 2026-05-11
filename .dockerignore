@@ -22,3 +22,4 @@ test_output/
 celery_new.log
 smina_debug.log
 dump.rdb
+PocketHunter/tools/p2rank/test_data/

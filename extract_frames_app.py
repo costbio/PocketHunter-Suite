@@ -55,7 +55,7 @@ def update_job_status(job_id, status, step=None, task_id=None, result_info=None)
 # Main UI
 st.markdown("""
 <div class="metric-card">
-    <h2>📁 Step 1: Extract Frames to PDB</h2>
+    <h2> Step 1: Extract Frames to PDB</h2>
     <p>Extract frames from molecular dynamics trajectory and convert to PDB format for pocket detection</p>
 </div>
 """, unsafe_allow_html=True)
@@ -64,17 +64,17 @@ st.markdown("""
 if st.session_state.extract_job_id:
     st.markdown(f"""
     <div class="job-id-display">
-        🔑 Current Job ID: {st.session_state.extract_job_id}
+         Current Job ID: {st.session_state.extract_job_id}
     </div>
     """, unsafe_allow_html=True)
-    st.info("💡 Copy this Job ID to use in Step 2: Detect Pockets")
+    st.info(" Copy this Job ID to use in Step 2: Detect Pockets")
 
 # Force refresh section
-st.markdown("### 🔄 Task Management")
+st.markdown("###  Task Management")
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("🔄 Force Refresh", key="force_refresh_extract"):
+    if st.button(" Force Refresh", key="force_refresh_extract"):
         # Clear all task-related session state
         if 'extract_task_id' in st.session_state:
             del st.session_state.extract_task_id
@@ -84,7 +84,7 @@ with col1:
         st.rerun()
 
 with col2:
-    if st.button("🗑️ Clear All Data", key="clear_all_extract"):
+    if st.button("️ Clear All Data", key="clear_all_extract"):
         # Clear all session state
         for key in list(st.session_state.keys()):
             if key.startswith('extract_'):
@@ -93,7 +93,7 @@ with col2:
         st.rerun()
 
 # File upload section
-st.markdown("### 📁 Input Files")
+st.markdown("###  Input Files")
 
 col1, col2 = st.columns(2)
 
@@ -116,7 +116,7 @@ with col2:
     )
 
 # Parameters
-st.markdown("### ⚙️ Extraction Parameters")
+st.markdown("### ️ Extraction Parameters")
 
 col1, col2 = st.columns(2)
 
@@ -140,7 +140,7 @@ with col2:
 
 # Run button
 st.markdown("---")
-if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=True):
+if st.button(" Start Frame Extraction", type="primary", use_container_width=True):
     if not xtc_file or not topology_file:
         st.error("Please upload both trajectory and topology files.")
     else:
@@ -159,11 +159,11 @@ if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=
             logger.warning(f"Rate limit exceeded for job {job_id}: {e}")
             st.stop()
         except SecurityError as e:
-            st.error(f"❌ File upload failed: {e}")
+            st.error(f" File upload failed: {e}")
             logger.error(f"Security error during upload for job {job_id}: {e}")
             st.stop()
         except Exception as e:
-            st.error(f"❌ Unexpected error during file upload: {e}")
+            st.error(f" Unexpected error during file upload: {e}")
             logger.error(f"Upload error for job {job_id}: {e}", exc_info=True)
             st.stop()
 
@@ -208,7 +208,7 @@ if st.button("🚀 Start Frame Extraction", type="primary", use_container_width=
 
 # Status monitoring - show for any active task or completed task
 if st.session_state.extract_task_id or st.session_state.extract_status == 'completed':
-    st.markdown("### 📊 Extraction Status")
+    st.markdown("###  Extraction Status")
     
     # Check if we have a valid task_id
     if st.session_state.extract_task_id:
@@ -219,7 +219,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
             st.error("This might be due to an old or invalid task ID. Try refreshing the page or starting a new task.")
             
             # Add button to clear the task
-            if st.button("🔄 Clear Task and Start Fresh", key="clear_extract_task"):
+            if st.button(" Clear Task and Start Fresh", key="clear_extract_task"):
                 st.session_state.extract_task_id = None
                 st.session_state.extract_status = 'idle'
                 st.success("Task cleared! You can now start a new extraction.")
@@ -228,7 +228,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
             st.stop()
     else:
         # No task_id but status is completed - show completion status
-        st.markdown('<div class="status-success">✅ Frame extraction completed successfully!</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-success"> Frame extraction completed successfully!</div>', unsafe_allow_html=True)
         
         # Display results from output files
         if st.session_state.extract_job_id:
@@ -236,7 +236,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
             if os.path.exists(output_dir):
                 pdb_files = [f for f in os.listdir(output_dir) if f.endswith('.pdb')]
                 if pdb_files:
-                    st.markdown("### 📈 Results")
+                    st.markdown("###  Results")
                     
                     # Display summary metrics
                     col1, col2, col3 = st.columns(3)
@@ -250,15 +250,15 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
                     with col3:
                         st.metric("Files Found", len(pdb_files))
                     
-                    st.success(f"✅ Frame extraction complete! Found {len(pdb_files)} PDB files. Use this Job ID in Step 2: Detect Pockets")
+                    st.success(f" Frame extraction complete! Found {len(pdb_files)} PDB files. Use this Job ID in Step 2: Detect Pockets")
                     
                     # Show job ID prominently
                     st.markdown(f"""
                     <div class="job-id-display">
-                        🔑 Job ID: {st.session_state.extract_job_id}
+                         Job ID: {st.session_state.extract_job_id}
                     </div>
                     """, unsafe_allow_html=True)
-                    st.info("💡 Copy this Job ID to use in Step 2: Detect Pockets")
+                    st.info(" Copy this Job ID to use in Step 2: Detect Pockets")
     
     # BULLETPROOF: ALWAYS show progress bar if there's any task activity - NEVER let it disappear!
     show_progress = False
@@ -303,23 +303,23 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
             current_step = "Waiting to start..."
             status = "Queued..."
         elif task_state == 'PROGRESS':
-            st.markdown(f'<div class="status-info">🔄 Frame extraction is running: {current_step}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-info"> Frame extraction is running: {current_step}</div>', unsafe_allow_html=True)
         elif task_state == 'SUCCESS':
-            st.markdown('<div class="status-success">✅ Frame extraction completed successfully!</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-success"> Frame extraction completed successfully!</div>', unsafe_allow_html=True)
             # Keep progress at 100% for completed tasks
             progress_percent = 100
             current_step = "Frame extraction completed successfully!"
             status = "Completed"
         elif task_state == 'FAILURE':
-            st.markdown('<div class="status-error">❌ Frame extraction failed!</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-error"> Frame extraction failed!</div>', unsafe_allow_html=True)
             # Keep progress visible even for failed tasks
             current_step = "Task failed"
             status = "Failed"
         else:
-            st.markdown(f'<div class="status-info">🔄 Frame extraction status: {task_state}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-info"> Frame extraction status: {task_state}</div>', unsafe_allow_html=True)
         
         # ALWAYS show the progress bar - NEVER disappears!
-        st.markdown("### 📊 Progress")
+        st.markdown("###  Progress")
         progress_bar = st.progress(progress_percent / 100)
         
         # Progress details in columns - always visible
@@ -343,7 +343,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
         
         # Show warning if task is taking too long (only for running tasks)
         if task_state == 'PROGRESS' and progress_percent < 50 and 'elapsed' in progress_info and progress_info['elapsed'] > 300:  # 5 minutes
-            st.warning("⚠️ Task is taking longer than expected. This might indicate an issue with the input files or system resources.")
+            st.warning("️ Task is taking longer than expected. This might indicate an issue with the input files or system resources.")
         
         # Check if task is actually completed and show results
         if st.session_state.extract_task_id and task.ready() and task.successful():
@@ -365,7 +365,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
 
             # Display results
             if result:
-                st.markdown("### 📈 Results")
+                st.markdown("###  Results")
                 
                 # Display summary metrics
                 col1, col2, col3 = st.columns(3)
@@ -379,21 +379,21 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
                 with col3:
                     st.metric("Processing Time", f"{result.get('processing_time', 0):.1f}s")
                 
-                st.success("✅ Frame extraction complete! Use this Job ID in Step 2: Detect Pockets")
+                st.success(" Frame extraction complete! Use this Job ID in Step 2: Detect Pockets")
                 
                 # Show job ID prominently
                 st.markdown(f"""
                 <div class="job-id-display">
-                    🔑 Job ID: {st.session_state.extract_job_id}
+                     Job ID: {st.session_state.extract_job_id}
                 </div>
                 """, unsafe_allow_html=True)
-                st.info("💡 Copy this Job ID to use in Step 2: Detect Pockets")
+                st.info(" Copy this Job ID to use in Step 2: Detect Pockets")
         
         # Add action buttons - always visible when there's a task
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("❌ Cancel Task", key="cancel_extract_task"):
+            if st.button(" Cancel Task", key="cancel_extract_task"):
                 try:
                     if st.session_state.extract_task_id:
                         task = celery_app.AsyncResult(st.session_state.extract_task_id)
@@ -406,7 +406,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
                     st.error(f"Error cancelling task: {str(e)}")
         
         with col2:
-            if st.button("🔍 Check Task Status", key="check_task_status"):
+            if st.button(" Check Task Status", key="check_task_status"):
                 if st.session_state.extract_task_id:
                     task = celery_app.AsyncResult(st.session_state.extract_task_id)
                     st.write(f"**Current Task State:** {task.state}")
@@ -418,7 +418,7 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
                 st.rerun()
         
         # Show debug info in an expander - always visible
-        with st.expander("🔍 Debug Information"):
+        with st.expander(" Debug Information"):
             st.json(progress_info)
             if st.session_state.extract_task_id:
                 task = celery_app.AsyncResult(st.session_state.extract_task_id)
@@ -435,10 +435,10 @@ if st.session_state.extract_task_id or st.session_state.extract_status == 'compl
 # Handle completed tasks that don't have task_id anymore
 elif st.session_state.extract_status == 'completed' and st.session_state.extract_job_id:
     # Show progress bar for completed tasks too - NEVER let it disappear!
-    st.markdown('<div class="status-success">✅ Frame extraction completed successfully!</div>', unsafe_allow_html=True)
+    st.markdown('<div class="status-success"> Frame extraction completed successfully!</div>', unsafe_allow_html=True)
     
     # Show progress bar at 100% for completed tasks
-    st.markdown("### 📊 Progress")
+    st.markdown("###  Progress")
     progress_bar = st.progress(1.0)  # 100%
     
     # Progress details in columns - always visible
@@ -458,7 +458,7 @@ elif st.session_state.extract_status == 'completed' and st.session_state.extract
     if os.path.exists(output_dir):
         pdb_files = [f for f in os.listdir(output_dir) if f.endswith('.pdb')]
         if pdb_files:
-            st.markdown("### 📈 Results")
+            st.markdown("###  Results")
             
             # Display summary metrics
             col1, col2, col3 = st.columns(3)
@@ -472,18 +472,18 @@ elif st.session_state.extract_status == 'completed' and st.session_state.extract
             with col3:
                 st.metric("Files Found", len(pdb_files))
             
-            st.success(f"✅ Frame extraction complete! Found {len(pdb_files)} PDB files. Use this Job ID in Step 2: Detect Pockets")
+            st.success(f" Frame extraction complete! Found {len(pdb_files)} PDB files. Use this Job ID in Step 2: Detect Pockets")
             
             # Show job ID prominently
             st.markdown(f"""
             <div class="job-id-display">
-                🔑 Job ID: {st.session_state.extract_job_id}
+                 Job ID: {st.session_state.extract_job_id}
             </div>
             """, unsafe_allow_html=True)
-            st.info("💡 Copy this Job ID to use in Step 2: Detect Pockets")
+            st.info(" Copy this Job ID to use in Step 2: Detect Pockets")
 
 # Debug section to understand what's happening
-with st.expander("🐛 Debug Session State"):
+with st.expander(" Debug Session State"):
     st.write("**Session State Debug Info:**")
     st.write(f"extract_task_id: {st.session_state.get('extract_task_id', 'None')}")
     st.write(f"extract_status: {st.session_state.get('extract_status', 'None')}")

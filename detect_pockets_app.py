@@ -101,7 +101,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="detect-header">
-    <h1>🔍 Step 2: Pocket Detection</h1>
+    <h1> Step 2: Pocket Detection</h1>
     <p style="font-size: 1.2rem; margin-top: 0.5rem;">Identify ligand-binding pockets in protein structures</p>
 </div>
 """, unsafe_allow_html=True)
@@ -166,27 +166,27 @@ if st.session_state.detect_task_id:
         elif _task.state == 'PROGRESS':
             _prog = (_task.info or {}).get('progress', 0)
             _step = (_task.info or {}).get('current_step', 'Processing...')
-            st.info(f"🔄 {_step}")
+            st.info(f" {_step}")
             st.progress(_prog / 100)
         elif _task.state == 'SUCCESS':
             _result = _task.result or {}
-            st.success(f"✅ Detection completed! Pockets detected: {_result.get('pockets_detected', 'N/A')} | Time: {_result.get('processing_time', 0):.1f}s")
+            st.success(f" Detection completed! Pockets detected: {_result.get('pockets_detected', 'N/A')} | Time: {_result.get('processing_time', 0):.1f}s")
             st.progress(1.0)
             st.session_state.detect_status = 'completed'
             st.session_state.cached_job_ids['detect'] = st.session_state.detect_job_id
         elif _task.state == 'FAILURE':
-            st.error(f"❌ Detection failed: {_task.info}")
+            st.error(f" Detection failed: {_task.info}")
             st.session_state.detect_status = 'failed'
     except Exception as e:
         logger.error(f"Status banner error: {e}")
 
 # ── Input Configuration ───────────────────────────────────────────────
-st.markdown("### 📁 Input Configuration")
+st.markdown("###  Input Configuration")
 
 if st.session_state.detect_job_id:
     st.markdown(f"""
     <div class="job-id-display">
-        🔑 Current Job ID: {st.session_state.detect_job_id}
+         Current Job ID: {st.session_state.detect_job_id}
     </div>
     """, unsafe_allow_html=True)
 
@@ -211,7 +211,7 @@ with input_col2:
         help="Upload ZIP containing PDB files"
     )
 
-st.markdown("#### ⚙️ Detection Parameters")
+st.markdown("#### ️ Detection Parameters")
 
 param_col1, param_col2 = st.columns(2)
 
@@ -227,11 +227,11 @@ with param_col1:
 
 with param_col2:
     st.markdown("<br>", unsafe_allow_html=True)
-    st.info("💡 Using P2Rank for pocket prediction")
+    st.info(" Using P2Rank for pocket prediction")
 
 # Run button
 st.markdown("---")
-if st.button("🚀 Start Pocket Detection", type="primary", use_container_width=True):
+if st.button(" Start Pocket Detection", type="primary", use_container_width=True):
     input_pdb_path = None
     input_source = None
 
@@ -252,7 +252,7 @@ if st.button("🚀 Start Pocket Detection", type="primary", use_container_width=
             zip_path = handle_file_upload_secure(pdb_zip, job_id, "pdbs_")
             logger.info(f"ZIP file uploaded for job {job_id}")
         except SecurityError as e:
-            st.error(f"❌ File upload failed: {e}")
+            st.error(f" File upload failed: {e}")
             logger.error(f"Security error during ZIP upload: {e}")
             st.stop()
         if zip_path:
@@ -291,15 +291,15 @@ if st.button("🚀 Start Pocket Detection", type="primary", use_container_width=
             st.session_state.detect_task_id = task.id
             update_job_status(job_id, 'running', 'Pocket detection started', task_id=task.id)
 
-        st.success(f"✅ Detection started! Job ID: `{job_id}`")
-        st.info(f"📂 Input: {input_source}")
+        st.success(f" Detection started! Job ID: `{job_id}`")
+        st.info(f" Input: {input_source}")
 
 # ── Results ────────────────────────────────────────────────────────────
 # Determine which job to show results for
 results_job_id = st.session_state.detect_job_id
 
 # Allow loading previous results
-with st.expander("📂 Load previous results"):
+with st.expander(" Load previous results"):
     load_job_id = st.text_input(
         "Enter Detection Job ID:",
         value="",
@@ -307,7 +307,7 @@ with st.expander("📂 Load previous results"):
         key="detect_load_job_id",
         help="Enter a detection job ID to view its results"
     )
-    if st.button("🔍 Load Results"):
+    if st.button(" Load Results"):
         if load_job_id:
             st.session_state.detect_job_id = load_job_id
             results_job_id = load_job_id
@@ -332,10 +332,10 @@ if results_job_id:
                 df_pockets['num_residues'] = 0
 
             if len(df_pockets) == 0:
-                st.warning("⚠️ Detection completed but no pockets were found in the input structures.")
+                st.warning("️ Detection completed but no pockets were found in the input structures.")
             else:
                 st.markdown("---")
-                st.markdown("### 🎯 Detection Results")
+                st.markdown("###  Detection Results")
 
                 # Overview metrics
                 col1, col2, col3, col4 = st.columns(4)
@@ -371,9 +371,9 @@ if results_job_id:
 
                 # Sub-tabs for results
                 results_tab1, results_tab2, results_tab3 = st.tabs([
-                    "📋 Pocket Table",
-                    "📈 Distribution Analysis",
-                    "💾 Download"
+                    " Pocket Table",
+                    " Distribution Analysis",
+                    " Download"
                 ])
 
                 with results_tab1:
@@ -381,11 +381,11 @@ if results_job_id:
 
                     def get_confidence_badge(prob):
                         if prob >= 0.7:
-                            return "🟢 High"
+                            return " High"
                         elif prob >= 0.4:
-                            return "🟡 Medium"
+                            return " Medium"
                         else:
-                            return "🔴 Low"
+                            return " Low"
 
                     df_display['Confidence'] = df_display['probability'].apply(get_confidence_badge)
 
@@ -399,8 +399,8 @@ if results_job_id:
                     with col2:
                         confidence_filter = st.multiselect(
                             "Filter by Confidence:",
-                            options=['🟢 High', '🟡 Medium', '🔴 Low'],
-                            default=['🟢 High', '🟡 Medium', '🔴 Low']
+                            options=[' High', ' Medium', ' Low'],
+                            default=[' High', ' Medium', ' Low']
                         )
 
                     df_filtered = df_display[df_display['probability'] >= min_prob_filter]
@@ -412,7 +412,7 @@ if results_job_id:
                         use_container_width=True,
                         height=400
                     )
-                    st.info(f"📊 Showing {len(df_filtered)} of {len(df_pockets)} pockets")
+                    st.info(f" Showing {len(df_filtered)} of {len(df_pockets)} pockets")
 
                 with results_tab2:
                     col1, col2 = st.columns(2)
@@ -457,10 +457,10 @@ if results_job_id:
                 with results_tab3:
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.markdown("**📄 Data Files**")
+                        st.markdown("** Data Files**")
                         csv_data = df_pockets.to_csv(index=False)
                         st.download_button(
-                            label="📥 Download All Pockets (CSV)",
+                            label=" Download All Pockets (CSV)",
                             data=csv_data,
                             file_name=f"pockets_{results_job_id}.csv",
                             mime="text/csv",
@@ -470,27 +470,27 @@ if results_job_id:
                         if len(df_high_conf) > 0:
                             hc_csv = df_high_conf.to_csv(index=False)
                             st.download_button(
-                                label="📥 Download High Confidence (CSV)",
+                                label=" Download High Confidence (CSV)",
                                 data=hc_csv,
                                 file_name=f"high_confidence_pockets_{results_job_id}.csv",
                                 mime="text/csv",
                                 use_container_width=True
                             )
                     with col2:
-                        st.markdown("**📦 Structure Files**")
-                        if st.button("🔄 Generate PDB Archive", use_container_width=True):
+                        st.markdown("** Structure Files**")
+                        if st.button(" Generate PDB Archive", use_container_width=True):
                             with st.spinner("Creating archive..."):
                                 pdbs_dir = os.path.join(RESULTS_DIR, results_job_id, "pdbs")
                                 zip_path = os.path.join(pockets_output_dir, 'pockets_pdbs.zip')
                                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                                     for pdb_file in Path(pdbs_dir).glob('*.pdb'):
                                         zipf.write(pdb_file, pdb_file.name)
-                                st.success("✅ Archive created!")
+                                st.success(" Archive created!")
                         zip_path = os.path.join(pockets_output_dir, 'pockets_pdbs.zip')
                         if os.path.exists(zip_path):
                             with open(zip_path, 'rb') as f:
                                 st.download_button(
-                                    label="📥 Download All PDB Files (ZIP)",
+                                    label=" Download All PDB Files (ZIP)",
                                     data=f.read(),
                                     file_name=f"pockets_pdbs_{results_job_id}.zip",
                                     mime="application/zip",
@@ -498,7 +498,7 @@ if results_job_id:
                                 )
 
                 st.markdown("---")
-                st.info("💡 Use this Job ID in Step 3: Cluster Pockets to group similar pockets")
+                st.info(" Use this Job ID in Step 3: Cluster Pockets to group similar pockets")
 
         except Exception as e:
             st.error(f"Error loading results: {e}")
@@ -522,9 +522,9 @@ if st.session_state.detect_status == 'running' and st.session_state.detect_task_
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>🔍 Pocket Detection powered by P2Rank | Part of the PocketHunter Suite</p>
+    <p> Pocket Detection powered by P2Rank | Part of the PocketHunter Suite</p>
     <p style='font-size: 0.85rem; margin-top: 0.5rem;'>
-        💡 Tip: High-confidence pockets (≥0.7) are recommended for further analysis
+         Tip: High-confidence pockets (≥0.7) are recommended for further analysis
     </p>
 </div>
 """, unsafe_allow_html=True)

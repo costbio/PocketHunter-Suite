@@ -34,7 +34,7 @@ st.markdown("""
 <div style="background: linear-gradient(135deg, #1565C0 0%, #2E7D32 100%);
             padding: 2rem; border-radius: 16px; margin-bottom: 2rem;
             color: white; text-align: center;">
-    <h1 style="margin:0; font-size:2rem;">🔬 Discrimination Analysis</h1>
+    <h1 style="margin:0; font-size:2rem;"> Discrimination Analysis</h1>
     <p style="margin:0.5rem 0 0 0; opacity:0.9;">
         Rank conformations by their ability to distinguish active from decoy ligands
     </p>
@@ -51,7 +51,7 @@ def _show_results(job_id, result_info):
         return
 
     df = pd.read_csv(results_csv)
-    st.success(f"✅ Discrimination complete — {len(df)} conformations ranked.")
+    st.success(f" Discrimination complete — {len(df)} conformations ranked.")
 
     st.markdown("### Ranked Conformations")
 
@@ -94,7 +94,7 @@ def _show_results(job_id, result_info):
     )
 
     top_dir = os.path.join(RESULTS_DIR, job_id, 'discrimination')
-    if st.button("📦 Prepare ZIP", key="disc_prepare_zip"):
+    if st.button(" Prepare ZIP", key="disc_prepare_zip"):
         top_df = df.head(n_top)
         zip_path = os.path.join(top_dir, 'top_conformations.zip')
         extract_job_id = st.session_state.cached_job_ids.get('extract', '')
@@ -139,10 +139,10 @@ if cluster_job_id_input:
     )
     if os.path.exists(reps_csv):
         df_reps_preview = pd.read_csv(reps_csv)
-        st.success(f"✅ Found {len(df_reps_preview)} cluster representatives.")
+        st.success(f" Found {len(df_reps_preview)} cluster representatives.")
         cluster_valid = True
     else:
-        st.error("❌ No cluster_representatives.csv found for this Job ID. Run Step 3 first.")
+        st.error(" No cluster_representatives.csv found for this Job ID. Run Step 3 first.")
 
 st.subheader("2. Upload Ligand Sets")
 
@@ -162,7 +162,7 @@ with col2:
 
 # ── Decoy quality guidance ───────────────────────────────────────────────────
 
-with st.expander("⚠️ Decoy quality matters — read before running", expanded=False):
+with st.expander("️ Decoy quality matters — read before running", expanded=False):
     st.markdown("""
 **Pharmacophore complementarity is a broad-class discriminator.**
 Its ability to separate actives from decoys depends almost entirely on
@@ -245,8 +245,8 @@ if disc_task_id:
 
     elif state in ('FAILURE', 'REVOKED'):
         err = meta.get('exc_message', str(meta)) if isinstance(meta, dict) else str(meta)
-        st.error(f"❌ Discrimination failed: {err}")
-        if st.button("🔄 Reset", key="disc_reset"):
+        st.error(f" Discrimination failed: {err}")
+        if st.button(" Reset", key="disc_reset"):
             st.session_state.discrimination_task_id = None
             st.session_state.discrimination_job_id = None
             st.session_state.discrimination_status = 'idle'

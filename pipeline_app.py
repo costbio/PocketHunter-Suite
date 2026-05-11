@@ -58,7 +58,7 @@ st.markdown("""
 
 st.markdown("""
 <div class="pipeline-header">
-    <h1>⚡ Full Pipeline</h1>
+    <h1> Full Pipeline</h1>
     <p style="font-size: 1.1rem; margin-top: 0.5rem;">
         Extract → Detect → Cluster — all in one shot
     </p>
@@ -153,11 +153,11 @@ def _show_pipeline_cluster_inline(results_job_id):
             df_reps['num_residues'] = df_reps.get('residues', 0)
 
         if len(df_reps) == 0:
-            st.warning("⚠️ Clustering completed but no representative pockets found.")
+            st.warning("️ Clustering completed but no representative pockets found.")
             return
 
         st.markdown("---")
-        st.markdown("### 🗺️ Clustering Results")
+        st.markdown("### ️ Clustering Results")
 
         clustered_file = os.path.join(cluster_output_dir, "pockets_clustered.csv")
         if not os.path.exists(clustered_file):
@@ -367,18 +367,18 @@ if st.session_state.pipeline_task_id:
             if _stage in ('detect', 'cluster', 'cluster_done'):
                 _frames = _info.get('frames_extracted')
                 if _frames is not None:
-                    st.caption(f"📁 {_frames} frames extracted")
+                    st.caption(f" {_frames} frames extracted")
             if _stage in ('cluster', 'cluster_done'):
                 _pockets = _info.get('pockets_detected')
                 if _pockets is not None:
-                    st.caption(f"🔍 {_pockets} pockets detected")
+                    st.caption(f" {_pockets} pockets detected")
 
             time.sleep(3)
             st.rerun()
         elif _task.state == 'SUCCESS':
             result = _task.result or {}
             show_stage_indicators(100, 'All stages complete')
-            st.success("✅ Full pipeline completed successfully!")
+            st.success(" Full pipeline completed successfully!")
             col1, col2, col3 = st.columns(3)
             col1.metric("Frames extracted", result.get('frames_extracted', '—'))
             col2.metric("Pockets detected", result.get('pockets_detected', '—'))
@@ -389,13 +389,13 @@ if st.session_state.pipeline_task_id:
                 _show_pipeline_cluster_inline(cluster_job)
         elif _task.state == 'FAILURE':
             show_stage_indicators(0, 'Pipeline failed')
-            st.error("❌ Pipeline failed.")
+            st.error(" Pipeline failed.")
             _info = _task.info or {}
             st.error(f"Error: {_info.get('exc_message', str(_task.info))}")
     except Exception as e:
         st.warning(f"Could not retrieve task status: {e}")
 
-    if st.button("🔄 Reset / Start New Pipeline"):
+    if st.button(" Reset / Start New Pipeline"):
         st.session_state.pipeline_task_id = None
         st.session_state.pipeline_job_id = None
         st.session_state.pipeline_status = 'idle'
@@ -406,7 +406,7 @@ if st.session_state.pipeline_task_id:
 
 
 # ── Input form ──────────────────────────────────────────────────────────
-st.markdown("### 📁 Input Files")
+st.markdown("###  Input Files")
 
 with st.form("pipeline_form"):
     col_traj, col_topo = st.columns(2)
@@ -424,7 +424,7 @@ with st.form("pipeline_form"):
             help="Topology/structure file matching the trajectory"
         )
 
-    st.markdown("### ⚙️ Processing Parameters")
+    st.markdown("### ️ Processing Parameters")
 
     col_stride, col_threads = st.columns(2)
     with col_stride:
@@ -442,15 +442,15 @@ with st.form("pipeline_form"):
         clustering_method = st.selectbox("Clustering Method", options=['dbscan', 'kmeans', 'hierarchical'],
                                          help="Algorithm for grouping similar pockets")
 
-    submitted = st.form_submit_button("🚀 Launch Full Pipeline", type="primary", use_container_width=True)
+    submitted = st.form_submit_button(" Launch Full Pipeline", type="primary", use_container_width=True)
 
 
 if submitted:
     if not traj_file:
-        st.error("❌ Please upload a trajectory (.xtc) file.")
+        st.error(" Please upload a trajectory (.xtc) file.")
         st.stop()
     if not topo_file:
-        st.error("❌ Please upload a topology (.pdb or .gro) file.")
+        st.error(" Please upload a topology (.pdb or .gro) file.")
         st.stop()
 
     # Rate limit check
@@ -488,6 +488,6 @@ if submitted:
     st.session_state.pipeline_status = 'running'
     st.session_state.cached_job_ids['pipeline'] = job_id
 
-    st.success(f"✅ Pipeline started! Job ID: `{job_id}`")
+    st.success(f" Pipeline started! Job ID: `{job_id}`")
     time.sleep(1)
     st.rerun()

@@ -117,7 +117,7 @@ st.markdown("""
 # Header
 st.markdown("""
 <div class="cluster-header">
-    <h1>🎯 Step 3: Pocket Clustering</h1>
+    <h1> Step 3: Pocket Clustering</h1>
     <p style="font-size: 1.2rem; margin-top: 0.5rem;">Group similar pockets to identify representative binding sites</p>
 </div>
 """, unsafe_allow_html=True)
@@ -250,27 +250,27 @@ if st.session_state.cluster_task_id:
         elif _task.state == 'PROGRESS':
             _prog = (_task.info or {}).get('progress', 0)
             _step = (_task.info or {}).get('current_step', 'Processing...')
-            st.info(f"🔄 {_step}")
+            st.info(f" {_step}")
             st.progress(_prog / 100)
         elif _task.state == 'SUCCESS':
             _result = _task.result or {}
-            st.success(f"✅ Clustering completed! Clusters found: {_result.get('clusters_found', 'N/A')} | Time: {_result.get('processing_time', 0):.1f}s")
+            st.success(f" Clustering completed! Clusters found: {_result.get('clusters_found', 'N/A')} | Time: {_result.get('processing_time', 0):.1f}s")
             st.progress(1.0)
             st.session_state.cluster_status = 'completed'
             st.session_state.cached_job_ids['cluster'] = st.session_state.cluster_job_id
         elif _task.state == 'FAILURE':
-            st.error(f"❌ Clustering failed: {_task.info}")
+            st.error(f" Clustering failed: {_task.info}")
             st.session_state.cluster_status = 'failed'
     except Exception as e:
         logger.error(f"Status banner error: {e}")
 
 # ── Input Configuration ───────────────────────────────────────────────
-st.markdown("### 📁 Input Configuration")
+st.markdown("###  Input Configuration")
 
 if st.session_state.cluster_job_id:
     st.markdown(f"""
     <div class="job-id-display">
-        🔑 Current Job ID: {st.session_state.cluster_job_id}
+         Current Job ID: {st.session_state.cluster_job_id}
     </div>
     """, unsafe_allow_html=True)
 
@@ -295,7 +295,7 @@ with input_col2:
         help="Upload pockets.csv from pocket detection"
     )
 
-st.markdown("#### ⚙️ Clustering Parameters")
+st.markdown("#### ️ Clustering Parameters")
 
 param_col1, param_col2 = st.columns(2)
 
@@ -332,7 +332,7 @@ else:
 
 # Run button
 st.markdown("---")
-if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width=True):
+if st.button(" Start Pocket Clustering", type="primary", use_container_width=True):
     # Determine input source
     pockets_csv_path = None
     input_source = None
@@ -353,7 +353,7 @@ if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width
             csv_path = handle_file_upload_secure(pockets_csv, job_id, "pockets_")
             logger.info(f"CSV file uploaded for job {job_id}")
         except SecurityError as e:
-            st.error(f"❌ File upload failed: {e}")
+            st.error(f" File upload failed: {e}")
             logger.error(f"Security error during CSV upload: {e}")
             st.stop()
         if csv_path:
@@ -394,8 +394,8 @@ if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width
             st.session_state.cluster_task_id = task.id
             update_job_status(job_id, 'running', 'Pocket clustering started', task_id=task.id)
 
-        st.success(f"✅ Clustering started! Job ID: `{job_id}`")
-        st.info(f"📂 Input: {input_source}")
+        st.success(f" Clustering started! Job ID: `{job_id}`")
+        st.info(f" Input: {input_source}")
 
 @st.cache_data(ttl=300)
 def load_clustered_data(path):
@@ -411,7 +411,7 @@ def load_representatives(path):
 results_job_id = st.session_state.cluster_job_id
 
 # Allow loading previous results
-with st.expander("📂 Load previous results"):
+with st.expander(" Load previous results"):
     load_job_id = st.text_input(
         "Enter Clustering Job ID:",
         value="",
@@ -419,7 +419,7 @@ with st.expander("📂 Load previous results"):
         key="cluster_load_job_id",
         help="Enter a clustering job ID to view its results"
     )
-    if st.button("🔍 Load Results"):
+    if st.button(" Load Results"):
         if load_job_id:
             st.session_state.cluster_job_id = load_job_id
             results_job_id = load_job_id
@@ -451,10 +451,10 @@ if results_job_id:
                 df_reps['num_residues'] = 0
 
             if len(df_reps) == 0:
-                st.warning("⚠️ Clustering completed but no representative pockets were found.")
+                st.warning("️ Clustering completed but no representative pockets were found.")
             else:
                 st.markdown("---")
-                st.markdown("### 🎯 Clustering Results")
+                st.markdown("###  Clustering Results")
 
                 # Overview metrics
                 col1, col2, col3, col4 = st.columns(4)
@@ -496,11 +496,11 @@ if results_job_id:
 
                 # Sub-tabs for results data
                 results_tab1, results_tab2, results_tab3, results_tab4, results_tab5 = st.tabs([
-                    "📋 Cluster Table",
-                    "🗺️ Residue Heatmap",
-                    "📈 Distribution Analysis",
-                    "🔬 3D Viewer",
-                    "💾 Download"
+                    " Cluster Table",
+                    "️ Residue Heatmap",
+                    " Distribution Analysis",
+                    " 3D Viewer",
+                    " Download"
                 ])
 
                 with results_tab1:
@@ -508,13 +508,13 @@ if results_job_id:
 
                     def get_quality_badge(prob):
                         if prob >= 0.8:
-                            return "🟢 Excellent"
+                            return " Excellent"
                         elif prob >= 0.6:
-                            return "🟡 Good"
+                            return " Good"
                         elif prob >= 0.4:
-                            return "🟠 Moderate"
+                            return " Moderate"
                         else:
-                            return "🔴 Low"
+                            return " Low"
 
                     df_display['Quality'] = df_display['probability'].apply(get_quality_badge)
 
@@ -712,7 +712,7 @@ if results_job_id:
                             for _, row in df_sorted.iterrows():
                                 label = f"C{int(row['cluster'])} | Frame {int(row['Frame'])} (p={row['probability']:.2f})"
                                 if row.get('Frame_pocket_index', '') in rep_frames:
-                                    label = "★ " + label
+                                    label = " " + label
                                 pocket_labels_marked.append(label)
 
                             fig_detail = go.Figure(data=go.Heatmap(
@@ -732,7 +732,7 @@ if results_job_id:
 
                             detail_height = max(400, len(df_sorted) * 30 + 200)
                             fig_detail.update_layout(
-                                title="Individual Pocket Residue Composition (★ = representative)",
+                                title="Individual Pocket Residue Composition ( = representative)",
                                 xaxis_title="Residue",
                                 yaxis_title="",
                                 height=detail_height,
@@ -808,7 +808,7 @@ if results_job_id:
 
                         st.markdown(f"""
                         <div class="cluster-card">
-                            <h4>🎯 Selected Cluster</h4>
+                            <h4> Selected Cluster</h4>
                             <p><strong>File:</strong> {cluster.get('File name', 'N/A')}</p>
                             <p><strong>Probability:</strong> <span class="cluster-badge">
                                 {cluster.get('probability', 0):.3f}
@@ -829,12 +829,12 @@ if results_job_id:
                             if os.path.exists(pdb_path):
                                 show_molecule_3d(pdb_path, style=viz_style)
                             else:
-                                st.warning(f"⚠️ PDB file not found: {pdb_path}")
+                                st.warning(f"️ PDB file not found: {pdb_path}")
                     else:
                         st.info("ℹ️ Select a cluster from the Cluster Table tab to view it in 3D.")
 
                         if len(df_reps) > 0:
-                            st.markdown("#### 📺 Preview: First Cluster")
+                            st.markdown("####  Preview: First Cluster")
                             first_cluster = df_reps.iloc[0]
                             pdb_filename = first_cluster['File name']
                             pdb_path = resolve_pdb_path(pdb_filename, results_job_id)
@@ -845,10 +845,10 @@ if results_job_id:
                     col1, col2 = st.columns(2)
 
                     with col1:
-                        st.markdown("**📄 Data Files**")
+                        st.markdown("** Data Files**")
                         csv_data = df_reps.to_csv(index=False)
                         st.download_button(
-                            label="📥 Download Cluster Representatives (CSV)",
+                            label=" Download Cluster Representatives (CSV)",
                             data=csv_data,
                             file_name=f"cluster_representatives_{results_job_id}.csv",
                             mime="text/csv",
@@ -859,7 +859,7 @@ if results_job_id:
                         if len(df_high_quality) > 0:
                             hq_csv = df_high_quality.to_csv(index=False)
                             st.download_button(
-                                label="📥 Download High Quality Clusters (CSV)",
+                                label=" Download High Quality Clusters (CSV)",
                                 data=hq_csv,
                                 file_name=f"high_quality_clusters_{results_job_id}.csv",
                                 mime="text/csv",
@@ -867,21 +867,21 @@ if results_job_id:
                             )
 
                     with col2:
-                        st.markdown("**📦 Structure Files**")
-                        if st.button("🔄 Generate PDB Archive", use_container_width=True):
+                        st.markdown("** Structure Files**")
+                        if st.button(" Generate PDB Archive", use_container_width=True):
                             import zipfile
                             with st.spinner("Creating archive..."):
                                 zip_path = os.path.join(cluster_output_dir, 'cluster_structures.zip')
                                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                                     for pdb_file in Path(cluster_output_dir).glob('*.pdb'):
                                         zipf.write(pdb_file, pdb_file.name)
-                                st.success("✅ Archive created!")
+                                st.success(" Archive created!")
 
                         zip_path = os.path.join(cluster_output_dir, 'cluster_structures.zip')
                         if os.path.exists(zip_path):
                             with open(zip_path, 'rb') as f:
                                 st.download_button(
-                                    label="📥 Download All PDB Files (ZIP)",
+                                    label=" Download All PDB Files (ZIP)",
                                     data=f.read(),
                                     file_name=f"cluster_structures_{results_job_id}.zip",
                                     mime="application/zip",
@@ -889,7 +889,7 @@ if results_job_id:
                                 )
 
                 st.markdown("---")
-                st.info("💡 Use the cluster representatives CSV in Step 4: Molecular Docking")
+                st.info(" Use the cluster representatives CSV in Step 4: Molecular Docking")
 
         except Exception as e:
             st.error(f"Error loading results: {e}")
@@ -913,9 +913,9 @@ if st.session_state.cluster_status == 'running' and st.session_state.cluster_tas
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>🎯 Pocket Clustering | Part of the PocketHunter Suite</p>
+    <p> Pocket Clustering | Part of the PocketHunter Suite</p>
     <p style='font-size: 0.85rem; margin-top: 0.5rem;'>
-        💡 Tip: High-probability clusters (>=0.7) are recommended for docking studies
+         Tip: High-probability clusters (>=0.7) are recommended for docking studies
     </p>
 </div>
 """, unsafe_allow_html=True)

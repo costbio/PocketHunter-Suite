@@ -16,11 +16,11 @@ POCKETHUNTER_DIR = str(Config.POCKETHUNTER_DIR)
 POCKETHUNTER_CLI = str(Config.POCKETHUNTER_CLI)
 RESULTS_DIR = str(Config.RESULTS_DIR)
 
-# Process timeout constants (in seconds)
-PIPELINE_TIMEOUT = 3600  # 1 hour for full pipeline
-EXTRACT_TIMEOUT = 1800   # 30 minutes for frame extraction
-DETECT_TIMEOUT = 3600    # 1 hour for pocket detection
-CLUSTER_TIMEOUT = 1800   # 30 minutes for clustering
+# Process timeout constants — sourced from Config
+PIPELINE_TIMEOUT = Config.PIPELINE_TIMEOUT
+EXTRACT_TIMEOUT = Config.EXTRACT_TIMEOUT
+DETECT_TIMEOUT = Config.DETECT_TIMEOUT
+CLUSTER_TIMEOUT = Config.CLUSTER_TIMEOUT
 
 # Setup logging
 logger = setup_logging(__name__)

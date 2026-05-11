@@ -86,6 +86,10 @@ class Config:
     MAX_DOCKING_LIGANDS = int(os.getenv('MAX_DOCKING_LIGANDS', 10))
     MAX_DOCKING_EXHAUSTIVENESS = int(os.getenv('MAX_DOCKING_EXHAUSTIVENESS', 12))
     DOCKING_TIMEOUT = int(os.getenv('DOCKING_TIMEOUT', 7200))  # 2 hours
+    PIPELINE_TIMEOUT = int(os.getenv('PIPELINE_TIMEOUT', 3600))  # 1 hour
+    EXTRACT_TIMEOUT = int(os.getenv('EXTRACT_TIMEOUT', 1800))    # 30 min
+    DETECT_TIMEOUT = int(os.getenv('DETECT_TIMEOUT', 3600))      # 1 hour
+    CLUSTER_TIMEOUT = int(os.getenv('CLUSTER_TIMEOUT', 1800))     # 30 min
     DISCRIMINATION_TIMEOUT: int = int(os.getenv('DISCRIMINATION_TIMEOUT', '600'))
 
     # ========================================

@@ -133,9 +133,6 @@ else:
         st.info("No jobs in this session. Enter a Job ID above to look one up.")
 
 if not jobs:
-    if auto_refresh:
-        time.sleep(5)
-        st.rerun()
     st.stop()
 
 # ── Summary metrics ──────────────────────────────────────────────────────────
