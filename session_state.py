@@ -146,3 +146,47 @@ def clear_docking_selections():
     keys_to_remove = [k for k in st.session_state.keys() if k.startswith('pdb_')]
     for key in keys_to_remove:
         del st.session_state[key]
+
+
+def render_load_previous_widget(
+    *,
+    session_key: str,
+    label: str = "Load previous results",
+    placeholder: str = "Enter a job ID",
+    text_input_key: str | None = None,
+    button_key: str | None = None,
+    on_load=None,
+) -> None:
+    """Shared "load a previous job by ID" expander used on every step page.
+
+    Validates the entered ID via ``FileValidator.validate_job_id`` before
+    writing it to ``st.session_state[session_key]``. On a valid load, runs
+    ``on_load(validated_id)`` (if provided) and then ``st.rerun()``. On
+    validation failure, surfaces ``st.error(...)`` and leaves the page
+    rendered so the user can correct the input.
+    """
+    from security import FileValidator, SecurityError
+
+    text_input_key = text_input_key or f"_load_prev_input_{session_key}"
+    button_key = button_key or f"_load_prev_btn_{session_key}"
+
+    with st.expander(label):
+        load_id = st.text_input(
+            "Job ID:",
+            value="",
+            placeholder=placeholder,
+            key=text_input_key,
+        )
+        if st.button("Load Results", key=button_key):
+            if not load_id:
+                st.error("Enter a job ID first.")
+                return
+            try:
+                safe_id = FileValidator.validate_job_id(load_id.strip())
+            except SecurityError as e:
+                st.error(f"Invalid job ID: {e}")
+                return
+            st.session_state[session_key] = safe_id
+            if on_load is not None:
+                on_load(safe_id)
+            st.rerun()

@@ -19,7 +19,7 @@ from config import Config
 from security import FileValidator, SecurityError
 from rate_limiter import RateLimitExceeded, check_task_rate_limit, check_upload_rate_limit
 from logging_config import setup_logging
-from session_state import initialize_session_state, get_pdb_selection_key
+from session_state import initialize_session_state, get_pdb_selection_key, render_load_previous_widget
 from cluster_labels import describe_cluster_spatially
 import py3Dmol
 import streamlit.components.v1 as components
@@ -108,6 +108,11 @@ def _compute_auto_box_for_job(cluster_job_id: str, extract_job_id: str | None = 
     pure / cacheless). Returns ``(sx, sy, sz, cluster_label)`` or ``None``.
     """
     if not cluster_job_id:
+        return None
+    from security import FileValidator, SecurityError
+    try:
+        cluster_job_id = FileValidator.validate_job_id(cluster_job_id)
+    except SecurityError:
         return None
     if (st.session_state.docking_auto_box_cluster == cluster_job_id
             and st.session_state.docking_auto_box is not None):
@@ -317,6 +322,12 @@ with tab_setup:
     )
 
     if cluster_job_id:
+        from security import FileValidator, SecurityError
+        try:
+            cluster_job_id = FileValidator.validate_job_id(cluster_job_id)
+        except SecurityError as e:
+            st.error(f"Invalid cluster job ID: {e}")
+            st.stop()
         # Construct path to cluster representatives file
         representatives_file = os.path.join(RESULTS_DIR, cluster_job_id, "pocket_clusters", "cluster_representatives.csv")
 
@@ -552,28 +563,38 @@ with tab_setup:
                         st.warning(f"⚠️ ZIP file '{uploaded_file.name}' contains no PDBQT files. Please ensure your ligands are in PDBQT format.")
                         logger.warning(f"ZIP {uploaded_file.name} contained no PDBQT files")
             else:
-                # Save individual file
-                file_path = os.path.join(ligand_temp_dir, uploaded_file.name)
+                # Save individual file — sanitize the filename before any I/O.
+                try:
+                    safe_name = FileValidator.validate_filename(uploaded_file.name)
+                except SecurityError as e:
+                    st.error(f"Rejected upload `{uploaded_file.name}`: {e}")
+                    continue
+                file_path = os.path.join(ligand_temp_dir, safe_name)
                 with open(file_path, 'wb') as f:
                     f.write(uploaded_file.getbuffer())
 
                 # Convert to PDBQT if needed
-                if uploaded_file.name.endswith(('.sdf', '.pdb')):
+                if safe_name.endswith(('.sdf', '.pdb')):
                     try:
-                        # Convert using OpenBabel
+                        # Convert using OpenBabel (bounded — won't hang the page).
                         pdbqt_path = file_path.rsplit('.', 1)[0] + '.pdbqt'
                         subprocess.run([
                             'obabel', file_path, '-O', pdbqt_path, '--gen3d'
-                        ], check=True, capture_output=True, text=True)
+                        ], check=True, capture_output=True, text=True, timeout=30)
 
                         # Remove original file and use converted PDBQT
                         os.remove(file_path)
                         ligand_files.append(pdbqt_path)
-                        st.success(f"✅ Converted {uploaded_file.name} to PDBQT format")
+                        st.success(f"✅ Converted {safe_name} to PDBQT format")
+                    except subprocess.TimeoutExpired:
+                        st.error(
+                            f"❌ Ligand conversion timed out (>30s) for `{safe_name}`. "
+                            "Try a simpler structure or pre-convert to PDBQT."
+                        )
                     except subprocess.CalledProcessError as e:
-                        st.error(f"❌ Failed to convert {uploaded_file.name}: {e}")
+                        st.error(f"❌ Failed to convert {safe_name}: {e}")
                         # Keep original file if conversion fails
-                        if uploaded_file.name.endswith('.pdbqt'):
+                        if safe_name.endswith('.pdbqt'):
                             ligand_files.append(file_path)
                 else:
                     # Already PDBQT format
@@ -640,7 +661,13 @@ with tab_setup:
                     pdb_source_dir = None
                     if extract_job_id and extract_job_id.strip():
                         # Use provided extract job ID
-                        pdb_source_dir = os.path.join(RESULTS_DIR, extract_job_id.strip(), "pdbs")
+                        from security import FileValidator as _FV, SecurityError as _SE
+                        try:
+                            safe_extract_id = _FV.validate_job_id(extract_job_id.strip())
+                        except _SE as e:
+                            st.error(f"Invalid extract job ID: {e}")
+                            st.stop()
+                        pdb_source_dir = os.path.join(RESULTS_DIR, safe_extract_id, "pdbs")
                         if not os.path.exists(pdb_source_dir):
                             st.error(f"❌ PDB directory not found: {pdb_source_dir}")
                             st.stop()
@@ -686,22 +713,13 @@ with tab_setup:
 # Progress and Results Section with integrated 3D Viewer
 with tab_results:
     # Option to load existing results
-    st.markdown("### 📂 Load Docking Results")
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        load_job_id = st.text_input(
-            "Enter Docking Job ID:",
-            value=st.session_state.docking_job_id if st.session_state.docking_job_id else "",
-            placeholder="e.g., docking_20250815_143022_a1b2c3d4",
-            help="Enter a docking job ID to view its results"
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔍 Load Results", use_container_width=True):
-            if load_job_id:
-                st.session_state.docking_job_id = load_job_id
-                st.rerun()
+    render_load_previous_widget(
+        session_key="docking_job_id",
+        label="📂 Load Docking Results",
+        placeholder="e.g., docking_20250815_143022_a1b2c3d4",
+        text_input_key="docking_load_job_id",
+        button_key="docking_load_btn",
+    )
 
     # Show progress or results
     if st.session_state.docking_job_id and st.session_state.docking_task_id:
@@ -1060,7 +1078,13 @@ with tab_results:
             )
     elif st.session_state.docking_job_id and not st.session_state.docking_task_id:
         # Load results directly from disk (no Celery task ID — e.g. loaded by job ID)
-        docking_output_dir = os.path.join(RESULTS_DIR, f'dock_{st.session_state.docking_job_id}')
+        from security import FileValidator as _FV2, SecurityError as _SE2
+        try:
+            _safe_dj_id = _FV2.validate_job_id(st.session_state.docking_job_id)
+        except _SE2 as e:
+            st.error(f"Invalid docking job ID: {e}")
+            st.stop()
+        docking_output_dir = os.path.join(RESULTS_DIR, f'dock_{_safe_dj_id}')
         results_file = os.path.join(docking_output_dir, 'docking_results.csv')
         if os.path.exists(results_file):
             st.success("✅ Loaded docking results from disk")

@@ -100,7 +100,7 @@ Tunables come from `.env` (see `.env.example`). Notable: `MAX_UPLOAD_SIZE`, `MAX
 
 ### Security boundary
 
-`security.py` (`FileValidator`, `handle_file_upload_secure`) is the choke point for user input — extension allowlist, size limits, ZIP-bomb checks, path-traversal prevention. Every upload should go through it; do not write raw `st.file_uploader` bytes to disk in new code.
+`security.py` (`FileValidator`, `handle_file_upload_secure`) is the choke point for user input — extension allowlist, size limits, ZIP-bomb checks, path-traversal prevention. Every upload should go through it; do not write raw `st.file_uploader` bytes to disk in new code. User-supplied job IDs (from text inputs) go through `FileValidator.validate_job_id` before any `os.path.join(RESULTS_DIR, job_id, ...)` — see `session_state.render_load_previous_widget` for the canonical input boundary.
 
 `rate_limiter.py` provides `check_upload_rate_limit` / `check_task_rate_limit`, backed by Redis. Pages call these before kicking off Celery tasks. `RATE_LIMIT_ENABLED=false` in `.env` is the local-dev escape hatch.
 

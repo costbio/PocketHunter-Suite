@@ -24,7 +24,7 @@ from config import Config
 from logging_config import setup_logging
 from rate_limiter import RateLimitExceeded, check_task_rate_limit
 from security import FileValidator, SecurityError, handle_file_upload_secure
-from session_state import initialize_session_state
+from session_state import initialize_session_state, render_load_previous_widget
 from tasks import run_find_pockets_task
 
 initialize_session_state()
@@ -234,21 +234,25 @@ if st.session_state.find_pockets_task_id:
                 st.error(f"Could not cancel: {e}")
 
 # ── Results ──────────────────────────────────────────────────────────────
-with st.expander("Load previous results"):
-    load_job_id = st.text_input(
-        "Find Pockets Job ID",
-        value="",
-        placeholder="e.g. find_pockets_20260511_120000_abcd1234",
-        key="fp_load_id",
-    )
-    if st.button("Load Results", key="fp_load_btn"):
-        if load_job_id:
-            st.session_state.find_pockets_job_id = load_job_id
-            st.rerun()
+render_load_previous_widget(
+    session_key="find_pockets_job_id",
+    label="Load previous results",
+    placeholder="e.g. find_pockets_20260511_120000_abcd1234",
+    text_input_key="fp_load_id",
+    button_key="fp_load_btn",
+)
 
 results_job_id = st.session_state.find_pockets_job_id
 
 if results_job_id:
+    # Defense in depth: even if the ID came from session state (set elsewhere),
+    # validate before joining into a path.
+    from security import FileValidator, SecurityError
+    try:
+        results_job_id = FileValidator.validate_job_id(results_job_id)
+    except SecurityError as e:
+        st.error(f"Invalid job ID in session: {e}")
+        st.stop()
     pockets_csv = os.path.join(RESULTS_DIR, results_job_id, "pockets", "pockets.csv")
     if os.path.exists(pockets_csv):
         try:

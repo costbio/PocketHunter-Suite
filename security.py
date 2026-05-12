@@ -77,6 +77,34 @@ class FileValidator:
         return safe_name
 
     @staticmethod
+    def validate_job_id(job_id: str) -> str:
+        """Return ``job_id`` if it's safe to interpolate into a file path.
+
+        Allowed: 1-100 chars from ``[A-Za-z0-9_-]``. Anything else (path
+        separators, ``..``, shell metacharacters, null bytes, whitespace,
+        unicode) raises ``SecurityError``. Used at every site that joins
+        user input into ``results/<job_id>/...``.
+
+        Example:
+            >>> FileValidator.validate_job_id("cluster_20251213_011228_4c51c6a5")
+            'cluster_20251213_011228_4c51c6a5'
+            >>> FileValidator.validate_job_id("../etc/passwd")
+            SecurityError: Invalid job ID: ...
+        """
+        import re
+        if not isinstance(job_id, str) or not job_id:
+            raise SecurityError("Invalid job ID: must be a non-empty string")
+        if len(job_id) > 100:
+            raise SecurityError(
+                f"Invalid job ID: length {len(job_id)} exceeds 100-char limit"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+            raise SecurityError(
+                "Invalid job ID: must contain only letters, digits, underscores, and dashes"
+            )
+        return job_id
+
+    @staticmethod
     def validate_file_size(file_size: int, max_size: Optional[int] = None) -> None:
         """
         Validate file size against limit.
