@@ -21,6 +21,8 @@ from celery_app import celery_app
 from config import Config
 from session_state import initialize_session_state
 from logging_config import setup_logging
+from security import handle_file_upload_secure, SecurityError
+from rate_limiter import RateLimitExceeded
 
 RESULTS_DIR = str(Config.RESULTS_DIR)
 UPLOAD_DIR = str(Config.UPLOAD_DIR)
@@ -51,7 +53,7 @@ def _show_results(job_id, result_info):
         return
 
     df = pd.read_csv(results_csv)
-    st.success(f" Discrimination complete — {len(df)} conformations ranked.")
+    st.success(f"Discrimination complete — {len(df)} conformations ranked.")
 
     st.markdown("### Ranked Conformations")
 
@@ -94,8 +96,9 @@ def _show_results(job_id, result_info):
     )
 
     top_dir = os.path.join(RESULTS_DIR, job_id, 'discrimination')
-    if st.button(" Prepare ZIP", key="disc_prepare_zip"):
+    if st.button("Prepare ZIP", key="disc_prepare_zip"):
         top_df = df.head(n_top)
+        os.makedirs(top_dir, exist_ok=True)
         zip_path = os.path.join(top_dir, 'top_conformations.zip')
         extract_job_id = st.session_state.cached_job_ids.get('extract', '')
         pdb_dir = os.path.join(RESULTS_DIR, extract_job_id, 'pdbs') if extract_job_id else ''
@@ -114,7 +117,7 @@ def _show_results(job_id, result_info):
 
         with open(zip_path, 'rb') as f:
             st.download_button(
-                "⬇ Download ZIP",
+                "Download ZIP",
                 data=f.read(),
                 file_name=f"top_conformations_{job_id}.zip",
                 mime="application/zip",
@@ -139,10 +142,10 @@ if cluster_job_id_input:
     )
     if os.path.exists(reps_csv):
         df_reps_preview = pd.read_csv(reps_csv)
-        st.success(f" Found {len(df_reps_preview)} cluster representatives.")
+        st.success(f"Found {len(df_reps_preview)} cluster representatives.")
         cluster_valid = True
     else:
-        st.error(" No cluster_representatives.csv found for this Job ID. Run Step 3 first.")
+        st.error("No cluster_representatives.csv found for this Job ID. Run Step 3 first.")
 
 st.subheader("2. Upload Ligand Sets")
 
@@ -197,19 +200,19 @@ can_launch = cluster_valid and actives_file is not None and decoys_file is not N
 disc_task_id = st.session_state.get('discrimination_task_id')
 disc_job_id = st.session_state.get('discrimination_job_id')
 
-if st.button("▶ Run Discrimination Analysis", disabled=not can_launch,
+if st.button("Run Discrimination Analysis", disabled=not can_launch,
              type="primary", key="disc_launch"):
     job_id = f"disc_{uuid.uuid4().hex[:8]}"
-    upload_job_dir = os.path.join(UPLOAD_DIR, job_id)
-    os.makedirs(upload_job_dir, exist_ok=True)
 
-    actives_path = os.path.join(upload_job_dir, 'actives.sdf')
-    decoys_path = os.path.join(upload_job_dir, 'decoys.sdf')
-
-    with open(actives_path, 'wb') as f:
-        f.write(actives_file.getbuffer())
-    with open(decoys_path, 'wb') as f:
-        f.write(decoys_file.getbuffer())
+    try:
+        actives_path = str(handle_file_upload_secure(actives_file, job_id, "actives_"))
+        decoys_path  = str(handle_file_upload_secure(decoys_file, job_id, "decoys_"))
+    except RateLimitExceeded as e:
+        st.error(f"Rate limit exceeded: {e}")
+        st.stop()
+    except SecurityError as e:
+        st.error(f"File validation failed: {e}")
+        st.stop()
 
     task = run_discrimination_task.delay(
         cluster_job_id=cluster_job_id_input,
@@ -235,7 +238,7 @@ if disc_task_id:
     if state == 'PROGRESS':
         progress = meta.get('progress', 0)
         step = meta.get('current_step', 'Running…')
-        st.progress(progress / 100, text=f"⏳ {step}")
+        st.progress(progress / 100, text=step)
         time.sleep(2)
         st.rerun()
 
@@ -245,15 +248,15 @@ if disc_task_id:
 
     elif state in ('FAILURE', 'REVOKED'):
         err = meta.get('exc_message', str(meta)) if isinstance(meta, dict) else str(meta)
-        st.error(f" Discrimination failed: {err}")
-        if st.button(" Reset", key="disc_reset"):
+        st.error(f"Discrimination failed: {err}")
+        if st.button("Reset", key="disc_reset"):
             st.session_state.discrimination_task_id = None
             st.session_state.discrimination_job_id = None
             st.session_state.discrimination_status = 'idle'
             st.rerun()
 
     elif state == 'PENDING':
-        st.info("⏳ Job queued — waiting for a worker…")
+        st.info("Job queued — waiting for a worker…")
         time.sleep(3)
         st.rerun()
 

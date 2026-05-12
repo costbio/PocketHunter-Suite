@@ -310,7 +310,11 @@ def _detect_stage_from_disk(job_id: str, results_dir: str) -> dict:
     # Pipeline done — check for cluster_representatives.csv
     reps_csv = os.path.join(results_dir, job_id, 'pocket_clusters', 'cluster_representatives.csv')
     if not os.path.exists(reps_csv):
-        # Pipeline completed but no cluster results yet — treat as still running
+        if pipeline_status == 'completed':
+            # Pipeline reported success but cluster CSV is absent — clustering failed.
+            return {**base, 'stage': 'error',
+                    'error_msg': 'Pipeline completed but cluster_representatives.csv is missing. '
+                                 'Clustering may have failed — check the task log.'}
         return {**base, 'stage': 'pipeline_running'}
 
     # No discrimination started
@@ -571,6 +575,9 @@ def _launch_discrimination(cluster_job_id, actives_file, decoys_file, pipeline_j
     try:
         actives_path = str(handle_file_upload_secure(actives_file, disc_job_id, "actives_"))
         decoys_path  = str(handle_file_upload_secure(decoys_file, disc_job_id, "decoys_"))
+    except RateLimitExceeded as e:
+        st.error(f"Rate limit exceeded: {e}")
+        st.stop()
     except SecurityError as e:
         st.error(f"File validation failed: {e}")
         st.stop()

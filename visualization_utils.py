@@ -15,6 +15,9 @@ import py3Dmol
 import streamlit.components.v1 as components
 import stmol  # For py3Dmol visualization in Streamlit
 import time # Added for unique key generation
+import logging
+
+_logger = logging.getLogger(__name__)
 
 def create_3d_protein_viewer(pdb_file_path, pocket_residues=None, pocket_centers=None):
     """
@@ -84,18 +87,14 @@ def render_structure_with_residues_stmol(pdb_data_str, residue_ids_str, key_suff
                     except ValueError:
                         continue
         
-        # Show debug info
-        pdb_residues_list = sorted(list(pdb_residues))[:10]  # Show first 10
-        st.info(f"PDB residues (first 10): {pdb_residues_list}")
-        st.info(f"Total PDB residues: {len(pdb_residues)}")
-        
+        _logger.debug("PDB residues (first 10): %s", sorted(list(pdb_residues))[:10])
+        _logger.debug("Total PDB residues: %d", len(pdb_residues))
+
         if residue_ids_str and isinstance(residue_ids_str, str):
             try:
-                # Parse residue IDs from CSV (e.g., "A_1019 A_1022" -> ["A_1019", "A_1022"])
                 csv_residue_ids = residue_ids_str.strip().split()
-                st.info(f"CSV residue IDs: {csv_residue_ids[:5]}... (showing first 5)")
-                
-                # Extract chain and residue numbers from CSV IDs
+                _logger.debug("CSV residue IDs (first 5): %s", csv_residue_ids[:5])
+
                 csv_residues = []
                 for residue_id in csv_residue_ids:
                     if '_' in residue_id:
@@ -105,53 +104,45 @@ def render_structure_with_residues_stmol(pdb_data_str, residue_ids_str, key_suff
                             csv_residues.append((chain, resnum))
                         except ValueError:
                             continue
-                
-                st.info(f"CSV residue numbers: {csv_residues[:5]}... (showing first 5)")
-                
-                # Find the offset between CSV and PDB residue numbers
+
+                _logger.debug("CSV residue numbers (first 5): %s", csv_residues[:5])
+
                 if csv_residues and pdb_residues:
-                    # Calculate the average offset
                     csv_nums = [r[1] for r in csv_residues]
                     pdb_nums = [r[1] for r in pdb_residues]
-                    
+
                     if csv_nums and pdb_nums:
                         avg_csv = sum(csv_nums) / len(csv_nums)
                         avg_pdb = sum(pdb_nums) / len(pdb_nums)
                         offset = avg_csv - avg_pdb
-                        
-                        st.info(f"Estimated offset: CSV avg={avg_csv:.1f}, PDB avg={avg_pdb:.1f}, offset={offset:.1f}")
-                        
-                        # Map CSV residues to PDB residues using the offset
+
+                        _logger.debug("Estimated offset: CSV avg=%.1f, PDB avg=%.1f, offset=%.1f",
+                                      avg_csv, avg_pdb, offset)
+
                         mapped_residues = []
                         for chain, csv_resnum in csv_residues:
                             pdb_resnum = csv_resnum - int(offset)
                             if (chain, pdb_resnum) in pdb_residues:
                                 mapped_residues.append((chain, pdb_resnum))
-                        
-                        st.info(f"Mapped residues (after offset correction): {mapped_residues[:5]}... (showing first 5)")
-                        
+
+                        _logger.debug("Mapped residues (first 5): %s", mapped_residues[:5])
+
                         if mapped_residues:
-                            # Create selection string for py3Dmol
                             selection_parts = []
                             for chain, resnum in mapped_residues:
                                 selection_parts.append(f"resid {resnum} and chain {chain}")
-                            
+
                             if selection_parts:
                                 selection_string = " or ".join(selection_parts)
-                                st.info(f"Selection string: {selection_string[:100]}...")
-                                
-                                # Create py3Dmol viewer
+                                _logger.debug("Selection string: %s", selection_string[:100])
+
                                 viewer = py3Dmol.view(width=800, height=600)
                                 viewer.addModel(pdb_data_str, "pdb")
                                 viewer.setStyle({'cartoon': {'color': 'spectrum'}})
-                                
-                                # Add surface highlighting for mapped residues
                                 viewer.addSurface(py3Dmol.VDW, {"opacity": 0.7, "color": "red"}, {"sele": selection_string})
-                                
-                                # Display with stmol
                                 stmol.showmol(viewer, height=600)
-                                st.success(f"✅ py3Dmol: Successfully highlighted {len(mapped_residues)} residues")
-                                return  # Exit early if py3Dmol works
+                                _logger.debug("py3Dmol: highlighted %d residues", len(mapped_residues))
+                                return
                             else:
                                 st.warning("No valid selection string created after mapping")
                         else:
@@ -160,7 +151,7 @@ def render_structure_with_residues_stmol(pdb_data_str, residue_ids_str, key_suff
                         st.warning("Could not calculate offset - no valid residue numbers")
                 else:
                     st.warning("No valid residues found in CSV or PDB")
-                    
+
             except Exception as e:
                 st.error(f"Error processing residue IDs: {e}")
         
@@ -201,19 +192,14 @@ def render_structure_with_residues_stmol(pdb_data_str, residue_ids_str, key_suff
                 except ValueError:
                     continue
     
-    # Show debug info
-    pdb_residues_list = sorted(list(pdb_residues))[:10]  # Show first 10
-    st.info(f"PDB residues (first 10): {pdb_residues_list}")
-    st.info(f"Total PDB residues: {len(pdb_residues)}")
-    st.info(f"Total atoms parsed: {len(atoms)}")
-    
+    _logger.debug("PDB residues (first 10): %s", sorted(list(pdb_residues))[:10])
+    _logger.debug("Total PDB residues: %d, total atoms: %d", len(pdb_residues), len(atoms))
+
     if residue_ids_str and isinstance(residue_ids_str, str):
         try:
-            # Parse residue IDs from CSV (e.g., "A_1019 A_1022" -> ["A_1019", "A_1022"])
             csv_residue_ids = residue_ids_str.strip().split()
-            st.info(f"CSV residue IDs: {csv_residue_ids[:5]}... (showing first 5)")
-            
-            # Extract chain and residue numbers from CSV IDs
+            _logger.debug("CSV residue IDs (first 5): %s", csv_residue_ids[:5])
+
             csv_residues = []
             for residue_id in csv_residue_ids:
                 if '_' in residue_id:
@@ -223,42 +209,40 @@ def render_structure_with_residues_stmol(pdb_data_str, residue_ids_str, key_suff
                         csv_residues.append((chain, resnum))
                     except ValueError:
                         continue
-            
-            st.info(f"CSV residue numbers: {csv_residues[:5]}... (showing first 5)")
-            
-            # Find the offset between CSV and PDB residue numbers
+
+            _logger.debug("CSV residue numbers (first 5): %s", csv_residues[:5])
+
             if csv_residues and pdb_residues:
-                # Calculate the average offset
                 csv_nums = [r[1] for r in csv_residues]
                 pdb_nums = [r[1] for r in pdb_residues]
-                
+
                 if csv_nums and pdb_nums:
                     avg_csv = sum(csv_nums) / len(csv_nums)
                     avg_pdb = sum(pdb_nums) / len(pdb_nums)
                     offset = avg_csv - avg_pdb
-                    
-                    st.info(f"Estimated offset: CSV avg={avg_csv:.1f}, PDB avg={avg_pdb:.1f}, offset={offset:.1f}")
-                    
-                    # Map CSV residues to PDB residues using the offset
+
+                    _logger.debug("Estimated offset: CSV avg=%.1f, PDB avg=%.1f, offset=%.1f",
+                                  avg_csv, avg_pdb, offset)
+
                     mapped_residues = []
                     for chain, csv_resnum in csv_residues:
                         pdb_resnum = csv_resnum - int(offset)
                         if (chain, pdb_resnum) in pdb_residues:
                             mapped_residues.append((chain, pdb_resnum))
-                    
-                    st.info(f"Mapped residues (after offset correction): {mapped_residues[:5]}... (showing first 5)")
-                    
-                    # Mark atoms that belong to highlighted residues
+
+                    _logger.debug("Mapped residues (first 5): %s", mapped_residues[:5])
+
                     for atom in atoms:
                         if (atom['chain'], atom['resnum']) in mapped_residues:
                             highlighted_atoms.append(atom)
-                    
-                    st.success(f"Successfully mapped {len(mapped_residues)} residues and found {len(highlighted_atoms)} highlighted atoms")
+
+                    _logger.debug("Mapped %d residues, %d highlighted atoms",
+                                  len(mapped_residues), len(highlighted_atoms))
                 else:
                     st.warning("Could not calculate offset - no valid residue numbers")
             else:
                 st.warning("No valid residues found in CSV or PDB")
-                
+
         except Exception as e:
             st.error(f"Error processing residue IDs: {e}")
     
@@ -320,11 +304,10 @@ def render_structure_with_residues_stmol(pdb_data_str, residue_ids_str, key_suff
         
         # Display the plot
         st.plotly_chart(fig, use_container_width=True)
-        st.success("✅ 3D protein structure displayed successfully with Plotly")
-        
+        _logger.debug("3D protein structure displayed with Plotly")
+
     else:
-        st.error("❌ No atoms found in PDB data")
-        # Fallback: show the PDB data as text
+        st.error("No atoms found in PDB data")
         st.text_area("PDB Data (fallback)", pdb_data_str[:1000] + "...", height=200)
 
 def create_enhanced_3d_viewer(pdb_file_path, pocket_csv_path=None, frame_pocket_index=None):
@@ -363,23 +346,20 @@ def create_enhanced_3d_viewer(pdb_file_path, pocket_csv_path=None, frame_pocket_
                     individual_csv_path = matching_files[0]
                     df = pd.read_csv(individual_csv_path)
                     
-                    # Debug: show available columns
-                    st.info(f"Available columns in CSV: {list(df.columns)}")
-                    
-                    # Find the pocket with the matching index
-                    # The CSV has column '  rank' (with leading spaces)
+                    _logger.debug("Available columns in CSV: %s", list(df.columns))
+
                     rank_column = '  rank'
                     if rank_column in df.columns:
                         pocket_data = df[df[rank_column] == frame_pocket_index]
                         if not pocket_data.empty:
-                            # Try different possible column names for surface atom IDs
                             surface_atoms_str = ""
                             possible_column_names = [' surf_atom_ids', 'surf_atom_ids', ' surf_atoms', 'surf_atoms']
-                            
+
                             for col_name in possible_column_names:
                                 if col_name in df.columns:
                                     surface_atoms_str = str(pocket_data.iloc[0].get(col_name, ''))
-                                    st.info(f"Found surface atoms using column '{col_name}': {len(surface_atoms_str.split()) if surface_atoms_str else 0} atoms")
+                                    _logger.debug("Found surface atoms using column '%s': %d atoms",
+                                                  col_name, len(surface_atoms_str.split()) if surface_atoms_str else 0)
                                     break
                             
                             if not surface_atoms_str:
@@ -402,18 +382,18 @@ def create_enhanced_3d_viewer(pdb_file_path, pocket_csv_path=None, frame_pocket_
         # Add surface highlighting if atoms are available
         if surface_atoms_str and isinstance(surface_atoms_str, str):
             try:
-                st.info(f"Attempting to parse surface atoms string: '{surface_atoms_str[:100]}...'")
+                _logger.debug("Parsing surface atoms string: '%s...'", surface_atoms_str[:100])
                 atom_indices = [int(idx) for idx in surface_atoms_str.split()]
                 if atom_indices:
                     viewer.addSurface(py3Dmol.VDW, {"opacity": 0.7, "color": "red"}, {"atom": atom_indices})
-                    st.success(f"Successfully highlighted {len(atom_indices)} surface atoms")
+                    _logger.debug("Highlighted %d surface atoms", len(atom_indices))
                 else:
                     st.warning("Surface atoms string was empty after parsing")
             except ValueError as e:
                 st.warning(f"Surface atom indices could not be parsed. Error: {e}")
-                st.info(f"Failed string: '{surface_atoms_str}'")
+                _logger.debug("Failed string: '%s'", surface_atoms_str)
         else:
-            st.info(f"Surface atoms string was empty or invalid: '{surface_atoms_str}'")
+            _logger.debug("Surface atoms string was empty or invalid: '%s'", surface_atoms_str)
         
         viewer.zoomTo()
         return stmol.showmol(viewer, height=600, width=800)
@@ -533,7 +513,7 @@ def create_pocket_heatmap(predictions_dir):
                 required_columns = ['name ', ' score', ' probability']
                 if not all(col in df.columns for col in required_columns):
                     st.warning(f"Skipping file with missing columns: {file}")
-                    st.info(f"Available columns: {list(df.columns)}")
+                    _logger.debug("Available columns: %s", list(df.columns))
                     continue
                 
                 # Filter out rows with invalid data
@@ -774,7 +754,7 @@ def create_timeline_visualization(predictions_dir):
                 required_columns = ['name ', ' score', ' probability']
                 if not all(col in df.columns for col in required_columns):
                     st.warning(f"Skipping file with missing columns: {file}")
-                    st.info(f"Available columns: {list(df.columns)}")
+                    _logger.debug("Available columns: %s", list(df.columns))
                     continue
                 
                 # Filter out rows with invalid data
@@ -961,39 +941,37 @@ def create_interactive_results_display(results_dir, job_id):
                                 # Parse surface atom indices
                                 surface_atom_indices = str(top_pocket.get('surf_atom_ids', ''))
                                 
-                                # Debug information
-                                st.info(f"Found pocket data: {len(pocket_residues)} residues, center: {pocket_centers}, surface atoms: {len(surface_atom_indices.split()) if surface_atom_indices else 0}")
-                                
-                                # Show the actual residue IDs from CSV for debugging
-                                st.info(f"CSV residue IDs: {residue_ids_str[:200]}...")
-                                
-                                # Try to find matching residues in PDB by reading the file
+                                _logger.debug("Found pocket data: %d residues, center: %s, surface atoms: %d",
+                                              len(pocket_residues), pocket_centers,
+                                              len(surface_atom_indices.split()) if surface_atom_indices else 0)
+                                _logger.debug("CSV residue IDs: %s...", residue_ids_str[:200])
+
                                 try:
                                     with open(pdb_path, 'r') as f:
                                         pdb_content = f.read()
-                                    
-                                    # Extract actual residue numbers from PDB
+
                                     pdb_residues = set()
                                     for line in pdb_content.split('\n'):
                                         if line.startswith('ATOM') or line.startswith('HETATM'):
                                             parts = line.split()
                                             if len(parts) >= 5:
                                                 try:
-                                                    pdb_residues.add(int(parts[5]))  # Residue number
+                                                    pdb_residues.add(int(parts[5]))
                                                 except (ValueError, IndexError):
                                                     continue
-                                    
-                                    st.info(f"PDB residue numbers range: {min(pdb_residues)} to {max(pdb_residues)}")
-                                    st.info(f"CSV residue numbers: {pocket_residues[:10]}...")
-                                    
-                                    # Check if any CSV residues match PDB residues
+
+                                    _logger.debug("PDB residue numbers range: %d to %d",
+                                                  min(pdb_residues), max(pdb_residues))
+                                    _logger.debug("CSV residue numbers (first 10): %s", pocket_residues[:10])
+
                                     matching_residues = [r for r in pocket_residues if r in pdb_residues]
-                                    st.info(f"Matching residues: {len(matching_residues)} out of {len(pocket_residues)}")
-                                    
-                                    # Use matching residues if any found, otherwise use original
+                                    _logger.debug("Matching residues: %d out of %d",
+                                                  len(matching_residues), len(pocket_residues))
+
                                     if matching_residues:
                                         pocket_residues = matching_residues
-                                        st.success(f"Using {len(matching_residues)} matching residues for highlighting")
+                                        _logger.debug("Using %d matching residues for highlighting",
+                                                      len(matching_residues))
                                     else:
                                         st.warning("No matching residues found between CSV and PDB. Using original residue numbers.")
                                         
@@ -1018,23 +996,22 @@ def create_interactive_results_display(results_dir, job_id):
                     
                     if matching_files:
                         individual_csv_path = matching_files[0]
-                        st.info(f"Found individual prediction CSV: {os.path.basename(individual_csv_path)}")
-                        
-                        # Read the individual CSV to get pocket data
+                        _logger.debug("Found individual prediction CSV: %s",
+                                      os.path.basename(individual_csv_path))
+
                         df_individual = pd.read_csv(individual_csv_path)
-                        st.info(f"Available columns in individual CSV: {list(df_individual.columns)}")
-                        
-                        # Find the pocket with the matching index from merged CSV
+                        _logger.debug("Available columns in individual CSV: %s",
+                                      list(df_individual.columns))
+
                         if 'pocket_index' in df.columns:
-                            pocket_idx = df.iloc[0]['pocket_index']  # Get the pocket index from merged CSV
-                            st.info(f"Looking for pocket index: {pocket_idx}")
-                            
-                            # Try to find matching pocket in individual CSV
-                            rank_column = '  rank'  # Individual CSV has '  rank' column
+                            pocket_idx = df.iloc[0]['pocket_index']
+                            _logger.debug("Looking for pocket index: %s", pocket_idx)
+
+                            rank_column = '  rank'
                             if rank_column in df_individual.columns:
                                 matching_pocket = df_individual[df_individual[rank_column] == pocket_idx]
                                 if not matching_pocket.empty:
-                                    st.success(f"Found matching pocket in individual CSV")
+                                    _logger.debug("Found matching pocket in individual CSV")
                                     enhanced_success = create_enhanced_3d_viewer(
                                         pdb_path, 
                                         individual_csv_path, 
