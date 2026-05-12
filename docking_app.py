@@ -9,7 +9,6 @@ import json
 import zipfile
 import shutil
 import uuid
-import math
 import glob
 import subprocess
 from pathlib import Path
@@ -21,8 +20,6 @@ from rate_limiter import RateLimitExceeded, check_task_rate_limit, check_upload_
 from logging_config import setup_logging
 from session_state import initialize_session_state, get_pdb_selection_key, render_load_previous_widget
 from cluster_labels import describe_cluster_spatially
-import py3Dmol
-import streamlit.components.v1 as components
 
 # Use Config for directories
 RESULTS_DIR = str(Config.RESULTS_DIR)
@@ -32,29 +29,8 @@ UPLOAD_DIR = str(Config.UPLOAD_DIR)
 logger = setup_logging(__name__)
 
 
-def update_job_status(job_id, status, step=None, task_id=None, result_info=None):
-    """Update job status file"""
-    status_file = os.path.join(RESULTS_DIR, f'{job_id}_status.json')
-    current_status = {}
-    if os.path.exists(status_file):
-        with open(status_file, 'r') as f:
-            try:
-                current_status = json.load(f)
-            except json.JSONDecodeError:
-                current_status = {}
-
-    current_status['status'] = status
-    if step:
-        current_status['step'] = step
-    if task_id:
-        current_status['task_id'] = task_id
-    if result_info:
-        current_status['result_info'] = result_info
-    from datetime import datetime
-    current_status['last_updated'] = datetime.now().isoformat()
-
-    with open(status_file, 'w') as f:
-        json.dump(current_status, f, indent=4)
+# Shared status-file writer (canonical home: tasks.update_status_file).
+from tasks import update_status_file as update_job_status
 
 # Page configuration is handled by main.py
 

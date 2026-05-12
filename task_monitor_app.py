@@ -8,6 +8,9 @@ import json
 import glob
 from celery_app import celery_app
 from config import Config
+from session_state import initialize_session_state
+
+initialize_session_state()
 
 # Use Config for directories
 RESULTS_DIR = str(Config.RESULTS_DIR)

@@ -61,6 +61,10 @@ def _update_status_file(job_id, status, step=None, task_id=None, result_info=Non
         logger.warning(f"Failed to update status file for {job_id}: {e}")
 
 
+# Public re-export — pages import this directly rather than reimplementing it.
+update_status_file = _update_status_file
+
+
 def _fail_job(celery_task, job_id, stage, exc, log_path=None):
     """Single chokepoint for marking a Celery task FAILED on disk + backend.
 
@@ -118,117 +122,6 @@ def _write_pair_failure_log(job_id, pair_failures, pairs_total):
         logger.warning(f"Could not write docking_pair_failures.log for {job_id}: {e}")
         return None
 
-
-def validate_pockethunter_output(output_dir, expected_files=None, expected_dirs=None):
-    """
-    Validate that PocketHunter output exists and contains expected files.
-
-    Parameters
-    ----------
-    output_dir : str
-        Path to the output directory to validate.
-    expected_files : list of str, optional
-        List of expected file names or patterns to check for.
-    expected_dirs : list of str, optional
-        List of expected subdirectory names to check for.
-
-    Returns
-    -------
-    dict
-        Validation results with 'valid' boolean, 'missing_files', 'missing_dirs', and 'found_files'.
-    """
-    result = {
-        'valid': True,
-        'missing_files': [],
-        'missing_dirs': [],
-        'found_files': [],
-        'output_dir': output_dir
-    }
-
-    # Check if output directory exists
-    if not os.path.exists(output_dir):
-        result['valid'] = False
-        logger.warning(f"Output directory does not exist: {output_dir}")
-        return result
-
-    # Check expected subdirectories
-    if expected_dirs:
-        for subdir in expected_dirs:
-            subdir_path = os.path.join(output_dir, subdir)
-            if not os.path.exists(subdir_path):
-                result['valid'] = False
-                result['missing_dirs'].append(subdir)
-                logger.warning(f"Expected directory missing: {subdir_path}")
-
-    # Check expected files
-    if expected_files:
-        for filename in expected_files:
-            file_path = os.path.join(output_dir, filename)
-            if os.path.exists(file_path):
-                result['found_files'].append(filename)
-            else:
-                result['valid'] = False
-                result['missing_files'].append(filename)
-                logger.warning(f"Expected file missing: {file_path}")
-
-    return result
-
-
-def validate_csv_output(csv_path, required_columns=None, min_rows=0):
-    """
-    Validate that a CSV output file exists and has expected structure.
-
-    Parameters
-    ----------
-    csv_path : str
-        Path to the CSV file to validate.
-    required_columns : list of str, optional
-        List of column names that must exist in the CSV.
-    min_rows : int
-        Minimum number of data rows expected.
-
-    Returns
-    -------
-    dict
-        Validation results with 'valid' boolean, 'row_count', 'missing_columns', and 'error'.
-    """
-    result = {
-        'valid': True,
-        'row_count': 0,
-        'missing_columns': [],
-        'error': None
-    }
-
-    if not os.path.exists(csv_path):
-        result['valid'] = False
-        result['error'] = f"CSV file does not exist: {csv_path}"
-        logger.warning(result['error'])
-        return result
-
-    try:
-        df = pd.read_csv(csv_path)
-        result['row_count'] = len(df)
-
-        # Check minimum row count
-        if len(df) < min_rows:
-            result['valid'] = False
-            result['error'] = f"CSV has {len(df)} rows, expected at least {min_rows}"
-            logger.warning(result['error'])
-
-        # Check required columns
-        if required_columns:
-            for col in required_columns:
-                if col not in df.columns:
-                    result['valid'] = False
-                    result['missing_columns'].append(col)
-                    logger.warning(f"Required column missing in {csv_path}: {col}")
-
-    except Exception as e:
-        result['valid'] = False
-        result['error'] = f"Error reading CSV: {str(e)}"
-        logger.error(result['error'])
-
-    return result
 
 def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_name,
                update_interval=2, job_id=None):
@@ -1048,7 +941,8 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         if missing:
             raise ValueError(f"CSV missing required columns: {missing}. Found: {list(df_rep_pockets.columns)}")
 
-        # Resolve PDB source directory (same logic as dock_ensemble)
+        # Resolve PDB source directory if not supplied: fall back to the most
+        # recent extract_* job under results/.
         if pdb_source_dir is None:
             extract_dirs = sorted(
                 [d for d in os.listdir(RESULTS_DIR) if d.startswith('extract_')
