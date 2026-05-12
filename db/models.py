@@ -114,6 +114,14 @@ class Job(Base):
     # when each session has its own dedicated worker.
     celery_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # Bridge to the v1 disk-based "job_id" string identifier (e.g.
+    # ``find_pockets_20260512_120000_abcd1234``). Tasks still write a
+    # ``<job>_status.json`` file keyed by this string during Phase A; the
+    # column lets ``_update_status_file`` mirror the disk write into the
+    # corresponding Job row when one was registered at submission time.
+    # Removed when the on-disk status files retire in Phase C.
+    legacy_id: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
+
     result_info: Mapped[dict | None] = mapped_column(_JSONB, nullable=True)
     error: Mapped[dict | None] = mapped_column(_JSONB, nullable=True)
     pair_failures: Mapped[list | None] = mapped_column(_JSONB, nullable=True)

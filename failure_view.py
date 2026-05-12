@@ -230,6 +230,42 @@ def load_status_json(job_id: Optional[str]) -> Optional[dict]:
         return None
 
 
+def load_status_for_session(session_id) -> list[dict]:
+    """Return one status-dict per ``Job`` row belonging to a session.
+
+    v2 Phase A3: read side for the DB mirror. Each returned dict has the
+    same shape the disk ``<job>_status.json`` files use, so callers can
+    feed them into ``classify_error`` / ``render_task_failure`` /
+    ``render_pair_failures_callout`` unchanged.
+
+    Used by the eventual session-scoped Task Monitor in Phase B. Returns
+    ``[]`` on any DB error so caller code can stay terse.
+    """
+    if session_id is None:
+        return []
+    try:
+        from db.jobs import find_by_session
+
+        rows = find_by_session(session_id)
+        return [
+            {
+                "status": r.status,
+                "step": r.step,
+                "task_id": r.celery_task_id,
+                "kind": r.kind,
+                "result_info": r.result_info,
+                "error": r.error,
+                "pair_failures": r.pair_failures,
+                "pair_failures_log": r.pair_failures_log,
+                "legacy_id": r.legacy_id,
+                "last_updated": r.updated_at.isoformat() if r.updated_at else None,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
 # ── Streamlit renderer ───────────────────────────────────────────────────
 
 

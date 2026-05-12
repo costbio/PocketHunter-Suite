@@ -660,6 +660,10 @@ with tab_setup:
                                     logger.info(f"Auto-detected PDB source: {pdb_source_dir}")
                                     break
 
+                    # v2 bridge: tag this disk job_id with the loaded session.
+                    from session_routes import register_session_job
+                    register_session_job(job_id, "docking")
+
                     # Start docking task with all parameters
                     task = run_docking_task.delay(
                         cluster_representatives_csv=filtered_reps_file,

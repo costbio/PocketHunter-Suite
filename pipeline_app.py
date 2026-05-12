@@ -479,6 +479,10 @@ average structure**.
 
                         pdb_source_dir = os.path.join(RESULTS_DIR, results_job_id, 'pdbs')
 
+                        # v2 bridge: tag this disk job_id with the loaded session.
+                        from session_routes import register_session_job
+                        register_session_job(dock_job_id, "docking")
+
                         dock_task_obj = run_docking_task.delay(
                             cluster_representatives_csv=filtered_reps_file,
                             ligand_folder=ligand_dir,
@@ -754,6 +758,10 @@ if submitted:
                     pass
             collected = collected[:Config.MAX_DOCKING_LIGANDS]
         ligand_folder = ligand_dir
+
+    # v2 bridge: tag this disk job_id with the loaded session.
+    from session_routes import register_session_job
+    register_session_job(job_id, "pipeline")
 
     # Submit Celery task
     task = run_pockethunter_pipeline.delay(

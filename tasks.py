@@ -28,11 +28,18 @@ logger = setup_logging(__name__)
 
 def _update_status_file(job_id, status, step=None, task_id=None, result_info=None,
                         prefix='', error=None):
-    """Update the job status JSON file on disk.
+    """Update the job status JSON file on disk + mirror into the Job row.
 
     On failure, pass an ``error`` dict containing at minimum ``exc_type``,
     ``exc_message``, and ``stage`` so the UI can render a structured failure
     panel without consulting the Celery result backend (which expires).
+
+    v2 Phase A3: after the disk write, the same fields are mirrored into
+    ``db.Job`` via ``update_by_legacy_id(job_id, …)``. The DB write is a
+    silent no-op when no Job row was registered at submission time
+    (legacy v1 callers, or pages that submit without a loaded session).
+    Phase C removes the disk-file leg of this; for now both write paths
+    coexist so the UI keeps working unchanged.
     """
     try:
         filename = f'{prefix}{job_id}_status.json' if prefix else f'{job_id}_status.json'
@@ -59,6 +66,21 @@ def _update_status_file(job_id, status, step=None, task_id=None, result_info=Non
         logger.info(f"Status file updated: {status_file} -> {status}")
     except Exception as e:
         logger.warning(f"Failed to update status file for {job_id}: {e}")
+
+    # Mirror to DB. Best-effort; never blocks the on-disk write or the task.
+    try:
+        from db.jobs import update_by_legacy_id
+        update_by_legacy_id(
+            job_id,
+            status,
+            step=step,
+            celery_task_id=task_id,
+            result_info=result_info,
+            error=error,
+        )
+    except Exception as db_err:
+        # The session-bound Job row is opportunistic; never raise to the caller.
+        logger.debug(f"DB mirror for {job_id} skipped: {db_err}")
 
 
 # Public re-export — pages import this directly rather than reimplementing it.

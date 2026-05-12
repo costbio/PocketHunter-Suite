@@ -162,3 +162,30 @@ def clear_session_query() -> None:
         if key in st.query_params:
             del st.query_params[key]
     st.rerun()
+
+
+def register_session_job(job_id: str, kind: str) -> None:
+    """Register a disk-style job_id with the currently-loaded session.
+
+    Creates a ``Job`` row tagged with ``legacy_id=job_id`` so the task
+    layer's mirror-to-DB path (``tasks._update_status_file``) can find
+    and update it as the task progresses.
+
+    No-op when no v2 session is loaded — v1 callers or pages reached
+    outside the ``/?s=…`` flow continue to write only to the disk
+    status file. Safe to call unconditionally before ``task.delay()``.
+
+    Best-effort: DB errors are swallowed so submission never crashes on
+    a flaky Postgres.
+    """
+    import streamlit as st
+
+    sess = st.session_state.get("current_session")
+    if sess is None:
+        return
+    try:
+        from db.jobs import create_for_legacy
+
+        create_for_legacy(sess.id, kind, job_id)
+    except Exception:
+        pass

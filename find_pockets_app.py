@@ -175,6 +175,10 @@ if st.button("Find Pockets", type="primary", use_container_width=True):
         st.error(f"Task rate limit exceeded — wait {e.retry_after:.0f}s.")
         st.stop()
 
+    # v2 bridge: tag this disk job_id with the loaded session (no-op for v1).
+    from session_routes import register_session_job
+    register_session_job(job_id, "find_pockets")
+
     task = run_find_pockets_task.delay(
         job_id=job_id,
         xtc_file_path=xtc_path,

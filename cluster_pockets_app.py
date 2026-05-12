@@ -281,6 +281,10 @@ if st.button("🚀 Start Pocket Clustering", type="primary", use_container_width
 
         # Start the clustering
         with st.spinner("Starting pocket clustering..."):
+            # v2 bridge: tag this disk job_id with the loaded session.
+            from session_routes import register_session_job
+            register_session_job(job_id, "cluster")
+
             task = run_cluster_pockets_task.delay(
                 pockets_csv_path_abs=os.path.abspath(pockets_csv_path),
                 job_id=job_id,
