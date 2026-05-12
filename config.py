@@ -1,288 +1,133 @@
-"""
-Centralized configuration management for PocketHunter-Suite.
+"""Thin facade over the pydantic-settings ``settings`` singleton.
 
-This module provides a single source of truth for all application configuration,
-including paths, limits, and environment-specific settings.
-"""
+v2 Phase A commit A4 replaced the hand-rolled ``Config`` with
+``settings.Settings``. This file is preserved purely so existing call
+sites (``Config.MAX_UPLOAD_SIZE``, ``Config.RESULTS_DIR``, etc.) keep
+working without churn — every attribute reads from the singleton.
 
-import os
+**New code should import ``settings`` directly:**
+
+    from settings import settings
+    print(settings.RESULTS_DIR)
+
+The ``Config`` class is here for back-compat with the ~16 modules that
+already use it. It will be retired in a future cleanup batch.
+"""
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+from settings import settings
 
 
 class ConfigurationError(Exception):
-    """Raised when configuration is invalid or missing required values."""
-    pass
+    """Raised when configuration is invalid or missing required values.
+
+    Kept for back-compat — callers can still ``except ConfigurationError``.
+    The actual validation now lives in pydantic (Settings raises
+    ``pydantic.ValidationError`` on invalid env), but
+    ``ConfigurationError`` re-wraps it from ``Config.validate()``.
+    """
 
 
 class Config:
-    """Application configuration with validation and defaults."""
+    """Attribute-compatible facade over ``settings``.
 
-    # ========================================
-    # Base Directories (absolute paths)
-    # ========================================
-    BASE_DIR = Path(__file__).parent.resolve()
-    UPLOAD_DIR = Path(os.getenv('UPLOAD_DIR', BASE_DIR / 'uploads')).resolve()
-    RESULTS_DIR = Path(os.getenv('RESULTS_DIR', BASE_DIR / 'results')).resolve()
+    Every property delegates to the singleton. Class-level access works
+    because ``Settings`` exposes each field as an instance attribute and
+    the class-level ``__getattr__`` here forwards to the singleton.
+    """
 
-    # ========================================
-    # PocketHunter CLI
-    # ========================================
-    POCKETHUNTER_DIR = BASE_DIR / 'PocketHunter'
-    POCKETHUNTER_CLI = POCKETHUNTER_DIR / 'pockethunter.py'
+    # Static class constants — same identities as v1 so reference-equality
+    # against ``Config.ALLOWED_UPLOAD_EXTENSIONS`` keeps working.
+    ALLOWED_UPLOAD_EXTENSIONS = settings.ALLOWED_UPLOAD_EXTENSIONS
+    ALLOWED_MIME_TYPES = settings.ALLOWED_MIME_TYPES
 
-    # ========================================
-    # External Tools
-    # ========================================
-    P2RANK_PATH = os.getenv('P2RANK_PATH', 'prank')  # Will use PATH if not specified
-    SMINA_PATH = os.getenv('SMINA_PATH', 'smina')    # Will use PATH if not specified
-
-    # ========================================
-    # Celery/Redis Configuration
-    # ========================================
-    CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
-
-    # ========================================
-    # File Upload Limits (bytes)
-    # ========================================
-    MAX_UPLOAD_SIZE = int(os.getenv('MAX_UPLOAD_SIZE', 524288000))  # 500 MB default
-    MAX_ZIP_SIZE = int(os.getenv('MAX_ZIP_SIZE', 1073741824))       # 1 GB default
-
-    # ========================================
-    # Security
-    # ========================================
-    ALLOWED_UPLOAD_EXTENSIONS = {
-        '.xtc',    # Trajectory files
-        '.pdb',    # Protein structure
-        '.gro',    # Gromacs structure
-        '.csv',    # Data files
-        '.zip',    # Compressed archives
-        '.sdf',    # Structure-data files
-        '.pdbqt',  # AutoDock format
-    }
-
-    ALLOWED_MIME_TYPES = {
-        'application/octet-stream',  # .xtc, .gro
-        'chemical/x-pdb',            # .pdb
-        'text/csv',                  # .csv
-        'application/zip',           # .zip
-        'chemical/x-mdl-sdfile',     # .sdf
-        'text/plain',                # .pdbqt
-    }
-
-    # ========================================
-    # Resource Management
-    # ========================================
-    CLEANUP_AFTER_DAYS = int(os.getenv('CLEANUP_AFTER_DAYS', 30))
-    MAX_DISK_USAGE_GB = int(os.getenv('MAX_DISK_USAGE_GB', 100))
-
-    # Docking resource limits
-    MAX_DOCKING_PDBS = int(os.getenv('MAX_DOCKING_PDBS', 20))
-    MAX_DOCKING_LIGANDS = int(os.getenv('MAX_DOCKING_LIGANDS', 10))
-    MAX_DOCKING_EXHAUSTIVENESS = int(os.getenv('MAX_DOCKING_EXHAUSTIVENESS', 12))
-    DOCKING_TIMEOUT = int(os.getenv('DOCKING_TIMEOUT', 7200))  # 2 hours
-
-    # ========================================
-    # Rate Limiting
-    # ========================================
-    # Set RATE_LIMIT_ENABLED=false in .env for local development
-    RATE_LIMIT_ENABLED = os.getenv('RATE_LIMIT_ENABLED', 'true').lower() == 'true'
-    # Maximum uploads per time window
-    RATE_LIMIT_MAX_UPLOADS = int(os.getenv('RATE_LIMIT_MAX_UPLOADS', 10))
-    # Time window in seconds (default: 60 seconds = 1 minute)
-    RATE_LIMIT_WINDOW_SECONDS = int(os.getenv('RATE_LIMIT_WINDOW_SECONDS', 60))
-    # Maximum task submissions per time window
-    RATE_LIMIT_MAX_TASKS = int(os.getenv('RATE_LIMIT_MAX_TASKS', 5))
-    # Task rate limit window in seconds (default: 60 seconds)
-    RATE_LIMIT_TASK_WINDOW_SECONDS = int(os.getenv('RATE_LIMIT_TASK_WINDOW_SECONDS', 60))
-
-    # ========================================
-    # Logging Configuration
-    # ========================================
-    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-    LOG_FILE = os.getenv('LOG_FILE', str(BASE_DIR / 'pockethunter-suite.log'))
-
-    # ========================================
-    # Class Methods
-    # ========================================
+    # Explicit class attributes pointing at the singleton's fields. We
+    # bind them at class-creation time so every consumer's ``Config.X``
+    # access just reads a normal class attribute (no descriptor magic).
+    BASE_DIR = settings.BASE_DIR
+    UPLOAD_DIR = settings.UPLOAD_DIR
+    RESULTS_DIR = settings.RESULTS_DIR
+    POCKETHUNTER_DIR = settings.POCKETHUNTER_DIR
+    POCKETHUNTER_CLI = settings.POCKETHUNTER_CLI
+    P2RANK_PATH = settings.P2RANK_PATH
+    SMINA_PATH = settings.SMINA_PATH
+    CELERY_BROKER_URL = settings.CELERY_BROKER_URL
+    CELERY_RESULT_BACKEND = settings.CELERY_RESULT_BACKEND
+    MAX_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE
+    MAX_ZIP_SIZE = settings.MAX_ZIP_SIZE
+    CLEANUP_AFTER_DAYS = settings.CLEANUP_AFTER_DAYS
+    MAX_DISK_USAGE_GB = settings.MAX_DISK_USAGE_GB
+    MAX_DOCKING_PDBS = settings.MAX_DOCKING_PDBS
+    MAX_DOCKING_LIGANDS = settings.MAX_DOCKING_LIGANDS
+    MAX_DOCKING_EXHAUSTIVENESS = settings.MAX_DOCKING_EXHAUSTIVENESS
+    DOCKING_TIMEOUT = settings.DOCKING_TIMEOUT
+    RATE_LIMIT_ENABLED = settings.RATE_LIMIT_ENABLED
+    RATE_LIMIT_MAX_UPLOADS = settings.RATE_LIMIT_MAX_UPLOADS
+    RATE_LIMIT_WINDOW_SECONDS = settings.RATE_LIMIT_WINDOW_SECONDS
+    RATE_LIMIT_MAX_TASKS = settings.RATE_LIMIT_MAX_TASKS
+    RATE_LIMIT_TASK_WINDOW_SECONDS = settings.RATE_LIMIT_TASK_WINDOW_SECONDS
+    LOG_LEVEL = settings.LOG_LEVEL
+    LOG_FILE = settings.LOG_FILE
 
     @classmethod
     def validate(cls) -> None:
+        """Materialise the side effects (mkdir, PocketHunter checks).
+
+        pydantic's ``ValidationError`` was already raised at import time
+        for missing-field / type-mismatch cases. This method now only
+        verifies the *runtime* invariants (filesystem layout).
         """
-        Validate configuration and raise ConfigurationError if invalid.
-
-        This method checks:
-        - Required directories exist or can be created
-        - Required files (PocketHunter CLI) exist
-        - URLs are properly formatted
-
-        Raises:
-            ConfigurationError: If configuration is invalid
-        """
-        errors = []
-
-        # Check PocketHunter directory exists
-        if not cls.POCKETHUNTER_DIR.exists():
-            errors.append(
-                f"PocketHunter directory not found: {cls.POCKETHUNTER_DIR}\n"
-                f"Expected to find PocketHunter as a subdirectory of {cls.BASE_DIR}"
-            )
-
-        # Check PocketHunter CLI exists
-        if not cls.POCKETHUNTER_CLI.exists():
-            errors.append(
-                f"PocketHunter CLI not found: {cls.POCKETHUNTER_CLI}\n"
-                f"Expected to find pockethunter.py in {cls.POCKETHUNTER_DIR}"
-            )
-
-        # Create upload/results directories if they don't exist
         try:
-            cls.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-            cls.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            errors.append(f"Failed to create required directories: {e}")
-
-        # Validate Redis URL format
-        if not cls.CELERY_BROKER_URL.startswith('redis://'):
-            errors.append(
-                f"Invalid CELERY_BROKER_URL: {cls.CELERY_BROKER_URL}\n"
-                f"Expected format: redis://host:port/db"
-            )
-
-        # Validate numeric limits
-        if cls.MAX_UPLOAD_SIZE <= 0:
-            errors.append(f"MAX_UPLOAD_SIZE must be positive, got: {cls.MAX_UPLOAD_SIZE}")
-
-        if cls.MAX_ZIP_SIZE <= 0:
-            errors.append(f"MAX_ZIP_SIZE must be positive, got: {cls.MAX_ZIP_SIZE}")
-
-        if cls.CLEANUP_AFTER_DAYS <= 0:
-            errors.append(f"CLEANUP_AFTER_DAYS must be positive, got: {cls.CLEANUP_AFTER_DAYS}")
-
-        if cls.MAX_DISK_USAGE_GB <= 0:
-            errors.append(f"MAX_DISK_USAGE_GB must be positive, got: {cls.MAX_DISK_USAGE_GB}")
-
-        # Validate LOG_LEVEL
-        valid_log_levels = {'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'}
-        if cls.LOG_LEVEL.upper() not in valid_log_levels:
-            errors.append(
-                f"Invalid LOG_LEVEL: {cls.LOG_LEVEL}\n"
-                f"Valid options: {', '.join(valid_log_levels)}"
-            )
-
-        # If there are errors, raise them all at once
-        if errors:
-            raise ConfigurationError(
-                "Configuration validation failed:\n\n" +
-                "\n\n".join(f"  • {error}" for error in errors)
-            )
+            settings.ensure_runtime_paths()
+        except ValueError as e:
+            raise ConfigurationError(str(e)) from e
 
     @classmethod
     def get_upload_path(cls, job_id: str, filename: str) -> Path:
-        """
-        Generate secure upload path for a file.
-
-        This method:
-        - Sanitizes the filename to prevent path traversal
-        - Creates the job directory if it doesn't exist
-        - Returns an absolute path under UPLOAD_DIR
-
-        Args:
-            job_id: Unique job identifier
-            filename: Original filename (will be sanitized)
-
-        Returns:
-            Absolute path where file should be saved
-
-        Example:
-            >>> Config.get_upload_path("abc123", "trajectory.xtc")
-            PosixPath('/app/uploads/abc123/trajectory.xtc')
-        """
-        # Sanitize filename to remove any directory components
+        """Sanitised upload path for ``filename`` inside ``UPLOAD_DIR/<job>``."""
         safe_filename = Path(filename).name
-
-        # Create job directory
-        job_dir = cls.UPLOAD_DIR / job_id
+        job_dir = settings.UPLOAD_DIR / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
-
         return job_dir / safe_filename
 
     @classmethod
     def get_results_path(cls, job_id: str) -> Path:
-        """
-        Generate results directory path for a job.
-
-        Args:
-            job_id: Unique job identifier
-
-        Returns:
-            Absolute path to results directory
-
-        Example:
-            >>> Config.get_results_path("abc123")
-            PosixPath('/app/results/abc123')
-        """
-        results_path = cls.RESULTS_DIR / job_id
-        results_path.mkdir(parents=True, exist_ok=True)
-        return results_path
+        """``results/<job_id>/`` (created if missing)."""
+        p = settings.RESULTS_DIR / job_id
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
     @classmethod
     def get_status_file(cls, job_id: str) -> Path:
-        """
-        Get path to job status JSON file.
-
-        Args:
-            job_id: Unique job identifier
-
-        Returns:
-            Path to status JSON file
-
-        Example:
-            >>> Config.get_status_file("abc123")
-            PosixPath('/app/results/abc123_status.json')
-        """
-        return cls.RESULTS_DIR / f"{job_id}_status.json"
+        """``results/<job_id>_status.json`` path — disk-mirror of the Job row."""
+        return settings.RESULTS_DIR / f"{job_id}_status.json"
 
     @classmethod
     def print_config(cls) -> None:
-        """Print current configuration (useful for debugging)."""
+        """Print effective settings (debugging aid)."""
         print("=" * 60)
-        print("PocketHunter-Suite Configuration")
+        print("PocketHunter-Suite Configuration (v2)")
         print("=" * 60)
-        print(f"BASE_DIR:              {cls.BASE_DIR}")
-        print(f"UPLOAD_DIR:            {cls.UPLOAD_DIR}")
-        print(f"RESULTS_DIR:           {cls.RESULTS_DIR}")
-        print(f"POCKETHUNTER_CLI:      {cls.POCKETHUNTER_CLI}")
-        print(f"CELERY_BROKER_URL:     {cls.CELERY_BROKER_URL}")
-        print(f"MAX_UPLOAD_SIZE:       {cls.MAX_UPLOAD_SIZE / (1024**2):.1f} MB")
-        print(f"MAX_ZIP_SIZE:          {cls.MAX_ZIP_SIZE / (1024**3):.1f} GB")
-        print(f"CLEANUP_AFTER_DAYS:    {cls.CLEANUP_AFTER_DAYS} days")
-        print(f"MAX_DISK_USAGE_GB:     {cls.MAX_DISK_USAGE_GB} GB")
-        print(f"LOG_LEVEL:             {cls.LOG_LEVEL}")
-        print(f"LOG_FILE:              {cls.LOG_FILE}")
-        print(f"RATE_LIMIT_ENABLED:    {cls.RATE_LIMIT_ENABLED}")
-        print(f"RATE_LIMIT_MAX_UPLOADS:{cls.RATE_LIMIT_MAX_UPLOADS} per {cls.RATE_LIMIT_WINDOW_SECONDS}s")
-        print(f"RATE_LIMIT_MAX_TASKS:  {cls.RATE_LIMIT_MAX_TASKS} per {cls.RATE_LIMIT_TASK_WINDOW_SECONDS}s")
+        for field in (
+            "BASE_DIR", "UPLOAD_DIR", "RESULTS_DIR",
+            "POCKETHUNTER_CLI",
+            "CELERY_BROKER_URL", "DATABASE_URL", "BASE_URL",
+            "LOG_LEVEL", "LOG_FILE",
+            "RATE_LIMIT_ENABLED",
+        ):
+            print(f"{field:<22} {getattr(settings, field)}")
+        print(f"MAX_UPLOAD_SIZE        {settings.MAX_UPLOAD_SIZE / (1024**2):.1f} MB")
+        print(f"MAX_ZIP_SIZE           {settings.MAX_ZIP_SIZE / (1024**3):.1f} GB")
+        print(f"CLEANUP_AFTER_DAYS     {settings.CLEANUP_AFTER_DAYS} days")
         print("=" * 60)
 
 
-# Validate configuration on module import
-# This ensures errors are caught early during startup
+# Materialise runtime side effects on import — same behaviour as v1, so
+# missing PocketHunter dirs still crash the import.
 try:
     Config.validate()
 except ConfigurationError as e:
-    print(f"\n{'='*60}")
-    print("CONFIGURATION ERROR")
-    print(f"{'='*60}")
-    print(str(e))
-    print(f"{'='*60}\n")
+    print(f"\n{'='*60}\nCONFIGURATION ERROR\n{'='*60}\n{e}\n{'='*60}\n")
     raise
-
-
-# For debugging: uncomment to print config on import
-# Config.print_config()

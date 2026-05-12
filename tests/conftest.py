@@ -4,8 +4,21 @@ Each test gets a fresh in-memory SQLite database with the full schema
 created via ``Base.metadata.create_all``. JSONB/UUID columns are defined
 with SQLite-compatible variants in ``db/models.py`` so the suite runs
 without a real Postgres.
+
+We set ``DATABASE_URL`` and ``BASE_URL`` at module import time so any
+test module that transitively imports ``config`` / ``settings`` (e.g.
+``security``, ``rate_limiter``) doesn't trip the pydantic "required"
+validators at collection time.
 """
 from __future__ import annotations
+
+import os
+
+# Set required-by-pydantic env vars BEFORE any test imports happen.
+# Individual tests can monkeypatch these or instantiate Settings directly
+# for negative cases.
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault("BASE_URL", "http://localhost:8501")
 
 import pytest
 
