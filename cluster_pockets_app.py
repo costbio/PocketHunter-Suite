@@ -199,24 +199,26 @@ if clustering_method == "dbscan":
 else:
     dbscan_hierarchical = False
 
-with st.expander("ℹ️ About these parameters & what to do if clustering returns 0 clusters"):
+with st.expander("ℹ️ Parameter help & 0-cluster troubleshooting"):
+    st.markdown("**What `min_prob` does**")
     st.markdown(
-        """
-**`min_prob`** filters out pockets below this p2rank probability *before* clustering.
-Higher → fewer, more confident pockets. Lower → more pockets, noisier signal.
-
-**Clustering method:**
-- **DBSCAN** — density-based; only groups dense regions, marks isolated pockets as
-  *noise*. Its internal `epsilon` and `min_samples` are auto-tuned in the backend by
-  silhouette score; they cannot be set manually from this UI.
-- **Hierarchical** — tree-based; groups every pocket. No noise concept. Use this if
-  DBSCAN keeps returning zero clusters.
-
-**If you get 0 clusters (or "no representative pockets found"):**
-1. **Lower `min_prob`** — try 0.3 or 0.2. The threshold may be too strict for this trajectory.
-2. **Extract more frames** in Step 1 (lower the `stride` on Find Pockets). DBSCAN needs density to form clusters.
-3. **Switch to Hierarchical** — it always produces clusters, even on sparse data.
-        """.strip()
+        "- Filters out pockets below this p2rank probability *before* clustering.\n"
+        "- Higher → fewer, more confident pockets. Lower → more pockets, noisier signal.\n"
+    )
+    st.markdown("**DBSCAN vs Hierarchical**")
+    st.markdown(
+        "- **DBSCAN** — density-based. Only groups dense regions; marks isolated "
+        "pockets as *noise*. `epsilon` and `min_samples` are auto-tuned by silhouette "
+        "score in the backend (no UI control).\n"
+        "- **Hierarchical** — tree-based. Groups every pocket, no noise concept. "
+        "Use this if DBSCAN keeps returning zero clusters.\n"
+    )
+    st.markdown("**If you get 0 clusters (or \"no representative pockets found\")**")
+    st.markdown(
+        "1. **Lower `min_prob`** — try 0.3 or 0.2. The threshold may be too strict.\n"
+        "2. **Extract more frames** in Step 1 (lower the `stride` on Find Pockets). "
+        "DBSCAN needs density to form clusters.\n"
+        "3. **Switch to Hierarchical** — it always produces clusters, even on sparse data.\n"
     )
 
 # Run button
@@ -501,6 +503,10 @@ average structure**.
                             # --- Per-pocket heatmap grouped by cluster ---
                             st.markdown("---")
                             st.markdown("#### Per-Pocket Residue Composition")
+                            st.caption(
+                                "Same residue columns as the consensus heatmap above — "
+                                "filtered to residues that appear in at least one cluster."
+                            )
 
                             df_sorted = df_clustered.sort_values(['cluster', 'Frame'])
                             pocket_matrix = df_sorted[filtered_residues].values
@@ -714,7 +720,8 @@ st.markdown("""
 <div style='text-align: center; color: #666;'>
     <p>🎯 Pocket Clustering | Part of the PocketHunter Suite</p>
     <p style='font-size: 0.85rem; margin-top: 0.5rem;'>
-        💡 Tip: High-probability clusters (>=0.7) are recommended for docking studies
+        💡 Tip: Excellent (🟢) and Good (🟡) clusters are the strongest candidates for docking.
+        Lower-quality clusters can still be useful if you have specific structural hypotheses.
     </p>
 </div>
 """, unsafe_allow_html=True)

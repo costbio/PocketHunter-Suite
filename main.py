@@ -188,11 +188,14 @@ if selected in PAGE_FILES:
 
     except Exception as e:
         st.error(f"❌ Error loading page '{selected}'")
-        st.exception(e)
+        st.info(
+            "Try selecting a different page from the menu above, or reload the "
+            "browser tab. If this keeps happening, copy the technical details "
+            "below into a bug report."
+        )
 
-        # Show detailed traceback
         import traceback
-        with st.expander("🐛 Full Error Details"):
+        with st.expander("🐛 Technical details (for bug reports)"):
             st.code(traceback.format_exc())
 else:
     st.error(f"Unknown page: {selected}") 

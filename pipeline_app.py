@@ -63,8 +63,7 @@ st.markdown("""
     </div>
     <div class="bh-rule"></div>
     <div class="bh-stages">
-        Extract <span class="sep">►</span> Detect <span class="sep">►</span>
-        Cluster <span class="sep">►</span> optional Dock
+        Find Pockets <span class="sep">►</span> Cluster <span class="sep">►</span> optional Dock
     </div>
 </div>
 """, unsafe_allow_html=True)

@@ -152,11 +152,21 @@ if st.button("Find Pockets", type="primary", use_container_width=True):
         pdb_input_dir = os.path.join(UPLOAD_DIR, job_id, "extracted_pdbs")
         os.makedirs(pdb_input_dir, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zf:
+            # Pre-scan: fail fast if there are no .pdb entries before we
+            # write anything to disk.
+            if not any(name.lower().endswith(".pdb") for name in zf.namelist()):
+                st.error(
+                    "No PDB files in this ZIP. Make sure your archive contains "
+                    "`.pdb` structures at any depth."
+                )
+                st.stop()
             zf.extractall(pdb_input_dir)
 
+        # Second line of defense — catches the rare case where namelist() lied
+        # about file extensions (e.g. AppleDouble metadata in macOS archives).
         pdb_count = sum(1 for _ in Path(pdb_input_dir).rglob("*.pdb"))
         if pdb_count == 0:
-            st.error("No PDB files found in the uploaded ZIP.")
+            st.error("No PDB files found after extracting the ZIP.")
             st.stop()
 
     try:
@@ -272,6 +282,12 @@ if results_job_id:
 
         if len(df_pockets) == 0:
             st.warning("Detection completed but no pockets were found in the input structures.")
+            st.info(
+                "**What to try next:**\n"
+                "- Lower the `stride` parameter to extract more frames (more chances to find pockets).\n"
+                "- Verify the topology and trajectory match (same atom count, residue numbering).\n"
+                "- If a previous run failed silently, open Task Monitor and inspect the error log."
+            )
         else:
             st.markdown("---")
             st.markdown("### Detection Results")

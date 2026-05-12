@@ -265,7 +265,10 @@ with tab_setup:
             st.session_state.docking_display_job_id = f"docking_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}"
             st.rerun()
 
-    st.info("💡 **Save this Job ID** - you can use it to monitor progress in the Task Monitor page!")
+    st.info(
+        "💡 **Copy the Job ID above** — paste it into Task Monitor or this page's "
+        "*Load Docking Results* expander to revisit results later."
+    )
 
     # Cluster selection
     st.markdown("### 📁 Select Cluster Results")
@@ -778,6 +781,12 @@ with tab_results:
                     # Validate DataFrame has required data
                     if df_results.empty:
                         st.warning("⚠️ Results file is empty. No docking poses were generated.")
+                        st.info(
+                            "**What to try next:**\n"
+                            "- Lower the `min_prob` filter on the upstream cluster job so more representatives are eligible.\n"
+                            "- Check that ligand PDBQT files contain valid coordinates (not just headers).\n"
+                            "- Increase the box dimensions if poses are clipping at the boundary."
+                        )
                     elif 'ligand' not in df_results.columns or 'receptor' not in df_results.columns:
                         st.error("❌ Results file is missing required columns (ligand, receptor)")
                     else:

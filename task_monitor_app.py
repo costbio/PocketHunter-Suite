@@ -360,9 +360,15 @@ if jobs:
                         for i, (key, value) in enumerate(result_info.items()):
                             with metrics_cols[i % len(metrics_cols)]:
                                 st.metric(key.replace('_', ' ').title(), value)
-                    
+
+                        # Partial-success callout — fires only when a finished
+                        # docking job has per-pair failures recorded.
+                        if result_info.get('pairs_failed', 0) > 0:
+                            from failure_view import render_pair_failures_callout
+                            render_pair_failures_callout(result_info, selected_job_id)
+
                     # Show output files if available
-                    if 'output_files' in result_info:
+                    if isinstance(result_info, dict) and 'output_files' in result_info:
                         st.markdown("**Generated Files:**")
                         for file_path in result_info['output_files']:
                             if os.path.exists(file_path):
