@@ -85,6 +85,40 @@ def _fail_job(celery_task, job_id, stage, exc, log_path=None):
     })
 
 
+def _write_pair_failure_log(job_id, pair_failures, pairs_total):
+    """Write a plain-text per-pair failure log next to results/<job>/error.log.
+
+    Mirrors the format of ``_run_stage``'s stage-level error log so the UI
+    can offer it as a single download. Returns the absolute path on success
+    or ``None`` if I/O fails (the task itself should not crash on log write).
+    """
+    if not pair_failures:
+        return None
+    try:
+        job_dir = os.path.join(RESULTS_DIR, job_id)
+        os.makedirs(job_dir, exist_ok=True)
+        log_path = os.path.join(job_dir, 'docking_pair_failures.log')
+        with open(log_path, 'w', errors='replace') as f:
+            f.write(
+                f"=== Docking pair failures for job {job_id} "
+                f"({len(pair_failures)} pairs failed of {pairs_total}) ===\n\n"
+            )
+            for i, rec in enumerate(pair_failures, 1):
+                f.write(f"[{i}] receptor={rec.get('receptor', '?')} · ligand={rec.get('ligand', '?')}\n")
+                f.write(f"    exc_type: {rec.get('exc_type', 'Unknown')}\n")
+                f.write(f"    exc_message: {rec.get('exc_message', '')}\n")
+                tail = rec.get('stderr_tail') or ''
+                if tail:
+                    f.write("    stderr (tail):\n")
+                    for line in tail.splitlines():
+                        f.write(f"        {line}\n")
+                f.write("\n")
+        return log_path
+    except OSError as e:
+        logger.warning(f"Could not write docking_pair_failures.log for {job_id}: {e}")
+        return None
+
+
 def validate_pockethunter_output(output_dir, expected_files=None, expected_dirs=None):
     """
     Validate that PocketHunter output exists and contains expected files.
@@ -458,6 +492,8 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
             from step4_docking import pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
             from prody import parsePDB, writePDB
             import glob as _glob
+            from docking_pair_failures import build_pair_failure_record
+            from task_errors import NoPosesParsed
 
             df_rep = pd.read_csv(reps_csv)
             docking_out = os.path.join(output_folder_job, 'docking')
@@ -468,6 +504,7 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
             total_pairs = max(1, len(df_rep) * len(ligand_paths))
             completed_pairs = 0
             list_outputs = []
+            pair_failures: list[dict] = []
 
             for rec_idx, (_, pocket_row) in enumerate(df_rep.iterrows()):
                 receptor_pdb_pred = pocket_row['File name']
@@ -476,6 +513,11 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
 
                 if not os.path.exists(receptor_pdb_path):
                     logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
+                    miss_err = FileNotFoundError(f"Receptor PDB not found: {receptor_pdb_path}")
+                    for lp in ligand_paths:
+                        pair_failures.append(build_pair_failure_record(
+                            os.path.basename(receptor_pdb), os.path.basename(lp), miss_err,
+                        ))
                     completed_pairs += len(ligand_paths)
                     continue
 
@@ -523,9 +565,30 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
                             df_out['receptor_pdb_path'] = protein_pdb
                             df_out['output_sdf'] = out_path
                             list_outputs.append(df_out)
+                        else:
+                            pair_failures.append(build_pair_failure_record(
+                                os.path.basename(receptor_pdb),
+                                os.path.basename(lig_path),
+                                NoPosesParsed(
+                                    "smina exited 0 but produced no parseable poses — "
+                                    "likely a malformed input PDBQT or an empty result file."
+                                ),
+                                stderr_tail=output_txt[-1500:] if output_txt else "",
+                            ))
                     except Exception as dock_pair_err:
                         logger.warning(f"Docking pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {dock_pair_err}")
+                        pair_failures.append(build_pair_failure_record(
+                            os.path.basename(receptor_pdb), os.path.basename(lig_path), dock_pair_err,
+                        ))
                     completed_pairs += 1
+
+            pair_failures_log = _write_pair_failure_log(job_id, pair_failures, total_pairs)
+            pairs_failed = len(pair_failures)
+            results_overview['pairs_total'] = total_pairs
+            results_overview['pairs_succeeded'] = total_pairs - pairs_failed
+            results_overview['pairs_failed'] = pairs_failed
+            results_overview['pair_failures'] = pair_failures
+            results_overview['pair_failures_log'] = pair_failures_log
 
             if list_outputs:
                 df_dock = pd.concat(list_outputs, ignore_index=True)
@@ -975,6 +1038,8 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         from step4_docking import pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
         from prody import parsePDB, writePDB
         import glob as _glob
+        from docking_pair_failures import build_pair_failure_record
+        from task_errors import NoPosesParsed
 
         df_rep_pockets = pd.read_csv(cluster_representatives_csv)
 
@@ -1001,6 +1066,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         n_ligands = len(ligand_paths)
         total_pairs = n_receptors * n_ligands
         completed_pairs = 0
+        pair_failures: list[dict] = []
 
         self.update_state(state='PROGRESS', meta={
             'current_step': f'Starting docking: {n_receptors} receptors × {n_ligands} ligands = {total_pairs} pairs',
@@ -1039,7 +1105,13 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                 pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
                 box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
             except Exception as prep_err:
+                # Receptor prep failed — count every ligand pair against this
+                # receptor as failed so the user sees what happened.
                 logger.warning(f"Receptor prep failed ({receptor_pdb}): {prep_err}. Skipping.")
+                for lig_path in ligand_paths:
+                    pair_failures.append(build_pair_failure_record(
+                        os.path.basename(receptor_pdb), os.path.basename(lig_path), prep_err,
+                    ))
                 completed_pairs += n_ligands
                 continue
 
@@ -1080,6 +1152,17 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                         df_out['receptor_pdb_path'] = protein_pdb
                         df_out['output_sdf'] = out_path
                         list_outputs.append(df_out)
+                    else:
+                        # smina exited cleanly but produced nothing parseable.
+                        pair_failures.append(build_pair_failure_record(
+                            os.path.basename(receptor_pdb),
+                            os.path.basename(lig_path),
+                            NoPosesParsed(
+                                "smina exited 0 but produced no parseable poses — "
+                                "likely a malformed input PDBQT or an empty result file."
+                            ),
+                            stderr_tail=output_txt[-1500:] if output_txt else "",
+                        ))
                 except SoftTimeLimitExceeded:
                     elapsed = time.time() - start_time
                     _update_status_file(job_id, 'failed',
@@ -1094,8 +1177,13 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                     raise
                 except Exception as pair_err:
                     logger.warning(f"Pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {pair_err}")
+                    pair_failures.append(build_pair_failure_record(
+                        os.path.basename(receptor_pdb), os.path.basename(lig_path), pair_err,
+                    ))
 
                 completed_pairs += 1
+
+        pair_failures_log = _write_pair_failure_log(job_id, pair_failures, total_pairs)
 
         if not list_outputs:
             raise ValueError("No docking results generated. Check that ligands and receptors are valid.")
@@ -1110,6 +1198,8 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         unique_receptors = df_outputs['receptor'].nunique()
         best_affinity = df_outputs['affinity (kcal/mol)'].min()
 
+        pairs_failed = len(pair_failures)
+        pairs_succeeded = total_pairs - pairs_failed
         results_overview = {
             'status': 'completed',
             'docking_output_dir': output_folder_job,
@@ -1123,6 +1213,10 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
             'exhaustiveness': exhaustiveness,
             'pairs_done': completed_pairs,
             'pairs_total': total_pairs,
+            'pairs_succeeded': pairs_succeeded,
+            'pairs_failed': pairs_failed,
+            'pair_failures': pair_failures,
+            'pair_failures_log': pair_failures_log,
         }
 
         _update_status_file(job_id, 'completed', 'Molecular docking completed successfully',

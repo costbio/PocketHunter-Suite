@@ -27,3 +27,12 @@ class ClusteringFoundNoClusters(Exception):
 
 class DockingProducedNoResults(Exception):
     """smina ran but every receptor/ligand pair failed or yielded no poses."""
+
+
+class NoPosesParsed(Exception):
+    """smina exited cleanly but its output contained no parseable poses.
+
+    Raised per receptor/ligand pair, not per task — a pair-level partial
+    failure. The task itself continues; the bookkeeping happens in
+    ``tasks.run_docking_task`` / ``tasks.run_pockethunter_pipeline``.
+    """

@@ -289,3 +289,59 @@ def render_task_failure(
     if on_retry is not None:
         if st.button("Retry", key=f"retry_{job_id or 'unknown'}", type="primary"):
             on_retry()
+
+
+def render_pair_failures_callout(task_result: Optional[dict], job_id: Optional[str] = None) -> None:
+    """Render a partial-success callout when some docking pairs failed.
+
+    Reads ``pairs_failed``, ``pairs_total``, ``pair_failures``, and
+    ``pair_failures_log`` from ``task_result`` (the dict returned by
+    ``run_docking_task`` / ``run_pockethunter_pipeline`` on SUCCESS).
+    No-op if ``pairs_failed`` is missing or zero — fully successful tasks
+    render nothing.
+    """
+    import streamlit as st
+
+    from docking_pair_failures import summarize_pair_failures
+
+    if not task_result or not isinstance(task_result, dict):
+        return
+    pairs_failed = int(task_result.get("pairs_failed") or 0)
+    if pairs_failed <= 0:
+        return
+
+    pairs_total = int(task_result.get("pairs_total") or 0)
+    pair_failures = task_result.get("pair_failures") or []
+    headline = (
+        f"⚠️ {pairs_failed} of {pairs_total} docking pairs failed — "
+        "the results below cover only the successful pairs."
+    )
+    st.warning(headline)
+    st.caption(summarize_pair_failures(pair_failures))
+
+    log_path = task_result.get("pair_failures_log")
+    if log_path and os.path.exists(str(log_path)):
+        try:
+            with open(str(log_path), "rb") as f:
+                st.download_button(
+                    "Download docking failure log",
+                    data=f.read(),
+                    file_name=f"docking_pair_failures_{job_id or 'job'}.log",
+                    mime="text/plain",
+                    key=f"pair_fail_log_dl_{job_id or 'job'}",
+                )
+        except OSError:
+            pass
+
+    if pair_failures:
+        with st.expander(f"Pairs that failed ({pairs_failed})"):
+            for rec in pair_failures:
+                line = (
+                    f"• receptor=`{rec.get('receptor', '?')}` · "
+                    f"ligand=`{rec.get('ligand', '?')}` — "
+                    f"**{rec.get('exc_type', 'Unknown')}**"
+                )
+                msg = (rec.get("exc_message") or "").splitlines()[0] if rec.get("exc_message") else ""
+                if msg:
+                    line += f" — {msg[:200]}"
+                st.markdown(line)

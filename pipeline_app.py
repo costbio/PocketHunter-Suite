@@ -214,6 +214,10 @@ average structure**.
                 results = dock_task.result or {}
                 st.success("✅ Docking completed!")
 
+                # Partial-success callout: surface per-pair failures (if any)
+                from failure_view import render_pair_failures_callout
+                render_pair_failures_callout(results, st.session_state.get('pipe_docking_job_id'))
+
                 best_aff = results.get('best_affinity', 0)
                 _, aff_emoji = _classify_affinity(best_aff)
                 col1, col2, col3, col4 = st.columns(4)
@@ -590,6 +594,9 @@ if st.session_state.pipeline_task_id:
             col4.metric("Docking poses", result.get('docking_poses', '—') or '—')
             if result.get('docking_error'):
                 st.warning(f"⚠️ Docking encountered an error: {result['docking_error']}")
+            # Partial-success callout: surface per-pair failures (if any)
+            from failure_view import render_pair_failures_callout
+            render_pair_failures_callout(result, st.session_state.pipeline_job_id)
 
             cluster_job = result.get('cluster_job_id', st.session_state.pipeline_job_id)
             if cluster_job:

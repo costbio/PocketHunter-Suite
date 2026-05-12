@@ -759,6 +759,10 @@ with tab_results:
                     }
                 )
 
+                # Partial-success callout: surface per-pair failures (if any)
+                from failure_view import render_pair_failures_callout
+                render_pair_failures_callout(results, st.session_state.docking_job_id)
+
                 # Metrics overview row
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
