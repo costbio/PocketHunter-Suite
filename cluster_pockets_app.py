@@ -119,45 +119,8 @@ def show_molecule_3d(pdb_path, width=800, height=600, style="cartoon"):
         logger.error(f"Error in show_molecule_3d: {e}", exc_info=True)
 
 
-def show_molecule_3d_with_pocket(pdb_path, pocket_residues, width=800, height=600):
-    """Show PDB with pocket residues highlighted in orange (py3Dmol)."""
-    try:
-        with open(pdb_path, 'r') as f:
-            pdb_data = f.read()
-
-        # Parse "A_807" -> chain="A", resi=807
-        highlight_specs = []
-        for res_str in pocket_residues:
-            parts = res_str.strip().split('_', 1)
-            if len(parts) == 2:
-                try:
-                    highlight_specs.append({'chain': parts[0], 'resi': int(parts[1])})
-                except ValueError:
-                    pass
-
-        view = py3Dmol.view(width=width, height=height)
-        view.addModel(pdb_data, 'pdb')
-        view.setStyle({}, {'cartoon': {'color': 'spectrum'}})
-        for spec in highlight_specs:
-            view.setStyle({'chain': spec['chain'], 'resi': spec['resi']},
-                          {'stick': {'color': 'orange', 'radius': 0.3}})
-        if highlight_specs:
-            chains = {}
-            for s in highlight_specs:
-                chains.setdefault(s['chain'], []).append(s['resi'])
-            for chain, resis in chains.items():
-                view.addSurface(py3Dmol.VDW, {'opacity': 0.4, 'color': 'orange'},
-                                {'chain': chain, 'resi': resis})
-            view.zoomTo({'resi': [s['resi'] for s in highlight_specs]})
-        else:
-            view.zoomTo()
-        view.spin(False)
-
-        html = f'<div style="border-radius:15px;overflow:hidden;">{view._make_html()}</div>'
-        components.html(html, height=height + 50, scrolling=False)
-    except Exception as e:
-        st.error(f"Error loading 3D structure with pocket: {e}")
-        logger.error(f"Error in show_molecule_3d_with_pocket: {e}", exc_info=True)
+# The protein-with-highlighted-pocket viewer lives in cluster_visualization.
+from cluster_visualization import show_pocket_3d as show_molecule_3d_with_pocket  # noqa: E402
 
 
 # ── Status Banner ──────────────────────────────────────────────────────
@@ -498,185 +461,33 @@ average structure**.
 
                 with results_tab2:
                     if df_clustered is not None and len(df_clustered) > 0:
-                        # Identify binary residue columns
+                        from cluster_visualization import (
+                            build_consensus_matrix,
+                            filter_residue_columns,
+                            render_consensus_panel,
+                            sort_residues_in_matrix,
+                        )
+
+                        # Shared 3-column consensus panel (heatmap + checkboxes + 3D viewer).
+                        render_consensus_panel(
+                            df_clustered, df_reps, results_job_id,
+                            key_prefix="cluster",
+                            viewer_size=(400, 420),
+                        )
+
+                        # The per-pocket heatmap below needs the same sorted, non-zero
+                        # residue column subset. Recompute it via the pure helpers.
                         meta_cols = {'Frame_pocket_index', 'File name', 'Frame', 'pocket_index',
                                      'probability', 'residues', 'cluster', 'num_residues'}
                         residue_cols = [c for c in df_clustered.columns if c not in meta_cols]
 
                         if residue_cols:
                             unique_clusters = sorted(df_clustered['cluster'].unique())
-
-                            # Build cluster integer -> representative row mapping.
-                            # Prefer the 'cluster' column if present; fall back to
-                            # positional alignment (assumes same sort order as unique_clusters).
-                            if 'cluster' in df_reps.columns:
-                                cluster_to_rep = {
-                                    int(row['cluster']): row
-                                    for _, row in df_reps.iterrows()
-                                }
-                            else:
-                                cluster_to_rep = {
-                                    clust: df_reps.iloc[i]
-                                    for i, clust in enumerate(unique_clusters)
-                                    if i < len(df_reps)
-                                }
-
-                            # --- Consensus Heatmap: residue frequency per cluster ---
-                            consensus_rows = []
-                            cluster_labels = []
-                            for clust in unique_clusters:
-                                clust_data = df_clustered[df_clustered['cluster'] == clust]
-                                freq = clust_data[residue_cols].mean()
-                                consensus_rows.append(freq.values)
-                                _rep = cluster_to_rep.get(int(clust))
-                                _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
-                                cluster_labels.append(
-                                    f"Cluster {clust} · {_spatial}  ({len(clust_data)} pockets, avg prob: {clust_data['probability'].mean():.3f})"
-                                )
-
-                            consensus_matrix = np.array(consensus_rows)
-
-                            # Drop residues that are never present in any cluster
-                            col_mask = consensus_matrix.sum(axis=0) > 0
-                            filtered_residues = [r for r, m in zip(residue_cols, col_mask) if m]
-                            filtered_matrix = consensus_matrix[:, col_mask]
-
-                            # Sort residues numerically (e.g. A_807 before A_1019)
-                            def residue_sort_key(name):
-                                parts = name.rsplit('_', 1)
-                                try:
-                                    return (parts[0], int(parts[1]))
-                                except (ValueError, IndexError):
-                                    return (name, 0)
-
-                            sort_order = sorted(range(len(filtered_residues)),
-                                                key=lambda i: residue_sort_key(filtered_residues[i]))
-                            filtered_residues = [filtered_residues[i] for i in sort_order]
-                            filtered_matrix = filtered_matrix[:, sort_order]
-
-                            fig_heat = go.Figure(data=go.Heatmap(
-                                z=filtered_matrix,
-                                x=filtered_residues,
-                                y=cluster_labels,
-                                colorscale='YlOrRd',
-                                zmin=0, zmax=1,
-                                colorbar=dict(title="Frequency", tickvals=[0, 0.25, 0.5, 0.75, 1.0]),
-                                hovertemplate=(
-                                    "<b>%{y}</b><br>"
-                                    "Residue: %{x}<br>"
-                                    "Frequency: %{z:.2f}"
-                                    "<extra></extra>"
-                                ),
-                            ))
-
-                            # Layout constants for alignment
-                            _n_clust = len(unique_clusters)
-                            _heat_top_margin = 60    # title + plotly top margin (px)
-                            _heat_bot_margin = 100   # explicit b=100
-                            height = max(400, _n_clust * 60 + 200)
-                            _plot_area_h = height - _heat_top_margin - _heat_bot_margin
-                            _row_h = _plot_area_h / _n_clust  # heatmap row height in px
-                            _cb_h = 36                         # Streamlit checkbox height in px
-                            _top_pad = max(0, _heat_top_margin + _row_h / 2 - _cb_h / 2)
-                            _gap = max(0, _row_h - _cb_h)
-
-                            fig_heat.update_layout(
-                                title="Residue Frequency per Cluster",
-                                xaxis_title="Residue",
-                                yaxis_title="",
-                                height=height,
-                                xaxis=dict(tickangle=45, tickfont=dict(size=9)),
-                                yaxis=dict(autorange="reversed", showticklabels=False),
-                                margin=dict(t=_heat_top_margin, l=20, r=20, b=_heat_bot_margin),
+                            consensus_matrix, _ = build_consensus_matrix(
+                                df_clustered, residue_cols, unique_clusters, df_reps,
                             )
-
-                            # Three-column layout: checkboxes | heatmap | 3D viewer
-                            cb_col, heat_col, viewer_col = st.columns([1, 3, 2])
-
-                            with cb_col:
-                                st.markdown("**Select cluster:**")
-                                # Top padding to align first checkbox with first heatmap row
-                                st.markdown(
-                                    f'<div style="height:{_top_pad:.0f}px"></div>',
-                                    unsafe_allow_html=True,
-                                )
-                                for _cid in unique_clusters:
-                                    _rep = cluster_to_rep.get(_cid)
-                                    if _rep is None:
-                                        continue
-                                    _clust_df = df_clustered[df_clustered['cluster'] == _cid]
-                                    _n = len(_clust_df)
-                                    _avg = _clust_df['probability'].mean()
-
-                                    def _on_change(_cid=_cid, _rep=_rep, _rj=results_job_id):
-                                        cb_key = f"cluster_cb_{_cid}"
-                                        if st.session_state[cb_key]:
-                                            _pdb_file = _rep['File name']
-                                            _pdb_path = resolve_pdb_path(_pdb_file, _rj)
-                                            _res_raw = str(_rep.get('residues', ''))
-                                            _res_list = [r.strip() for r in _res_raw.replace(',', ' ').split() if r.strip()]
-                                            st.session_state.cluster_preview_id = _cid
-                                            st.session_state.cluster_preview_pdb = _pdb_path
-                                            st.session_state.cluster_preview_residues = _res_list
-                                        else:
-                                            if st.session_state.cluster_preview_id == _cid:
-                                                st.session_state.cluster_preview_id = None
-                                                st.session_state.cluster_preview_pdb = None
-                                                st.session_state.cluster_preview_residues = []
-
-                                    _spatial = describe_cluster_spatially(_rep.get('residues') if _rep is not None else None)
-                                    st.checkbox(
-                                        f"Cluster {_cid} · {_spatial}",
-                                        key=f"cluster_cb_{_cid}",
-                                        on_change=_on_change,
-                                        help=f"{_n} pockets · avg probability {_avg:.3f}",
-                                    )
-                                    # Gap between checkboxes to match heatmap row height
-                                    st.markdown(
-                                        f'<div style="height:{_gap:.0f}px"></div>',
-                                        unsafe_allow_html=True,
-                                    )
-
-                            with heat_col:
-                                st.plotly_chart(fig_heat, use_container_width=True, key="consensus_heatmap")
-                                st.caption(
-                                    "Each row = a cluster. Each column = a residue "
-                                    "(labels are `chain_residueNumber` — e.g. `A_807` = chain A, residue 807). "
-                                    "Color = how often that residue appears across the cluster's pockets "
-                                    "(0 = never, 1 = always). "
-                                    "**The representative pocket may not include every bright residue here** — "
-                                    "scroll down to the per-pocket heatmap (★ rows) to see its exact residues."
-                                )
-
-                            with viewer_col:
-                                sel_id = st.session_state.cluster_preview_id
-                                if sel_id is not None:
-                                    sel_path = st.session_state.cluster_preview_pdb
-                                    sel_residues = st.session_state.cluster_preview_residues
-                                    rep = cluster_to_rep.get(sel_id)
-
-                                    _spatial = describe_cluster_spatially(rep.get('residues') if rep is not None else None)
-                                    st.markdown(f"**Cluster {sel_id}** · {_spatial}")
-                                    st.caption("Representative structure (medoid pocket)")
-                                    if rep is not None:
-                                        m1, m2 = st.columns(2)
-                                        m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
-                                        m2.metric("Residues", len(sel_residues))
-
-                                    is_selected = sel_id in st.session_state.docking_target_clusters
-                                    if st.checkbox("Select for Docking", value=is_selected, key=f"dock_sel_{sel_id}"):
-                                        if sel_id not in st.session_state.docking_target_clusters:
-                                            st.session_state.docking_target_clusters.append(sel_id)
-                                    else:
-                                        if sel_id in st.session_state.docking_target_clusters:
-                                            st.session_state.docking_target_clusters.remove(sel_id)
-
-                                    if sel_path and os.path.exists(sel_path):
-                                        show_molecule_3d_with_pocket(sel_path, sel_residues, width=400, height=420)
-                                    else:
-                                        st.warning(f"PDB not found: `{sel_path}`")
-                                else:
-                                    st.info("← Check a cluster to view its 3D structure here")
+                            filtered_residues, _ = filter_residue_columns(residue_cols, consensus_matrix)
+                            filtered_residues, _ = sort_residues_in_matrix(filtered_residues, consensus_matrix[:, [residue_cols.index(r) for r in filtered_residues]])
 
                             if st.session_state.docking_target_clusters:
                                 selected_str = ", ".join(str(c) for c in st.session_state.docking_target_clusters)
