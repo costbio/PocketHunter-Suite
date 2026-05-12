@@ -36,6 +36,12 @@ alembic>=1.13,<2.0
 psycopg[binary]>=3.1,<4.0
 pydantic-settings>=2.0,<3.0
 
+# Trajectory → viewer-format conversion (v2 Phase B B2)
+# gemmi reads per-frame PDBs and writes the multi-model mmCIF Mol* loads.
+# (BCIF write isn't yet exposed in gemmi's Python bindings — text mmCIF
+# until that lands; output file is the same shape Mol* expects.)
+gemmi>=0.6.5,<1.0
+
 # Utilities
 python-dotenv>=1.0.0,<2.0.0
 tqdm>=4.65.0,<5.0.0

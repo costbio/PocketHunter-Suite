@@ -111,6 +111,57 @@ def _fail_job(celery_task, job_id, stage, exc, log_path=None):
     })
 
 
+def _write_viewer_file(job_id: str, pdb_dir: str) -> dict:
+    """Generate the per-job ``viewer.cif`` (v2 Phase B B2).
+
+    Reads every ``.pdb`` in ``pdb_dir`` and writes a multi-model mmCIF
+    suitable for the Mol* viewer. Returns a dict of result_info fields
+    the caller merges into its overall ``results_overview`` — so the Job
+    row picks them up via the existing ``_update_status_file`` mirror.
+
+    On success the dict contains ``viewer_file_path`` + ``viewer_file_format``.
+    On size-cap exceeded, ``viewer_file_warning``.
+    On any other failure, ``viewer_file_error``.
+
+    Never raises. Analysis tasks complete on their own merits regardless
+    of whether the viewer artefact was producible.
+    """
+    try:
+        from viewer_pipeline import (
+            MAX_VIEWER_BYTES,
+            VIEWER_FILE_FORMAT,
+            VIEWER_FILE_NAME,
+            convert_pdb_dir_to_viewer,
+            estimate_viewer_size,
+        )
+    except Exception as e:  # gemmi import failed, module-load failed, etc.
+        logger.warning(f"viewer_pipeline import failed for {job_id}: {e}")
+        return {"viewer_file_error": f"viewer_pipeline unavailable: {e}"}
+
+    try:
+        from pathlib import Path
+        pdb_dir_path = Path(pdb_dir)
+        out_path = Path(RESULTS_DIR) / job_id / VIEWER_FILE_NAME
+
+        est = estimate_viewer_size(pdb_dir_path)
+        if est > MAX_VIEWER_BYTES:
+            msg = (
+                f"Estimated viewer file ~{est / (1024**2):.0f} MB exceeds "
+                f"limit {MAX_VIEWER_BYTES / (1024**2):.0f} MB; skipped."
+            )
+            logger.warning(f"viewer skipped for {job_id}: {msg}")
+            return {"viewer_file_warning": msg}
+
+        convert_pdb_dir_to_viewer(pdb_dir_path, out_path)
+        return {
+            "viewer_file_path": str(out_path),
+            "viewer_file_format": VIEWER_FILE_FORMAT,
+        }
+    except Exception as e:
+        logger.warning(f"viewer file generation failed for {job_id}: {e}")
+        return {"viewer_file_error": str(e)}
+
+
 def _write_pair_failure_log(job_id, pair_failures, pairs_total):
     """Write a plain-text per-pair failure log next to results/<job>/error.log.
 
@@ -386,6 +437,10 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
         'representatives': representatives,
     })
 
+    # v2 Phase B B2: generate viewer.cif from the PDB folder for Mol*.
+    # Best-effort; failure surfaces in result_info, doesn't fail the pipeline.
+    viewer_info = _write_viewer_file(job_id, output_pdb_dir)
+
     results_overview = {
         'status': 'completed',
         'output_folder': output_folder_job,
@@ -394,6 +449,7 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
         'representatives': representatives,
         'cluster_job_id': job_id,
         'processing_time': time.time() - pipeline_start,
+        **viewer_info,
     }
 
     # ── Stage 4: Optional docking ────────────────────────────────────────
@@ -638,6 +694,11 @@ def run_find_pockets_task(
                   log_path=os.path.join(output_folder_job, 'error.log'))
         raise err
 
+    # v2 Phase B B2: generate viewer.cif from the PDB folder Mol* loads.
+    # Best-effort; failure adds viewer_file_error to result_info but the
+    # task still succeeds (analysis-side results are independent).
+    viewer_info = _write_viewer_file(job_id, detect_infolder)
+
     elapsed = time.time() - started
     results_overview = {
         'status': 'completed',
@@ -648,6 +709,7 @@ def run_find_pockets_task(
         'frames_extracted': frames_extracted,
         'pockets_detected': pockets_detected,
         'processing_time': elapsed,
+        **viewer_info,
     }
 
     _update_status_file(job_id, 'completed', 'Find pockets completed',
@@ -657,6 +719,7 @@ def run_find_pockets_task(
                             'frames_extracted': frames_extracted,
                             'pockets_detected': pockets_detected,
                             'processing_time': elapsed,
+                            **viewer_info,
                         })
     self.update_state(state='SUCCESS', meta=results_overview)
     return results_overview
