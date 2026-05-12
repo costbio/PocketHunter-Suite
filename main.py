@@ -106,17 +106,68 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ── v2 Phase A: session routing ──────────────────────────────────────────
+#
+# At the top of every rerun, resolve the query string against the DB. The
+# resolver is cheap (one indexed lookup) and the result drives:
+#   • no short_code  →  render landing page, st.stop()
+#   • short_code missing in DB  →  "session not found" page, st.stop()
+#   • short_code present, expired_at set  →  "session expired" page, st.stop()
+#   • short_code valid  →  set st.session_state.{current_session, is_editor,
+#     is_session_expired} and continue into the existing app.
+#
+# Existing pages keep working unchanged in this phase: they don't yet read
+# current_session. A3 wires the task layer to write to the DB; Phase B
+# rewires pages to read from the session. For now, sessions are required
+# but otherwise opportunistic.
+
+from session_routes import resolve_session_from_query, set_session_in_state  # noqa: E402
+from landing import (  # noqa: E402
+    render_landing,
+    render_session_chip,
+    render_session_expired,
+    render_session_not_found,
+)
+
+_resolved = resolve_session_from_query()
+set_session_in_state(_resolved)
+
+if _resolved.session is None and _resolved.short_code is None:
+    # No ?s= in the URL — show the landing page and stop.
+    render_landing()
+    st.stop()
+
+if _resolved.session is None:
+    # ?s=<bogus> — short_code provided but didn't resolve.
+    render_session_not_found(_resolved.short_code)
+    st.stop()
+
+if _resolved.is_expired:
+    # Soft-expired session — DB row exists, volumes are gone.
+    render_session_expired(_resolved)
+    st.stop()
+
+# A session is loaded. Touch last_active_at (best-effort — don't crash on it).
+try:
+    from db.sessions import touch_last_active
+    touch_last_active(_resolved.session)
+except Exception:
+    pass
+
 st.markdown("""
 <div class="bh">
     <div class="bh-row">
         <span class="bh-title">PocketHunter/Suite</span>
-        <span class="bh-version">[v.1.0]</span>
+        <span class="bh-version">[v.2.0]</span>
     </div>
     <div class="bh-rule"></div>
     <div class="bh-bar"></div>
     <div class="bh-stages">MD<span class="sep">►</span>POCKETS<span class="sep">►</span>CLUSTERS<span class="sep">►</span>DOCK</div>
 </div>
 """, unsafe_allow_html=True)
+
+# Compact share-URL chip + Editor/Viewer indicator.
+render_session_chip(_resolved)
 
 # Initialize session state for job ID caching
 if 'cached_job_ids' not in st.session_state:

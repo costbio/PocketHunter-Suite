@@ -21,9 +21,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from db.base import Base  # noqa: E402
 
-# Import any future model modules here so they're registered with Base.metadata
-# before Alembic asks for `target_metadata`. (Phase A: no models yet.)
-# from db import models  # noqa: F401
+# Import model modules so they're registered with Base.metadata before
+# Alembic asks for `target_metadata`.
+from db import models  # noqa: F401, E402
 
 config = context.config
 
