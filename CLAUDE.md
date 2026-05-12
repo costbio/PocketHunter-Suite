@@ -48,7 +48,22 @@ python -c "from resource_manager import ResourceManager; print(ResourceManager.g
 python -c "from cleanup_job import cleanup_old_jobs_task; cleanup_old_jobs_task()"
 ```
 
-There is **no test suite** in this repo — do not invent `pytest` commands.
+### Database migrations (v2 Phase A)
+
+```bash
+# Apply pending migrations against $DATABASE_URL
+alembic upgrade head
+
+# Create a new migration (commit A2+):
+alembic revision --autogenerate -m "<message>"
+
+# Inside docker compose:
+docker compose run --rm streamlit alembic upgrade head
+```
+
+The Postgres service uses a named volume `pgdata`; `docker compose down` keeps data, `docker compose down -v` wipes it. `DATABASE_URL` and `BASE_URL` are required env vars — `.env.example` has the defaults.
+
+The test suite under `tests/` runs with `pytest tests/` (109+ tests as of the latest batch). New Phase A tests live in `tests/test_db_*.py`.
 
 ## Architecture
 

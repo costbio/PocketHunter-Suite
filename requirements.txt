@@ -30,6 +30,12 @@ openbabel-wheel>=3.1.1,<4.0.0
 celery>=5.3.0,<6.0.0
 redis>=4.6.0,<5.0.0
 
+# Persistence (v2 Phase A)
+sqlalchemy>=2.0,<3.0
+alembic>=1.13,<2.0
+psycopg[binary]>=3.1,<4.0
+pydantic-settings>=2.0,<3.0
+
 # Utilities
 python-dotenv>=1.0.0,<2.0.0
 tqdm>=4.65.0,<5.0.0

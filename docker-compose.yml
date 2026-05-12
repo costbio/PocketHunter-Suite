@@ -13,6 +13,24 @@ services:
       retries: 5
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: pockethunter-postgres
+    environment:
+      - POSTGRES_USER=pockethunter
+      - POSTGRES_PASSWORD=pockethunter
+      - POSTGRES_DB=pockethunter
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pockethunter -d pockethunter"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   celery-worker:
     build: .
     container_name: pockethunter-celery
@@ -21,9 +39,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
       - PYTHONPATH=/app
     volumes:
       - ./uploads:/app/uploads
@@ -40,9 +61,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
       - PYTHONPATH=/app
     volumes:
       - ./uploads:/app/uploads
@@ -72,9 +96,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
+      - BASE_URL=http://localhost:8501
     volumes:
       - ./uploads:/app/uploads
       - ./results:/app/results
@@ -89,3 +117,4 @@ services:
 
 volumes:
   redis_data:
+  pgdata:
