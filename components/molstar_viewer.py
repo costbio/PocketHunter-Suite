@@ -138,6 +138,7 @@ def molstar_viewer(
     on_clicked_change: Callable[[], None] | None = None,
     on_ready_ms_change: Callable[[], None] | None = None,
     on_loaded_ms_change: Callable[[], None] | None = None,
+    on_load_error_change: Callable[[], None] | None = None,
 ):
     """Render a Mol* viewer.
 
@@ -148,6 +149,7 @@ def molstar_viewer(
         on_clicked_change: Optional callback for click events.
         on_ready_ms_change: Optional callback when ``ready_ms`` is set.
         on_loaded_ms_change: Optional callback when ``loaded_ms`` is set.
+        on_load_error_change: Optional callback when ``load_error`` is set.
 
     Returns:
         Component result. Attributes:
@@ -156,8 +158,11 @@ def molstar_viewer(
             ``clicked`` — opaque timestamp; fires on each click.
             ``load_error`` — error string if structure load failed.
     """
-    # Provide no-op callbacks so the result object always has these
-    # attributes (CCv2 omits them when the callback isn't given).
+    # Provide no-op callbacks for *every* state/trigger key the JS may emit.
+    # CCv2 omits a result attribute entirely when the matching on_*_change
+    # callback isn't passed — meaning ``result.load_error`` raises
+    # AttributeError unless we register a handler here, even if all we
+    # want is to read the value back.
     # isolate_styles=False so Mol*'s CSS (loaded into document.head from
     # jsDelivr) can target the viewer's elements (light DOM).
     return _MOLSTAR(
@@ -168,4 +173,5 @@ def molstar_viewer(
         on_clicked_change=on_clicked_change or (lambda: None),
         on_ready_ms_change=on_ready_ms_change or (lambda: None),
         on_loaded_ms_change=on_loaded_ms_change or (lambda: None),
+        on_load_error_change=on_load_error_change or (lambda: None),
     )
