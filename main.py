@@ -132,6 +132,15 @@ from landing import (  # noqa: E402
 _resolved = resolve_session_from_query()
 set_session_in_state(_resolved)
 
+# ── v2 Phase B (B1 spike): Mol* viewer entry-point ───────────────────────
+# Visit /?spike=molstar to render the spike page. Unlinked from the main
+# nav; used for the B1 spike measurements only. Deleted in B7 after the
+# real analysis_app.py is the only entry point.
+if st.query_params.get("spike") == "molstar":
+    from spike_molstar import render_spike_page
+    render_spike_page()
+    st.stop()
+
 if _resolved.session is None and _resolved.short_code is None:
     # No ?s= in the URL — show the landing page and stop.
     render_landing()
