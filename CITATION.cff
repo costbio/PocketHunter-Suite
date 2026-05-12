@@ -11,7 +11,8 @@ repository-code: "https://github.com/costbio/PocketHunter"
 abstract: >
   Protein binding pocket detection and pharmacophore-based active/decoy
   discrimination using p2rank pocket prediction, clustering, and 3D
-  pharmacophore complementarity scoring via RDKit Feature Maps.
+  pharmacophore complementarity scoring via rotation-invariant distance-pattern
+  kernel matching.
 keywords:
   - pharmacophore
   - protein-ligand
@@ -40,20 +41,23 @@ references:
     scope: "Gaussian feature map overlap scoring used in pharmacophore complementarity"
 
   - type: article
-    title: "Conformation mining: An algorithm for finding biologically relevant conformations"
+    title: "The pharmacophore kernel for virtual screening with support vector machines"
     authors:
-      - family-names: Putta
-        given-names: Santosh
-      - family-names: Landrum
-        given-names: Gregory A.
-      - family-names: Penzotti
-        given-names: Julie E.
-    journal: Journal of Medicinal Chemistry
-    year: 2005
-    volume: 48
-    pages: 3313-3318
-    doi: 10.1021/jm049066l
-    scope: "Conformation mining algorithm using feature maps for active-set comparison; feature-map vectors as molecular descriptors"
+      - family-names: Mahé
+        given-names: Pierre
+      - family-names: Ralaivola
+        given-names: Liva
+      - family-names: Stoven
+        given-names: Véronique
+      - family-names: Vert
+        given-names: Jean-Philippe
+    journal: Journal of Chemical Information and Modeling
+    year: 2006
+    volume: 46
+    issue: 5
+    pages: 2003-2014
+    doi: 10.1021/ci060138m
+    scope: "Distance-pattern pharmacophore kernel for rotation-invariant complementarity scoring (Layer 2)"
 
   - type: article
     title: "LigandScout: 3-D Pharmacophores Derived from Protein-Bound Ligands and Their Use as Virtual Screening Filters"
@@ -138,36 +142,26 @@ references:
 
   # ── Educational reference ──
   - type: article
-    title: "TeachOpenCADD 2022: open source and FAIR Python pipelines to assist in structural bioinformatics and cheminformatics research"
+    title: "TeachOpenCADD: a teaching platform for computer-aided drug design using open-source packages"
     authors:
       - family-names: Sydow
         given-names: Dominique
-      - family-names: Rodríguez-Guerra
-        given-names: Jaime
-      - family-names: Kimber
-        given-names: Talia B.
-      - family-names: Schaller
-        given-names: David
-      - family-names: Taylor
-        given-names: Corey J.
-      - family-names: Chen
-        given-names: Yonghui
-      - family-names: Leja
-        given-names: Mareike
-      - family-names: Misra
-        given-names: Sakshi
-      - family-names: Wichmann
-        given-names: Michele
-      - family-names: Ariamajd
-        given-names: Armin
+      - family-names: Burgdorf
+        given-names: Laura
+      - family-names: Sizikova
+        given-names: Evgenia
+      - family-names: Satagopam
+        given-names: Venkata P.
+      - family-names: Schneider
+        given-names: Reinhard
       - family-names: Volkamer
         given-names: Andrea
-    journal: Nucleic Acids Research
-    year: 2022
-    volume: 50
-    issue: W1
-    pages: W753-W760
-    doi: 10.1093/nar/gkac267
+    journal: Journal of Cheminformatics
+    year: 2019
+    volume: 11
+    issue: 1
+    pages: 29
+    doi: 10.1186/s13321-019-0351-x
     scope: "T009 ligand-based pharmacophore reference implementation, RDKit feature definitions"
 
   # ── RDKit ──
