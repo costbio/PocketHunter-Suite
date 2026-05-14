@@ -38,13 +38,18 @@ def render_spike_page() -> None:
         unsafe_allow_html=True,
     )
 
-    pdb_url = st.text_input(
+    structure_url = st.text_input(
         "Structure URL",
         value=DEFAULT_PDB,
         help="Any publicly fetch-able PDB. Default: retinoic acid receptor (small).",
     )
 
-    result = molstar_viewer(pdb_url, key="spike_viewer", height=620)
+    result = molstar_viewer(
+        structure_url,
+        structure_format="pdb",
+        key="spike_viewer",
+        height=620,
+    )
 
     st.markdown("### Measurements")
     c1, c2, c3 = st.columns(3)

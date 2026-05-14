@@ -85,8 +85,8 @@ def auto_box_for_selection(
 
     PDB lookup: tries ``results/<job_id>/pdbs/<file>`` then
     ``results/<job_id>/pocket_clusters/<file>``. If ``extra_pdb_source_job_id``
-    is supplied (typical for docking_app, where the user may have an upstream
-    extract job ID), that location is tried first.
+    is supplied (when the docking panel knows about an upstream extract
+    job), that location is tried first.
 
     Returns ``None`` if any step fails (no rep matches the filter, missing
     PDB, residues unparseable, etc.) — caller falls back to manual sliders.

@@ -3,7 +3,7 @@ services:
     image: redis:7-alpine
     container_name: pockethunter-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -21,7 +21,7 @@ services:
       - POSTGRES_PASSWORD=pockethunter
       - POSTGRES_DB=pockethunter
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,9 +32,11 @@ services:
     restart: unless-stopped
 
   celery-worker:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: pockethunter-celery
-    command: celery -A celery_app worker -Q default,celery --concurrency=8 --loglevel=info
+    command: celery -A celery_app worker -Q default,celery --concurrency=${WORKER_CONCURRENCY:-8} --loglevel=info
     working_dir: /app
     depends_on:
       redis:
@@ -45,18 +47,27 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
+      - BASE_URL=http://localhost:8511
       - PYTHONPATH=/app
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
+      - DOCKING_CONCURRENCY=${DOCKING_CONCURRENCY:-4}
+      - P2RANK_THREADS=${P2RANK_THREADS:-4}
+      - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
+      - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
+      - MAX_DOWNLOAD_ZIP_SIZE=${MAX_DOWNLOAD_ZIP_SIZE:-536870912}
     volumes:
+      - .:/app
       - ./uploads:/app/uploads
       - ./results:/app/results
       - ./logs:/app/logs
-      - /usr/local/bin/smina:/usr/local/bin/smina:ro
     restart: unless-stopped
 
   celery-docking-worker:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: pockethunter-celery-docking
-    command: celery -A celery_app worker -Q docking --concurrency=4 --loglevel=info
+    command: celery -A celery_app worker -Q docking --concurrency=${DOCKING_CONCURRENCY:-4} --loglevel=info
     working_dir: /app
     depends_on:
       redis:
@@ -67,32 +78,49 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
+      - BASE_URL=http://localhost:8511
       - PYTHONPATH=/app
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
+      - DOCKING_CONCURRENCY=${DOCKING_CONCURRENCY:-4}
+      - P2RANK_THREADS=${P2RANK_THREADS:-4}
+      - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
+      - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
+      - MAX_DOWNLOAD_ZIP_SIZE=${MAX_DOWNLOAD_ZIP_SIZE:-536870912}
     volumes:
+      - .:/app
       - ./uploads:/app/uploads
       - ./results:/app/results
       - ./logs:/app/logs
-      - /usr/local/bin/smina:/usr/local/bin/smina:ro
     restart: unless-stopped
 
   celery-beat:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: pockethunter-beat
     command: celery -A celery_app beat --loglevel=info
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
+      - BASE_URL=http://localhost:8511
+    volumes:
+      - .:/app
     restart: unless-stopped
 
   streamlit:
-    build: .
+    build:
+      context: .
+      network: host
     container_name: pockethunter-streamlit
     command: streamlit run main.py --server.port=8501 --server.address=0.0.0.0
     ports:
-      - "8501:8501"
+      - "8511:8501"
     depends_on:
       redis:
         condition: service_healthy
@@ -102,7 +130,11 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
-      - BASE_URL=http://localhost:8501
+      - BASE_URL=http://localhost:8511
+      - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
+      - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
+      - MAX_DOWNLOAD_ZIP_SIZE=${MAX_DOWNLOAD_ZIP_SIZE:-536870912}
+      - P2RANK_THREADS=${P2RANK_THREADS:-4}
     volumes:
       - ./uploads:/app/uploads
       - ./results:/app/results

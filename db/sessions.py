@@ -35,7 +35,18 @@ _EDIT_SECRET_BYTES = 24
 
 
 def new_short_code() -> str:
-    return secrets.token_urlsafe(_SHORT_CODE_BYTES)
+    """Generate a fresh URL-safe short_code that avoids Streamlit's
+    bidi-component key delimiter (``__``).
+
+    ``secrets.token_urlsafe`` uses ``-`` and ``_`` as the URL-safe
+    base64 substitutes, so a roughly 1-in-256 chance of a ``__`` slips
+    through per draw. When that happens, retry until we get a clean
+    code — the loop terminates in expectation in ≪10 iterations.
+    """
+    while True:
+        candidate = secrets.token_urlsafe(_SHORT_CODE_BYTES)
+        if "__" not in candidate:
+            return candidate
 
 
 def new_edit_secret() -> str:

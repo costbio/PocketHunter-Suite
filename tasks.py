@@ -1,5 +1,6 @@
 import subprocess
 import os
+import re
 import uuid
 import shutil
 import json
@@ -201,12 +202,20 @@ def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_n
     """
     Run a subprocess stage and poll it, emitting Celery progress updates within [prog_start, prog_end].
 
-    stdout/stderr are redirected to temp files to avoid OS pipe-buffer deadlocks that
+    stdout/stderr are redirected to files to avoid OS pipe-buffer deadlocks that
     occur when a subprocess writes more than ~64 KB without being drained.
 
+    **Log paths (v2 B8):** when ``job_id`` is supplied, logs go to a stable
+    location under ``results/<job_id>/.live/<sanitized_stage>.{stdout,stderr}.log``
+    and are *kept* after the stage completes — the live-log fragment in
+    ``analysis_app.py`` tails them in real time, and they stay around for
+    post-hoc diagnosis (pruned by ``cleanup_job`` along with the rest of
+    the job dir). When ``job_id`` is ``None`` (unit tests), the helper
+    falls back to ``tempfile.NamedTemporaryFile`` paths that get deleted
+    on return.
+
     On non-zero exit *and* when ``job_id`` is supplied, the captured stderr is also
-    written to ``results/<job_id>/error.log`` before the temp files are cleaned up,
-    so the UI can offer it as a download.
+    written to ``results/<job_id>/error.log`` so the UI can offer it as a download.
 
     Returns (stdout_text, stderr_text) on success; raises Exception on failure or timeout.
     """
@@ -215,13 +224,30 @@ def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_n
     start_time = time.time()
     prog_range = prog_end - prog_start
 
-    # Use temp files instead of PIPE to prevent deadlock when subprocess output is large
-    fout = tempfile.NamedTemporaryFile(mode='w', suffix='_stdout.txt', delete=False)
-    ferr = tempfile.NamedTemporaryFile(mode='w', suffix='_stderr.txt', delete=False)
-    stdout_path = fout.name
-    stderr_path = ferr.name
-    fout.close()
-    ferr.close()
+    # Stable per-job log paths so the UI can tail them while the stage runs.
+    # Fall back to deletable temp files for tests / non-job callers.
+    delete_on_exit = False
+    if job_id:
+        try:
+            from live_log import sanitize_stage_name as _sanitize
+        except Exception:
+            _sanitize = lambda s: re.sub(r'[^A-Za-z0-9_-]+', '_', s).strip('_').lower() or 'stage'
+        live_dir = os.path.join(RESULTS_DIR, job_id, '.live')
+        os.makedirs(live_dir, exist_ok=True)
+        stem = _sanitize(stage_name)
+        stdout_path = os.path.join(live_dir, f'{stem}.stdout.log')
+        stderr_path = os.path.join(live_dir, f'{stem}.stderr.log')
+        # Truncate any previous run's log under the same job_id + stage.
+        open(stdout_path, 'w').close()
+        open(stderr_path, 'w').close()
+    else:
+        fout = tempfile.NamedTemporaryFile(mode='w', suffix='_stdout.txt', delete=False)
+        ferr = tempfile.NamedTemporaryFile(mode='w', suffix='_stderr.txt', delete=False)
+        stdout_path = fout.name
+        stderr_path = ferr.name
+        fout.close()
+        ferr.close()
+        delete_on_exit = True
 
     try:
         with open(stdout_path, 'w') as fout_h, open(stderr_path, 'w') as ferr_h:
@@ -282,15 +308,240 @@ def _run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_n
             )
         return stdout, stderr
     finally:
-        for p in (stdout_path, stderr_path):
+        if delete_on_exit:
+            for p in (stdout_path, stderr_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
+def _count_sdf_molecules(path: str) -> int:
+    """Cheap molecule count for an SDF — counts the ``$$$$`` separator.
+
+    Returns 1 for any other format or on read error. Used to drive the
+    docking task's pre-stage progress bar without parsing the SDF.
+    """
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix != ".sdf":
+        return 1
+    try:
+        with open(path, "r", errors="replace") as f:
+            count = sum(1 for line in f if line.strip() == "$$$$")
+        return max(1, count)
+    except OSError:
+        return 1
+
+
+_SDF_TAG_RE = re.compile(r">\s*<([^>]+)>")
+
+
+def _sdf_molecule_names(path: str) -> list[str]:
+    """Per-record display name for an SDF, in record order (B11.21).
+
+    Prefers a ``> <name>`` data field (tag matched case-insensitively),
+    falls back to the molecule title line (record line 1 — which is
+    legitimately blank in e-Drug3D SDFs), then to ``""`` (callers
+    substitute the PDBQT stem). Non-SDF inputs → ``[""]``.
+
+    Records are split on ``$$$$`` *lines* (not the substring) so a
+    record's first line is always its title — no leading-newline
+    artifact to strip.
+    """
+    if not path.lower().endswith(".sdf"):
+        return [""]
+    try:
+        with open(path, "r", errors="replace") as fh:
+            lines = fh.read().split("\n")
+    except OSError:
+        return [""]
+
+    def _name_of(record: list[str]) -> str:
+        title = record[0].strip() if record else ""
+        for i, ln in enumerate(record):
+            m = _SDF_TAG_RE.match(ln.strip())
+            if m and m.group(1).strip().lower() == "name":
+                if i + 1 < len(record):
+                    return record[i + 1].strip() or title
+                break
+        return title
+
+    names: list[str] = []
+    record: list[str] = []
+    for ln in lines:
+        if ln.strip() == "$$$$":
+            names.append(_name_of(record))
+            record = []
+        else:
+            record.append(ln)
+    # Tolerate a trailing record with no closing ``$$$$``.
+    if any(l.strip() for l in record):
+        names.append(_name_of(record))
+    return names or [""]
+
+
+def _prepare_ligands_with_progress(
+    celery_task,
+    ligand_folder: str,
+    *,
+    gen_3d: bool = False,
+    progress_low: int = 2,
+    progress_high: int = 15,
+) -> tuple[list[dict], dict[str, str]]:
+    """Convert SDF/PDB ligand inputs to PDBQT, posting progress to the task.
+
+    Reads every non-PDBQT file in ``ligand_folder``, runs obabel with
+    ``-m`` (one PDBQT per molecule, what smina wants), and deletes the
+    source file on *full* success. Pre-counts molecules via
+    ``_count_sdf_molecules`` so progress reflects "N of M molecules
+    prepared". When ``gen_3d`` is true, passes ``--gen3d`` to obabel
+    (slower, but needed for 2D inputs).
+
+    When obabel converts *fewer* PDBQT than the input held (a malformed
+    SDF record, an obabel error), the shortfall is **recorded, not
+    raised** — the docking run proceeds with whatever converted and the
+    results view surfaces a callout.
+
+    Returns ``(conversion_failures, ligand_names)``:
+      * ``conversion_failures`` — list of ``{source_file, expected,
+        converted, error}`` records, empty on a clean conversion.
+      * ``ligand_names`` — ``{pdbqt_stem: display_name}`` map (B11.21),
+        also written to ``ligand_names.json`` in ``ligand_folder``, so
+        the docking grid can show real molecule names instead of
+        ``<stem>_<N>`` PDBQT stems.
+
+    Progress maps into ``[progress_low, progress_high]`` so the
+    caller's overall percentage stays consistent across the
+    prep + dock stages.
+    """
+    import glob as _glob
+    folder = ligand_folder
+    inputs = sorted(
+        p for p in _glob.glob(os.path.join(folder, "*"))
+        if p.lower().endswith((".sdf", ".pdb"))
+    )
+    if not inputs:
+        # Nothing to convert. Either everything was already PDBQT or
+        # the upload was empty (caller surfaces "no files" separately).
+        return [], {}
+
+    total_molecules = sum(_count_sdf_molecules(p) for p in inputs)
+    span = max(0, progress_high - progress_low)
+
+    def _report(converted: int, current_file: str | None = None) -> None:
+        pct = progress_low + (
+            int(span * converted / total_molecules) if total_molecules else span
+        )
+        msg = f"Preparing ligands: {converted} / {total_molecules} molecules"
+        if current_file:
+            msg += f" — {os.path.basename(current_file)}"
+        celery_task.update_state(state="PROGRESS", meta={
+            "current_step": msg,
+            "progress": min(pct, progress_high),
+        })
+
+    _report(0)
+
+    converted = 0
+    conversion_failures: list[dict] = []
+    ligand_names: dict[str, str] = {}
+    # ``-m`` splits multi-molecule input into one PDBQT per molecule
+    # (named ``<stem>_1.pdbqt``, ``<stem>_2.pdbqt``, …). smina docks
+    # one molecule per file; the old ``--separate`` flag actually just
+    # concatenates into a single multi-MODEL file that smina rejects
+    # with "Use vina_split first".
+    obabel_args = ["-m"]
+    if gen_3d:
+        obabel_args.append("--gen3d")
+
+    for path in inputs:
+        n_mols = _count_sdf_molecules(path)
+        stem = os.path.splitext(path)[0]
+        out_template = stem + "_.pdbqt"
+        cmd = ["obabel", path, "-O", out_template] + obabel_args
+
+        # Run obabel as a subprocess. Poll the output dir between
+        # checks so the progress bar moves while obabel is grinding.
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        while proc.poll() is None:
             try:
-                os.unlink(p)
+                produced_so_far = len(_glob.glob(stem + "_*.pdbqt"))
+            except OSError:
+                produced_so_far = 0
+            _report(converted + min(produced_so_far, n_mols), path)
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                continue
+        stderr = b""
+        if proc.stderr is not None:
+            try:
+                stderr = proc.stderr.read()
+            except Exception:
+                stderr = b""
+
+        produced = sorted(_glob.glob(stem + "_*.pdbqt"))
+        if not produced and os.path.exists(stem + ".pdbqt"):
+            produced = [stem + ".pdbqt"]
+        n_produced = len(produced)
+        converted += n_produced
+        _report(converted, path)
+
+        # B11.21: map each produced PDBQT to its source molecule's name.
+        # obabel -m numbers files ``<stem>_<N>.pdbqt`` in SDF-record
+        # order, so the trailing _<N> is the 1-based record index.
+        mol_names = _sdf_molecule_names(path)
+        for pdbqt_path in produced:
+            base = os.path.basename(pdbqt_path)
+            stem_key = base[:-6] if base.lower().endswith(".pdbqt") else base
+            m = re.search(r"_(\d+)\.pdbqt$", base)
+            if m:
+                idx = int(m.group(1)) - 1
+                disp = mol_names[idx] if 0 <= idx < len(mol_names) else ""
+            else:
+                disp = mol_names[0] if mol_names else ""
+            ligand_names[stem_key] = disp or stem_key
+
+        if n_produced < n_mols:
+            # Under-conversion — a malformed SDF record or an obabel
+            # error. Record it and carry on; the docking run still docks
+            # whatever converted (see render_ligand_conversion_callout).
+            if proc.returncode != 0:
+                err = ((stderr.decode("utf-8", "replace") or "").strip()[:300]
+                       or "obabel exited with a non-zero status")
+            else:
+                err = ("obabel produced fewer PDBQT files than molecules "
+                       "in the input — the file likely has malformed records")
+            conversion_failures.append({
+                "source_file": os.path.basename(path),
+                "expected": n_mols,
+                "converted": n_produced,
+                "error": err,
+            })
+            # Leave the source file in place so it stays inspectable.
+        else:
+            # Full success — drop the source so the dir holds only PDBQT.
+            try:
+                os.remove(path)
             except OSError:
                 pass
 
+    # B11.21: persist the name map next to the PDBQTs (debug aid +
+    # robustness) and return it so run_docking_task can label the CSV.
+    if ligand_names:
+        try:
+            with open(os.path.join(folder, "ligand_names.json"), "w") as fh:
+                json.dump(ligand_names, fh)
+        except OSError:
+            pass
+
+    return conversion_failures, ligand_names
+
 
 @celery_app.task(bind=True)
-def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=4,
+def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=None,
                                min_prob=0.5, clustering_method='dbscan', run_docking=False,
                                ligand_folder=None, num_poses=10, exhaustiveness=8, ph_value=7.4,
                                box_size_x=20.0, box_size_y=20.0, box_size_z=20.0):
@@ -305,6 +556,11 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
       80 –  97%  Molecular docking (optional)
     """
     from task_errors import ClusteringFoundNoClusters, DetectionProducedNoOutput
+
+    # B11.21: p2rank thread count is .env-driven (Config.P2RANK_THREADS),
+    # not user-facing. ``num_threads`` is kept as an optional override.
+    if num_threads is None:
+        num_threads = Config.P2RANK_THREADS
 
     pipeline_start = time.time()
     output_folder_job = os.path.join(RESULTS_DIR, job_id)
@@ -373,12 +629,28 @@ def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, s
         except Exception:
             pass
 
-    # F1 — silent p2rank failure detection (exit 0 but missing/empty CSV)
-    if not os.path.exists(pockets_csv) or pockets_detected == 0:
+    # F1 — silent p2rank failure detection (exit 0 but missing/empty CSV).
+    # Two distinct sub-cases share the same error type but get different
+    # messages so the panel + live log can guide the user to the right
+    # diagnosis path.
+    if not os.path.exists(pockets_csv):
         err = DetectionProducedNoOutput(
-            f"Pocket detection produced no usable output for job {job_id}. "
-            f"pockets.csv exists={os.path.exists(pockets_csv)}, rows={pockets_detected}. "
-            "p2rank may have crashed silently — see the error log."
+            f"p2rank ran for job {job_id} but pockets.csv was never written. "
+            "This is a silent crash — see the persisted stderr in "
+            f"results/{job_id}/.live/detecting_pockets.stderr.log."
+        )
+        _fail_job(self, job_id, 'detect', err, log_path=error_log_path)
+        raise err
+    if pockets_detected == 0:
+        err = DetectionProducedNoOutput(
+            f"Detection completed but produced zero pockets for job {job_id} "
+            "(pockets.csv has 0 rows). Two likely causes:\n"
+            "  1. p2rank ran cleanly but found no pockets above its default "
+            "probability threshold — common on small or flat-surface proteins "
+            "(e.g. T4 lysozyme).\n"
+            "  2. p2rank crashed mid-write and emitted only the CSV header.\n"
+            f"Check the live log + results/{job_id}/.live/detecting_pockets.stderr.log "
+            "to distinguish."
         )
         _fail_job(self, job_id, 'detect', err, log_path=error_log_path)
         raise err
@@ -587,7 +859,7 @@ def run_find_pockets_task(
     topology_file_path=None,
     pdb_input_dir=None,
     stride=10,
-    num_threads=4,
+    num_threads=None,
 ):
     """Merged Step 1 + Step 2: extract frames (if needed) then detect pockets.
 
@@ -601,9 +873,20 @@ def run_find_pockets_task(
     from find_pockets_helpers import progress_ranges, validate_find_pockets_inputs
     from task_errors import DetectionProducedNoOutput
 
+    # B11.21: p2rank thread count is .env-driven (Config.P2RANK_THREADS),
+    # not user-facing. ``num_threads`` is kept as an optional override.
+    if num_threads is None:
+        num_threads = Config.P2RANK_THREADS
+
     started = time.time()
     output_folder_job = os.path.join(RESULTS_DIR, job_id)
     os.makedirs(output_folder_job, exist_ok=True)
+
+    # B11.17: flip the Job row submitted → running so DB-driven views
+    # (jobs panel) reflect reality. update_state(PROGRESS) only writes
+    # the Celery backend, not the Job row.
+    _update_status_file(job_id, 'running', step='Find pockets started',
+                        task_id=self.request.id)
 
     try:
         mode = validate_find_pockets_inputs(xtc_file_path, topology_file_path, pdb_input_dir)
@@ -677,6 +960,9 @@ def run_find_pockets_task(
 
     # F1 — catch silent p2rank failures: even on exit 0, the CSV may be
     # missing or empty (the underlying CLI suppresses p2rank's stderr).
+    # Split missing-CSV (definite crash) from empty-CSV (could be either a
+    # crash or a legitimate zero-pocket outcome) so the failure panel can
+    # point the user at the right diagnostic.
     pockets_csv = os.path.join(output_pockets_dir, 'pockets.csv')
     pockets_detected = 0
     if os.path.exists(pockets_csv):
@@ -684,11 +970,25 @@ def run_find_pockets_task(
             pockets_detected = len(pd.read_csv(pockets_csv))
         except Exception:
             pockets_detected = 0
-    if not os.path.exists(pockets_csv) or pockets_detected == 0:
+    if not os.path.exists(pockets_csv):
         err = DetectionProducedNoOutput(
-            f"Pocket detection produced no usable output for job {job_id}. "
-            f"pockets.csv exists={os.path.exists(pockets_csv)}, rows={pockets_detected}. "
-            "p2rank may have crashed silently — see the error log."
+            f"p2rank ran for job {job_id} but pockets.csv was never written. "
+            "This is a silent crash — see the persisted stderr in "
+            f"results/{job_id}/.live/detecting_pockets.stderr.log."
+        )
+        _fail_job(self, job_id, 'detect', err,
+                  log_path=os.path.join(output_folder_job, 'error.log'))
+        raise err
+    if pockets_detected == 0:
+        err = DetectionProducedNoOutput(
+            f"Detection completed but produced zero pockets for job {job_id} "
+            "(pockets.csv has 0 rows). Two likely causes:\n"
+            "  1. p2rank ran cleanly but found no pockets above its default "
+            "probability threshold — common on small or flat-surface proteins "
+            "(e.g. T4 lysozyme).\n"
+            "  2. p2rank crashed mid-write and emitted only the CSV header.\n"
+            f"Check the live log + results/{job_id}/.live/detecting_pockets.stderr.log "
+            "to distinguish."
         )
         _fail_job(self, job_id, 'detect', err,
                   log_path=os.path.join(output_folder_job, 'error.log'))
@@ -743,6 +1043,10 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
 
     output_clusters_dir = os.path.join(job_main_output_folder, "pocket_clusters")
     os.makedirs(output_clusters_dir, exist_ok=True)
+
+    # B11.17: flip the Job row submitted → running (see find_pockets).
+    _update_status_file(job_id, 'running', step='Pocket clustering started',
+                        task_id=self.request.id)
 
     current_working_dir = POCKETHUNTER_DIR
     
@@ -973,43 +1277,74 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
     soft_time_limit=Config.DOCKING_TIMEOUT,
     time_limit=Config.DOCKING_TIMEOUT + 300,
 )
-def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, smina_exe_path=None, num_poses=10, exhaustiveness=8, ph_value=7.4, box_size_x=20.0, box_size_y=20.0, box_size_z=20.0, pdb_source_dir=None):
+def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, num_poses=10, exhaustiveness=8, ph_value=7.4, pdb_source_dir=None, gen_3d=False, scoring_function="vinardo"):
     """
     Molecular docking task for Streamlit app.
+
+    B11.16: the docking box is now computed per pocket from each
+    pocket's residue bounding cloud (no user box sliders), smina
+    resolves on PATH (no ``smina_exe_path``), and a scoring function
+    is selectable. A partial ``docking_results.csv`` is written after
+    every successful pair so the panel can show a live score grid.
 
     Parameters
     ----------
     cluster_representatives_csv : str
-        Path to CSV file containing cluster representatives.
+        Path to CSV file containing the selected docking pockets.
     ligand_folder : str
-        Path to folder containing ligand PDBQT files.
+        Path to folder containing ligand files (SDF/PDB converted to
+        PDBQT in the prep stage).
     job_id : str
         Unique job identifier.
-    smina_exe_path : str, optional
-        Path to smina executable.
     num_poses : int
         Maximum number of poses per docking.
     exhaustiveness : int
         Docking accuracy parameter.
+    scoring_function : str
+        smina ``--scoring`` value (vinardo / vina / ad4_scoring /
+        dkoes_scoring). Passed through to :func:`step4_docking.run_smina`.
     ph_value : float
-        pH for protonation.
-    box_size_x, box_size_y, box_size_z : float
-        Docking box dimensions.
+        pH for receptor protonation.
     pdb_source_dir : str, optional
         Directory containing source PDB files for receptors.
+    gen_3d : bool
+        When true, OpenBabel runs ``--gen3d`` in the ligand prep stage.
     """
     start_time = time.time()
     output_folder_job = os.path.join(RESULTS_DIR, f'dock_{job_id}')
     os.makedirs(output_folder_job, exist_ok=True)
 
-    if smina_exe_path is None:
-        smina_exe_path = Config.SMINA_PATH
+    # B11.20: live log. The PocketHunter CLI stages get theirs from
+    # ``_run_stage``; the docking loop runs smina inline, so write our
+    # own ``.live/docking.stdout.log`` under ``RESULTS_DIR/<job_id>/``
+    # (the path ``live_log.find_active_stage_log`` globs — note it's the
+    # bare job_id, NOT the ``dock_<job_id>`` output dir).
+    _live_dir = os.path.join(RESULTS_DIR, job_id, '.live')
+    os.makedirs(_live_dir, exist_ok=True)
+    _live_log_path = os.path.join(_live_dir, 'docking.stdout.log')
+    open(_live_log_path, 'w').close()  # truncate any previous run
+
+    def _live(line):
+        """Append a line to the docking live log (best-effort)."""
+        try:
+            with open(_live_log_path, 'a') as _fh:
+                _fh.write(line.rstrip('\n') + '\n')
+        except OSError:
+            pass
+
+    # B11.17: flip the Job row submitted → running (see find_pockets).
+    _update_status_file(job_id, 'running', step='Docking job started',
+                        task_id=self.request.id)
+
+    # B11.16: smina is on PATH (conda env baked into the image).
+    smina_exe_path = "smina"
 
     self.update_state(state='PROGRESS', meta={
         'current_step': 'Reading cluster representatives…',
         'progress': 2,
         'pairs_done': 0,
         'pairs_total': 0,
+        'elapsed': time.time() - start_time,
     })
 
     try:
@@ -1037,9 +1372,18 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                 raise FileNotFoundError("No extract directories found. Provide pdb_source_dir.")
             pdb_source_dir = os.path.join(RESULTS_DIR, extract_dirs[-1], 'pdbs')
 
+        # B11.12: convert any SDF/PDB inputs to PDBQT here, with
+        # progress updates. The panel just saves files; conversion
+        # happens server-side so obabel runtime appears on the
+        # docking progress bar (2-15% of total).
+        ligand_conversion_failures, ligand_names = _prepare_ligands_with_progress(
+            self, ligand_folder, gen_3d=gen_3d, progress_low=2, progress_high=15,
+        )
         ligand_paths = sorted(_glob.glob(os.path.join(ligand_folder, '*.pdbqt')))
         if not ligand_paths:
-            raise FileNotFoundError(f"No PDBQT ligand files found in {ligand_folder}")
+            raise FileNotFoundError(
+                f"No usable PDBQT ligand files in {ligand_folder} after prep."
+            )
 
         n_receptors = len(df_rep_pockets)
         n_ligands = len(ligand_paths)
@@ -1047,33 +1391,52 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
         completed_pairs = 0
         pair_failures: list[dict] = []
 
+        _start_msg = (
+            f'Starting docking: {n_receptors} receptors × '
+            f'{n_ligands} ligands = {total_pairs} pairs'
+        )
         self.update_state(state='PROGRESS', meta={
-            'current_step': f'Starting docking: {n_receptors} receptors × {n_ligands} ligands = {total_pairs} pairs',
+            'current_step': _start_msg,
             'progress': 5,
             'pairs_done': 0,
             'pairs_total': total_pairs,
+            'elapsed': time.time() - start_time,
         })
+        _live(_start_msg)
 
         list_outputs = []
+        prepped: list[dict] = []
 
+        # ── Phase 1: prepare every receptor once (progress 5 → 15) ──
+        # Prep is hoisted out of the docking loop so Phase 2 can run
+        # ligand-outer (one ligand scored against every receptor before
+        # the next). That fills the score grid row-by-row — what
+        # ensemble docking wants to observe — instead of column-by-column.
         for rec_idx, (_, pocket_row) in enumerate(df_rep_pockets.iterrows()):
             receptor_pdb_pred = pocket_row['File name']
             receptor_pdb = receptor_pdb_pred[:-12] if receptor_pdb_pred.endswith('_predictions') else receptor_pdb_pred
             receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
 
-            if not os.path.exists(receptor_pdb_path):
-                logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
-                completed_pairs += n_ligands
-                continue
-
             # Progress: 5 → 15 during receptor preparation
-            prep_progress = 5 + int((rec_idx / n_receptors) * 10)
+            _prep_msg = f'Preparing receptor {rec_idx + 1}/{n_receptors}: {receptor_pdb}'
             self.update_state(state='PROGRESS', meta={
-                'current_step': f'Preparing receptor {rec_idx + 1}/{n_receptors}: {receptor_pdb}',
-                'progress': prep_progress,
+                'current_step': _prep_msg,
+                'progress': 5 + int((rec_idx / n_receptors) * 10),
                 'pairs_done': completed_pairs,
                 'pairs_total': total_pairs,
+                'elapsed': time.time() - start_time,
             })
+            _live(_prep_msg)
+
+            if not os.path.exists(receptor_pdb_path):
+                logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
+                miss_err = FileNotFoundError(f"Receptor PDB not found: {receptor_pdb_path}")
+                for lig_path in ligand_paths:
+                    pair_failures.append(build_pair_failure_record(
+                        os.path.basename(receptor_pdb), os.path.basename(lig_path), miss_err,
+                    ))
+                completed_pairs += n_ligands
+                continue
 
             try:
                 syst = parsePDB(receptor_pdb_path)
@@ -1082,7 +1445,17 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                 writePDB(protein_pdb, protein)
                 receptor_pdbqt = protein_pdb[:-4] + '.pdbqt'
                 pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
-                box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
+                # B11.16: per-pocket box. ``calc_box`` returns the
+                # residue cloud's center + min/max corners; size it to
+                # the bounding box + 4 Å padding, clamped to [10, 50].
+                box_center, box_min, box_max = calc_box(protein_pdb, pocket_row['residues'])
+                _pad = 4.0
+                box_size = [
+                    float(min(max(box_max[i] - box_min[i] + 2 * _pad, 10.0), 50.0))
+                    for i in range(3)
+                ]
+                dock_folder = protein_pdb[:-4] + '_smina'
+                os.makedirs(dock_folder, exist_ok=True)
             except Exception as prep_err:
                 # Receptor prep failed — count every ligand pair against this
                 # receptor as failed so the user sees what happened.
@@ -1094,47 +1467,90 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                 completed_pairs += n_ligands
                 continue
 
-            box_size = [box_size_x, box_size_y, box_size_z]
-            dock_folder = protein_pdb[:-4] + '_smina'
-            os.makedirs(dock_folder, exist_ok=True)
+            prepped.append({
+                'receptor_pdb': receptor_pdb,
+                'receptor_pdbqt': receptor_pdbqt,
+                'protein_pdb': protein_pdb,
+                'box_center': box_center,
+                'box_size': box_size,
+                'dock_folder': dock_folder,
+            })
 
-            for lig_path in ligand_paths:
+        # ── Phase 2: dock ligand-outer, receptor-inner (15 → 95) ──
+        # One ligand is scored against every prepped receptor before the
+        # next ligand, so the incremental docking_results.csv grows a
+        # full ligand row at a time.
+        for lig_idx, lig_path in enumerate(ligand_paths):
+            for rec in prepped:
                 # Progress: 15 → 95 across all pairs
-                pair_frac = completed_pairs / total_pairs
-                progress = 15 + int(pair_frac * 80)
+                progress = 15 + int((completed_pairs / total_pairs) * 80)
 
+                _dock_msg = (
+                    f'Docking ligand {lig_idx + 1}/{n_ligands} '
+                    f'({os.path.basename(lig_path)}) → {rec["receptor_pdb"]} '
+                    f'[{completed_pairs + 1}/{total_pairs}]'
+                )
                 self.update_state(state='PROGRESS', meta={
-                    'current_step': (
-                        f'Docking {os.path.basename(lig_path)} → '
-                        f'receptor {rec_idx + 1}/{n_receptors} '
-                        f'({completed_pairs + 1}/{total_pairs})'
-                    ),
+                    'current_step': _dock_msg,
                     'progress': progress,
                     'pairs_done': completed_pairs,
                     'pairs_total': total_pairs,
-                    'receptor': receptor_pdb,
+                    'receptor': rec['receptor_pdb'],
                     'ligand': os.path.basename(lig_path),
+                    'elapsed': time.time() - start_time,
                 })
+                _live(_dock_msg)
 
-                out_path = os.path.join(dock_folder, os.path.basename(lig_path)[:-6] + '_smina.sdf')
+                out_path = os.path.join(rec['dock_folder'], os.path.basename(lig_path)[:-6] + '_smina.sdf')
                 try:
                     output_txt, _ = run_smina(
-                        lig_path, receptor_pdbqt, out_path, box_center, box_size,
+                        lig_path, rec['receptor_pdbqt'], out_path,
+                        rec['box_center'], rec['box_size'],
                         smina_exe_path, num_poses=num_poses, exhaustiveness=exhaustiveness,
-                        log_dir=dock_folder,
+                        log_dir=rec['dock_folder'], scoring_function=scoring_function,
                     )
                     df_out = parse_smina_log(output_txt)
                     if not df_out.empty:
-                        df_out['ligand'] = os.path.basename(lig_path)[:-6]
-                        df_out['receptor'] = os.path.basename(receptor_pdb)
-                        df_out['receptor_path'] = receptor_pdbqt
-                        df_out['receptor_pdb_path'] = protein_pdb
+                        _lig_stem = os.path.basename(lig_path)[:-6]
+                        df_out['ligand'] = _lig_stem
+                        # B11.21: real molecule name (falls back to the
+                        # PDBQT stem) so the docking grid is meaningful.
+                        df_out['ligand_name'] = ligand_names.get(_lig_stem, _lig_stem)
+                        df_out['receptor'] = os.path.basename(rec['receptor_pdb'])
+                        df_out['receptor_path'] = rec['receptor_pdbqt']
+                        df_out['receptor_pdb_path'] = rec['protein_pdb']
                         df_out['output_sdf'] = out_path
                         list_outputs.append(df_out)
+                        # B11.16: write an incremental snapshot so the
+                        # panel's running state can render the partial
+                        # score grid. Atomic via temp-file + os.replace.
+                        try:
+                            _partial = os.path.join(output_folder_job, 'docking_results.csv')
+                            _tmp = _partial + '.tmp'
+                            pd.concat(list_outputs, ignore_index=True).to_csv(_tmp, index=False)
+                            os.replace(_tmp, _partial)
+                            # B11.17: mirror the partial path + progress
+                            # into the Job row so DB readers (jobs panel,
+                            # admin views) see live docking progress.
+                            _update_status_file(
+                                job_id, 'running',
+                                step=(
+                                    f'Docked {completed_pairs + 1}/{total_pairs} '
+                                    'ligand-pocket pairs'
+                                ),
+                                task_id=self.request.id,
+                                result_info={
+                                    'docking_results_file': _partial,
+                                    'pairs_done': completed_pairs + 1,
+                                    'pairs_total': total_pairs,
+                                },
+                            )
+                        except Exception as _snap_err:
+                            logger.warning(f"partial results snapshot failed: {_snap_err}")
                     else:
                         # smina exited cleanly but produced nothing parseable.
                         pair_failures.append(build_pair_failure_record(
-                            os.path.basename(receptor_pdb),
+                            os.path.basename(rec['receptor_pdb']),
                             os.path.basename(lig_path),
                             NoPosesParsed(
                                 "smina exited 0 but produced no parseable poses — "
@@ -1155,9 +1571,9 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
                     })
                     raise
                 except Exception as pair_err:
-                    logger.warning(f"Pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {pair_err}")
+                    logger.warning(f"Pair failed ({rec['receptor_pdb']} / {os.path.basename(lig_path)}): {pair_err}")
                     pair_failures.append(build_pair_failure_record(
-                        os.path.basename(receptor_pdb), os.path.basename(lig_path), pair_err,
+                        os.path.basename(rec['receptor_pdb']), os.path.basename(lig_path), pair_err,
                     ))
 
                 completed_pairs += 1
@@ -1196,6 +1612,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, s
             'pairs_failed': pairs_failed,
             'pair_failures': pair_failures,
             'pair_failures_log': pair_failures_log,
+            'ligand_conversion_failures': ligand_conversion_failures,
         }
 
         _update_status_file(job_id, 'completed', 'Molecular docking completed successfully',

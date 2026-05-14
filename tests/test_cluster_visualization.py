@@ -6,6 +6,7 @@ import pytest
 from cluster_visualization import (
     build_cluster_to_rep_mapping,
     build_consensus_matrix,
+    build_per_pocket_matrix,
     calculate_heatmap_layout,
     filter_residue_columns,
     residue_sort_key,
@@ -168,6 +169,77 @@ class TestCalculateHeatmapLayout:
         # With just 1 cluster, height should hit the 400 floor.
         layout = calculate_heatmap_layout(1)
         assert layout["height"] >= 400
+
+
+class TestBuildPerPocketMatrix:
+    @staticmethod
+    def _df():
+        # 2 clusters × 3 pockets each. Residue cols A_10, A_11, A_12.
+        # Probabilities deliberately not pre-sorted; the helper must sort.
+        return pd.DataFrame([
+            {"cluster": 1, "A_10": 0, "A_11": 1, "A_12": 1, "probability": 0.6, "File name": "f10.pdb", "residues": "A_11 A_12", "pocket_index": 1},
+            {"cluster": 0, "A_10": 1, "A_11": 1, "A_12": 0, "probability": 0.9, "File name": "f1.pdb", "residues": "A_10 A_11", "pocket_index": 0},
+            {"cluster": 0, "A_10": 1, "A_11": 0, "A_12": 0, "probability": 0.4, "File name": "f3.pdb", "residues": "A_10", "pocket_index": 0},
+            {"cluster": 1, "A_10": 0, "A_11": 1, "A_12": 1, "probability": 0.8, "File name": "f7.pdb", "residues": "A_11 A_12", "pocket_index": 1},
+            {"cluster": 0, "A_10": 1, "A_11": 1, "A_12": 0, "probability": 0.7, "File name": "f2.pdb", "residues": "A_10 A_11", "pocket_index": 0},
+            {"cluster": 1, "A_10": 0, "A_11": 0, "A_12": 1, "probability": 0.5, "File name": "f12.pdb", "residues": "A_12", "pocket_index": 1},
+        ])
+
+    def test_shape_includes_spacer_between_clusters(self):
+        df = self._df()
+        matrix, meta = build_per_pocket_matrix(df, ["A_10", "A_11", "A_12"])
+        # 6 pockets + 1 spacer between cluster 0 and cluster 1 = 7 rows.
+        assert matrix.shape == (7, 3)
+        assert len(meta) == 7
+
+    def test_spacer_row_is_all_zero(self):
+        df = self._df()
+        matrix, meta = build_per_pocket_matrix(df, ["A_10", "A_11", "A_12"])
+        spacer_idxs = [i for i, m in enumerate(meta) if m.get("is_spacer")]
+        assert len(spacer_idxs) == 1
+        spacer_idx = spacer_idxs[0]
+        np.testing.assert_array_equal(matrix[spacer_idx], [0.0, 0.0, 0.0])
+
+    def test_rows_grouped_by_cluster_and_sorted_by_probability(self):
+        df = self._df()
+        _, meta = build_per_pocket_matrix(df, ["A_10", "A_11", "A_12"])
+        real = [m for m in meta if not m.get("is_spacer")]
+        # First three rows = cluster 0, next three = cluster 1.
+        assert [m["cluster"] for m in real] == [0, 0, 0, 1, 1, 1]
+        # Within each cluster, probability descends.
+        cluster0_probs = [m["probability"] for m in real[:3]]
+        assert cluster0_probs == sorted(cluster0_probs, reverse=True)
+        cluster1_probs = [m["probability"] for m in real[3:]]
+        assert cluster1_probs == sorted(cluster1_probs, reverse=True)
+
+    def test_no_spacers_when_disabled(self):
+        df = self._df()
+        matrix, meta = build_per_pocket_matrix(
+            df, ["A_10", "A_11", "A_12"], insert_spacers=False
+        )
+        assert matrix.shape == (6, 3)
+        assert all(not m.get("is_spacer") for m in meta)
+
+    def test_empty_df_returns_empty(self):
+        df = pd.DataFrame(columns=["cluster", "A_10", "probability", "File name", "residues", "pocket_index"])
+        matrix, meta = build_per_pocket_matrix(df, ["A_10"])
+        assert matrix.shape == (0, 1)
+        assert meta == []
+
+    def test_missing_cluster_column_returns_empty(self):
+        df = pd.DataFrame([{"A_10": 1, "probability": 0.5}])
+        matrix, meta = build_per_pocket_matrix(df, ["A_10"])
+        assert matrix.shape == (0, 1)
+        assert meta == []
+
+    def test_meta_carries_lookup_fields(self):
+        df = self._df()
+        _, meta = build_per_pocket_matrix(df, ["A_10", "A_11", "A_12"])
+        real = [m for m in meta if not m.get("is_spacer")]
+        # First row should be cluster 0's highest-probability pocket (p=0.9, f1.pdb).
+        assert real[0]["file_name"] == "f1.pdb"
+        assert real[0]["residues"] == "A_10 A_11"
+        assert real[0]["pocket_index"] == 0
 
 
 class TestRoundTrip:

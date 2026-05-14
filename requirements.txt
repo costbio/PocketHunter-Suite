@@ -1,12 +1,16 @@
 # Core Web Framework
 streamlit>=1.29.0,<2.0.0
-streamlit-option-menu>=0.3.6,<1.0.0
 extra-streamlit-components>=0.1.60,<1.0.0
 streamlit-extras>=0.3.6,<1.0.0
 streamlit-aggrid>=0.3.4,<1.0.0
 
 # Data Processing & Visualization
 plotly>=5.17.0,<6.0.0
+# Hover/click event roundtrip for plotly charts (B11 cluster heatmap).
+# Pinned because the lib has no maintained release schedule; the click
+# fallback (st.plotly_chart on_select="rerun") works on Streamlit 1.41+
+# if the lib breaks on a future Streamlit upgrade.
+streamlit-plotly-events>=0.0.6,<0.1.0
 pandas>=2.0.0,<3.0.0
 numpy>=1.24.0,<2.0.0
 matplotlib>=3.7.0,<4.0.0
@@ -18,13 +22,15 @@ scikit-learn>=1.3.0,<2.0.0
 mdtraj>=1.9.8,<2.0.0
 
 # Molecular Visualization
-nglview>=3.0.3,<4.0.0
+# py3Dmol still needed by cluster_visualization.show_pocket_3d (the
+# in-panel cluster-preview viewer); the rest of the suite renders
+# through the Mol* component.
 py3Dmol>=2.0.4,<3.0.0
-stmol>=0.0.6,<1.0.0
-prody>=2.4.0,<3.0.0
 
-# Molecular Docking (FIXED: changed from openbabel to openbabel-wheel)
-openbabel-wheel>=3.1.1,<4.0.0
+# Molecular Docking (smina + openbabel + prody) and structure handling
+# (prody) install via conda-forge in the Dockerfile — see the
+# micromamba section there. Keeping them out of pip avoids the
+# openbabel C++ ABI mismatch the host bind-mount used to cause.
 
 # Task Queue & Message Broker
 celery>=5.3.0,<6.0.0

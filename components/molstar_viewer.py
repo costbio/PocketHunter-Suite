@@ -1,32 +1,38 @@
 """Mol* viewer Streamlit Components v2 component.
 
-v2 Phase B commit B1 — inline CCv2 component, Mol* loaded from jsDelivr
-at runtime. No Node toolchain required for this iteration; we graduate
-to a packaged component (with bundled Mol*) only if the spike's bundle
-weight or load latency proves unacceptable.
+v2 Phase B B10 — switched from the jsDelivr ``viewer-bundle`` UMD (which
+only exposes ``Viewer`` and hides the rest of Mol*) to our own
+Vite-built bridge at ``/app/static/js/molstar-bridge.js``. The bridge
+wraps Mol* and exposes a focused API on ``window.molstarBridge`` for
+pocket surfaces, cluster overpaints, ligand pose loading, camera
+focus, and residue-click round-trips. See ``frontend/`` for the
+bridge source.
 
-The component exposes one Python entry point::
+Python entry point::
 
     from components.molstar_viewer import molstar_viewer
 
-    result = molstar_viewer(
-        pdb_url="https://files.rcsb.org/download/1CBS.pdb",
-        key="viewer_1",
-        on_clicked_change=lambda: print(st.session_state["viewer_1"].clicked),
+    molstar_viewer(
+        structure_url="/app/static/<short>/viewer.pdb",
+        structure_format="pdb",
+        annotations={
+            "pockets":   [{"residues": ["A_125"], "color": "#FF5733", "label": "Pocket 1"}],
+            "clusters":  [{"cluster_id": 0, "residues": [...], "color": "#33FF57"}],
+            "ligand_pose": {"sdf": "<v2000>", "color": "#FFA500", "label": "lig"} or None,
+            "focus":     {"type": "pocket", "target": 0} or None,
+        },
+        current_model=3,
+        on_residue_clicked_change=lambda: print(...),
+        key="viewer_x",
     )
-    st.write("ready_ms:", result.ready_ms)
-    st.write("loaded_ms:", result.loaded_ms)
 
-State (persists across reruns):
-    * ``ready_ms``  — milliseconds from JS start to Mol* viewer ready.
-    * ``loaded_ms`` — milliseconds from load call to structure rendered.
-
-Triggers (fire once per event):
-    * ``clicked``   — emitted when the user clicks the viewer surface.
-
-isolate_styles is OFF so Mol*'s own CSS (injected into document.head from
-the CDN) can target Mol*'s elements. This means the viewer renders into
-the light DOM rather than a shadow root.
+State / triggers:
+    * ``ready_ms``         — JS init to viewer-ready (ms).
+    * ``loaded_ms``        — load call to structure rendered (ms).
+    * ``load_error``       — load error message, if any.
+    * ``annotations_applied`` — JSON checksum of last-applied annotations.
+    * ``clicked``          — opaque ms timestamp, fires on any click.
+    * ``residue_clicked``  — ``"A_125"`` or ``null`` on empty-area clicks.
 """
 from __future__ import annotations
 
@@ -35,44 +41,89 @@ from collections.abc import Callable
 import streamlit as st
 
 
-_HTML = '<div id="molstar-root" style="width: 100%; height: 600px; position: relative; background: #000;"></div>'
+_HTML = '<div id="molstar-root" style="width: 100%; height: 440px; position: relative; background: #000;"></div>'
 
 _JS = r"""
-const MOLSTAR_VERSION = "4.7.0";
-const MOLSTAR_JS = `https://cdn.jsdelivr.net/npm/molstar@${MOLSTAR_VERSION}/build/viewer/molstar.js`;
-const MOLSTAR_CSS = `https://cdn.jsdelivr.net/npm/molstar@${MOLSTAR_VERSION}/build/viewer/molstar.css`;
+// Load our bundled Mol* bridge once. Subsequent renders reuse the
+// already-loaded ``window.molstarBridge`` global. CSS is loaded once
+// into document.head; JS is loaded once into the page.
+const BRIDGE_JS = "/app/static/js/molstar-bridge.js";
+const BRIDGE_CSS = "/app/static/js/molstar-bridge.css";
 
-// One-time CSS injection — Mol*'s CSS lives in document.head so it can
-// target the viewer's elements (which sit in the light DOM since the
-// component runs with isolate_styles=False).
-if (!document.querySelector(`link[data-mol-css="1"]`)) {
+if (!document.querySelector(`link[data-mol-bridge-css="1"]`)) {
   const link = document.createElement("link");
   link.rel = "stylesheet";
-  link.href = MOLSTAR_CSS;
-  link.dataset.molCss = "1";
+  link.href = BRIDGE_CSS;
+  link.dataset.molBridgeCss = "1";
   document.head.appendChild(link);
 }
 
-// One-time Mol* UMD bundle load. The bundle exposes `window.molstar`.
-let _molstarLoadingPromise = null;
-function loadMolstar() {
-  if (window.molstar) return Promise.resolve(window.molstar);
-  if (_molstarLoadingPromise) return _molstarLoadingPromise;
-  _molstarLoadingPromise = new Promise((resolve, reject) => {
+let _bridgePromise = null;
+function loadBridge() {
+  if (window.molstarBridge) return Promise.resolve(window.molstarBridge);
+  if (_bridgePromise) return _bridgePromise;
+  _bridgePromise = new Promise((resolve, reject) => {
     const script = document.createElement("script");
-    script.src = MOLSTAR_JS;
+    script.src = BRIDGE_JS;
     script.onload = () => {
-      if (window.molstar) resolve(window.molstar);
-      else reject(new Error("Mol* loaded but window.molstar is undefined"));
+      if (window.molstarBridge) resolve(window.molstarBridge);
+      else reject(new Error("bridge loaded but window.molstarBridge undefined"));
     };
     script.onerror = (e) => reject(e);
     document.head.appendChild(script);
   });
-  return _molstarLoadingPromise;
+  return _bridgePromise;
 }
 
-// Cache the viewer instance per host element so re-renders don't reload.
+// One MolViewer instance per host element across re-renders.
 const VIEWERS = new WeakMap();
+
+async function applyAnnotations(viewer, annotations, root, setTriggerValue) {
+  annotations = annotations || {};
+  const fingerprint = JSON.stringify({
+    pockets: annotations.pockets || [],
+    clusters: annotations.clusters || [],
+    ligand_pose: annotations.ligand_pose || null,
+    focus: annotations.focus || null,
+  });
+  if (root.dataset.lastAnnotations === fingerprint) return;
+  root.dataset.lastAnnotations = fingerprint;
+
+  // Pockets: clear + re-apply.
+  await viewer.clearPocketSurfaces();
+  for (const p of (annotations.pockets || [])) {
+    await viewer.showPocketSurface(p);
+  }
+
+  // Clusters: clear + re-apply.
+  await viewer.clearClusterOverpaints();
+  for (const c of (annotations.clusters || [])) {
+    await viewer.showClusterOverpaint(c);
+  }
+
+  // Ligand pose: update or clear.
+  if (annotations.ligand_pose && annotations.ligand_pose.sdf) {
+    await viewer.loadLigandPose(
+      annotations.ligand_pose.sdf,
+      annotations.ligand_pose.color || "#ffa500"
+    );
+  } else {
+    await viewer.clearLigandPose();
+  }
+
+  // Focus.
+  if (annotations.focus) {
+    const f = annotations.focus;
+    if (f.type === "residues" && Array.isArray(f.target)) {
+      await viewer.focusOnResidues(f.target);
+    } else if (f.type === "pocket" && Array.isArray(annotations.pockets)) {
+      const pocket = annotations.pockets[f.target | 0];
+      if (pocket) await viewer.focusOnResidues(pocket.residues);
+    } else if (f.type === "all") {
+      await viewer.resetCamera();
+    }
+  }
+}
 
 export default async function (component) {
   const { data, parentElement, setStateValue, setTriggerValue } = component;
@@ -80,14 +131,13 @@ export default async function (component) {
   if (!root) return;
 
   const t0 = performance.now();
-  await loadMolstar();
-  const tLoaded = performance.now();
+  await loadBridge();
 
   let viewer = VIEWERS.get(root);
   if (!viewer) {
-    viewer = await window.molstar.Viewer.create(root, {
+    viewer = await window.molstarBridge.MolViewer.create(root, {
       layoutIsExpanded: false,
-      layoutShowControls: true,
+      layoutShowControls: false,
       layoutShowRemoteState: false,
       layoutShowSequence: true,
       layoutShowLog: false,
@@ -96,27 +146,60 @@ export default async function (component) {
       viewportShowControls: true,
       viewportShowSettings: false,
       viewportShowSelectionMode: true,
-      viewportShowAnimation: false,
+      viewportShowAnimation: true,
     });
     VIEWERS.set(root, viewer);
 
-    // Single-time click wiring. Mol* canvas events bubble out of root.
+    // Surface any viewer click for compat with the old API.
     root.addEventListener("click", () => {
       setTriggerValue("clicked", Date.now());
+    });
+
+    // Residue-level click round-trip.
+    viewer.onResidueClick((residueId) => {
+      setTriggerValue("residue_clicked", residueId);
     });
 
     setStateValue("ready_ms", Math.round(performance.now() - t0));
   }
 
-  // Structure load — only re-load if pdb_url changed.
-  if (data?.pdb_url && data.pdb_url !== root.dataset.lastPdbUrl) {
+  // Structure load — only re-load if structure_url changed.
+  if (data?.structure_url && data.structure_url !== root.dataset.lastStructureUrl) {
     const tStart = performance.now();
-    root.dataset.lastPdbUrl = data.pdb_url;
+    root.dataset.lastStructureUrl = data.structure_url;
+    delete root.dataset.lastAnnotations;
+    delete root.dataset.lastModelIdx;
     try {
-      await viewer.loadStructureFromUrl(data.pdb_url, "pdb");
+      await viewer.loadStructure(
+        data.structure_url,
+        data.structure_format || "pdb"
+      );
       setStateValue("loaded_ms", Math.round(performance.now() - tStart));
     } catch (err) {
       setStateValue("load_error", String(err));
+    }
+  }
+
+  // Apply annotations (idempotent — fingerprint check).
+  if (root.dataset.lastStructureUrl) {
+    try {
+      await applyAnnotations(viewer, data?.annotations, root, setTriggerValue);
+      setStateValue("annotations_applied", root.dataset.lastAnnotations || "");
+    } catch (err) {
+      console.warn("applyAnnotations failed:", err);
+    }
+  }
+
+  // Frame navigation.
+  if (root.dataset.lastStructureUrl && typeof data?.current_model === "number") {
+    const targetIdx = Math.max(0, (data.current_model | 0) - 1);
+    if (root.dataset.lastModelIdx !== String(targetIdx)) {
+      try {
+        await viewer.setCurrentModel(targetIdx);
+        root.dataset.lastModelIdx = String(targetIdx);
+      } catch (frameErr) {
+        console.warn("frame switch failed:", frameErr);
+      }
     }
   }
 }
@@ -131,42 +214,33 @@ _MOLSTAR = st.components.v2.component(
 
 
 def molstar_viewer(
-    pdb_url: str | None = None,
+    structure_url: str | None = None,
     *,
+    structure_format: str = "pdb",
+    annotations: dict | None = None,
+    current_model: int | None = None,
     key: str | None = None,
-    height: int = 620,
+    height: int = 460,
     on_clicked_change: Callable[[], None] | None = None,
     on_ready_ms_change: Callable[[], None] | None = None,
     on_loaded_ms_change: Callable[[], None] | None = None,
     on_load_error_change: Callable[[], None] | None = None,
+    on_annotations_applied_change: Callable[[], None] | None = None,
+    on_residue_clicked_change: Callable[[], None] | None = None,
 ):
-    """Render a Mol* viewer.
+    """Render a Mol* viewer driven by the custom bridge.
 
-    Args:
-        pdb_url: URL to a PDB file. ``None`` renders an empty viewer.
-        key: Streamlit widget key (required for state to persist).
-        height: Viewer container height in pixels.
-        on_clicked_change: Optional callback for click events.
-        on_ready_ms_change: Optional callback when ``ready_ms`` is set.
-        on_loaded_ms_change: Optional callback when ``loaded_ms`` is set.
-        on_load_error_change: Optional callback when ``load_error`` is set.
-
-    Returns:
-        Component result. Attributes:
-            ``ready_ms`` — int milliseconds from JS start to viewer ready.
-            ``loaded_ms`` — int milliseconds from load call to structure done.
-            ``clicked`` — opaque timestamp; fires on each click.
-            ``load_error`` — error string if structure load failed.
+    Args mirror the pre-B10 API; the JS underneath now goes through
+    ``window.molstarBridge.MolViewer`` instead of Mol*'s minimal UMD.
     """
-    # Provide no-op callbacks for *every* state/trigger key the JS may emit.
-    # CCv2 omits a result attribute entirely when the matching on_*_change
-    # callback isn't passed — meaning ``result.load_error`` raises
-    # AttributeError unless we register a handler here, even if all we
-    # want is to read the value back.
-    # isolate_styles=False so Mol*'s CSS (loaded into document.head from
-    # jsDelivr) can target the viewer's elements (light DOM).
     return _MOLSTAR(
-        data={"pdb_url": pdb_url, "height": height},
+        data={
+            "structure_url": structure_url,
+            "structure_format": structure_format,
+            "annotations": annotations or {},
+            "current_model": current_model,
+            "height": height,
+        },
         key=key,
         height=height,
         isolate_styles=False,
@@ -174,4 +248,6 @@ def molstar_viewer(
         on_ready_ms_change=on_ready_ms_change or (lambda: None),
         on_loaded_ms_change=on_loaded_ms_change or (lambda: None),
         on_load_error_change=on_load_error_change or (lambda: None),
+        on_annotations_applied_change=on_annotations_applied_change or (lambda: None),
+        on_residue_clicked_change=on_residue_clicked_change or (lambda: None),
     )

@@ -61,7 +61,9 @@ def calc_box(pdb_path, pocket_res_list):
 
 
 def run_smina(
-    ligand_path, protein_path, out_path, pocket_center, pocket_size, smina_exe, num_poses=10, exhaustiveness=8, log_dir=None
+    ligand_path, protein_path, out_path, pocket_center, pocket_size,
+    smina_exe="smina", num_poses=10, exhaustiveness=8, log_dir=None,
+    scoring_function="vinardo",
 ):
     """
     Perform docking with Smina.
@@ -78,12 +80,20 @@ def run_smina(
         Coordinates defining the center of the binding site.
     pocket_size: iterable of float or int
         Lengths of edges defining the binding site.
+    smina_exe: str
+        Name/path of the smina executable. Defaults to ``"smina"`` —
+        resolved on PATH (B11.15 bakes smina into the conda env).
     num_poses: int
         Maximum number of poses to generate.
     exhaustiveness: int
         Accuracy of docking calculations.
     log_dir: str or pathlib.Path, optional
         Directory to write smina debug log. If None, uses the same directory as out_path.
+    scoring_function: str
+        smina ``--scoring`` value. ``"vina"`` is smina's built-in
+        default and is passed through without the flag; any other
+        value (``vinardo`` / ``ad4_scoring`` / ``dkoes_scoring``) is
+        passed explicitly.
 
     Returns
     -------
@@ -95,6 +105,16 @@ def run_smina(
         log_dir = os.path.dirname(str(out_path))
     log_file = os.path.join(str(log_dir), 'smina_debug.log')
 
+    # B11.16: scoring function. "vina" is smina's default — don't pass
+    # the flag for it (keeps the argv identical to the historical
+    # behaviour). Anything else gets an explicit --scoring.
+    scoring_args = []
+    if scoring_function and scoring_function != "vina":
+        scoring_args = ["--scoring", str(scoring_function)]
+
+    # B11.15: smina + libopenbabel + pybel now all come from the same
+    # conda-forge env baked into the Docker image (no host bind-mount).
+    # No LD_LIBRARY_PATH or BABEL_* env munging needed.
     try:
         result = subprocess.run(
             [
@@ -121,11 +141,12 @@ def run_smina(
                 str(num_poses),
                 "--exhaustiveness",
                 str(exhaustiveness),
+                *scoring_args,
                 '--log', log_file
             ],
             check=True,
             capture_output=True,
-            text=True,  # needed to capture output text
+            text=True,
         )
         return result.stdout, result.stderr
     except subprocess.CalledProcessError as e:

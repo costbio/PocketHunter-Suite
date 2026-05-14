@@ -19,3 +19,17 @@ job_statuses/
 results/
 test_output/
 test_ligands/
+
+# v2 Phase B B3: per-session viewer copies served by Streamlit's
+# static-files route. Runtime artefact; not source.
+static/*/
+# But the bridge bundle (B10) lives here and IS source-tracked.
+!static/js/
+static/js/*.map
+
+# Frontend build outputs (B10).
+frontend/node_modules/
+frontend/dist/
+
+# Celery beat runtime schedule state — not source.
+celerybeat-schedule*

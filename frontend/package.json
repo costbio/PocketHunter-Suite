@@ -1,0 +1,17 @@
+{
+  "name": "pockethunter-molstar-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vite-built bridge around Mol* that re-exposes the selection / representation APIs the runtime UMD viewer-bundle hides. Output is committed at static/js/molstar-bridge.js so the Streamlit container doesn't need Node.",
+  "scripts": {
+    "build": "vite build && cp dist/molstar-bridge.iife.js ../static/js/molstar-bridge.js && cp dist/style.css ../static/js/molstar-bridge.css",
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5",
+    "vite": "5.2.11"
+  },
+  "dependencies": {
+    "molstar": "4.7.0"
+  }
+}

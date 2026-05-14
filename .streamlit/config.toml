@@ -1,6 +1,11 @@
 # Brutalist scientific theme — JetBrains Mono, B&W, acid yellow accent
 # Zero radius, hard 2px-equivalent borders, no shadows.
 
+[server]
+# v2 Phase B B3: serve files placed in ``./static/`` at ``/app/static/...``
+# so the Mol* component can fetch per-session viewer.cif by URL.
+enableStaticServing = true
+
 [theme]
 base = "light"
 

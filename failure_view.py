@@ -124,13 +124,21 @@ def _no_output(exc_type: str, msg: str) -> ClassifiedError:
             ),
         )
     if exc_type == "DetectionProducedNoOutput":
+        # Two distinct sub-causes share the type. The message (raised by
+        # tasks.py) distinguishes them; we surface a guidance line that
+        # covers both. The live-log panel at the bottom of the analysis
+        # page lets the user see what p2rank actually emitted.
         return ClassifiedError(
             category=ErrorCategory.NO_OUTPUT,
-            headline="Pocket detection produced no output",
+            headline="Pocket detection produced no pockets",
             suggestion=(
-                "p2rank ran but no pockets.csv was created — it likely crashed "
-                "silently (Java OOM or malformed input PDB). Open the error log "
-                "below to see the raw p2rank output."
+                "Either p2rank crashed silently, or it ran cleanly but found "
+                "no pockets above its default probability threshold (common on "
+                "small / flat-surface proteins like T4 lysozyme). Check the "
+                "**Live log** panel below the columns + the persisted "
+                "`.live/detecting_pockets.stderr.log` under the job's results "
+                "directory to distinguish — a clean run emits a normal p2rank "
+                "report; a crash emits a stack trace."
             ),
         )
     if exc_type == "DockingProducedNoResults":
@@ -381,3 +389,45 @@ def render_pair_failures_callout(task_result: Optional[dict], job_id: Optional[s
                 if msg:
                     line += f" — {msg[:200]}"
                 st.markdown(line)
+
+
+def render_ligand_conversion_callout(
+    task_result: Optional[dict], job_id: Optional[str] = None
+) -> None:
+    """Render a callout when obabel converted fewer ligands than uploaded.
+
+    Reads ``ligand_conversion_failures`` from ``task_result`` — the list
+    of ``{source_file, expected, converted, error}`` records that
+    ``run_docking_task`` carries on its SUCCESS result. No-op when that
+    list is absent or empty (a clean conversion renders nothing).
+
+    Sibling of :func:`render_pair_failures_callout`: a docking *pair*
+    failure and a ligand *conversion* failure are distinct modes, so
+    they get distinct callouts.
+    """
+    import streamlit as st
+
+    if not task_result or not isinstance(task_result, dict):
+        return
+    failures = task_result.get("ligand_conversion_failures") or []
+    if not failures:
+        return
+
+    total_expected = sum(int(f.get("expected") or 0) for f in failures)
+    total_converted = sum(int(f.get("converted") or 0) for f in failures)
+    n_lost = total_expected - total_converted
+    st.warning(
+        f"⚠️ {n_lost} of {total_expected} ligand(s) failed to convert "
+        "(malformed SDF/PDB records) — the results below cover only the "
+        f"{total_converted} that converted."
+    )
+
+    with st.expander(f"Files with conversion shortfalls ({len(failures)})"):
+        for f in failures:
+            st.markdown(
+                f"• `{f.get('source_file', '?')}` — converted "
+                f"**{f.get('converted', 0)} of {f.get('expected', 0)}** molecules"
+            )
+            err = (f.get("error") or "").splitlines()[0] if f.get("error") else ""
+            if err:
+                st.caption(err[:300])

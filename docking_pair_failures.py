@@ -1,12 +1,13 @@
 """Helpers for tracking per-receptor/ligand docking pair failures.
 
-Pipeline_app and docking_app both loop over receptor × ligand pairs and call
-smina for each. When a pair fails (segfault, OOM, malformed PDBQT, smina
-returning unparseable output), today's behaviour was to log a warning and
-silently omit the pair from the results. This module is the bookkeeping
-layer: ``build_pair_failure_record`` produces a structured dict that the
-task can append to a list, and ``summarize_pair_failures`` turns that list
-into a one-line headline for the UI.
+``run_docking_task`` and ``run_pockethunter_pipeline`` loop over receptor ×
+ligand pairs and call smina for each. When a pair fails (segfault, OOM,
+malformed PDBQT, smina returning unparseable output), the task would
+otherwise log a warning and silently omit the pair from the results.
+This module is the bookkeeping layer: ``build_pair_failure_record``
+produces a structured dict the task appends to a list, and
+``summarize_pair_failures`` turns that list into a one-line headline for
+the UI (rendered by ``failure_view.render_pair_failures_callout``).
 
 The dicts are JSON-friendly so the same shape can also serialise into the
 status JSON via ``tasks._update_status_file``'s ``error`` channel — or live

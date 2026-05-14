@@ -72,6 +72,21 @@ class Settings(BaseSettings):
     MAX_DOCKING_EXHAUSTIVENESS: int = Field(default=12)
     DOCKING_TIMEOUT: int = Field(default=7200)  # 2 hours
 
+    # ── Worker & compute tuning (B11.21) ─────────────────────────────────
+    # Celery worker concurrency — read by docker-compose's worker
+    # ``command:`` lines (must live in .env for compose interpolation).
+    WORKER_CONCURRENCY: int = Field(default=8)        # pipeline queue
+    DOCKING_CONCURRENCY: int = Field(default=4)       # docking queue
+    # p2rank thread count for the detect_pockets stage — not user-facing.
+    P2RANK_THREADS: int = Field(default=4)
+    # Fixed smina exhaustiveness — not user-facing (no slider).
+    DOCKING_EXHAUSTIVENESS: int = Field(default=8)
+    # Max ligand×pocket pairs per docking run — an SDF is rejected when
+    # ``molecules × pockets`` exceeds this.
+    DOCKING_MAX_PAIRS: int = Field(default=1000)
+    # Cap on the on-demand "all docking results" ZIP download (bytes).
+    MAX_DOWNLOAD_ZIP_SIZE: int = Field(default=536_870_912)  # 512 MB
+
     # ── Rate limiting ────────────────────────────────────────────────────
     RATE_LIMIT_ENABLED: bool = Field(default=True)
     RATE_LIMIT_MAX_UPLOADS: int = Field(default=10)
@@ -126,7 +141,10 @@ class Settings(BaseSettings):
         return v
 
     @field_validator("MAX_UPLOAD_SIZE", "MAX_ZIP_SIZE", "CLEANUP_AFTER_DAYS",
-                     "MAX_DISK_USAGE_GB")
+                     "MAX_DISK_USAGE_GB", "WORKER_CONCURRENCY",
+                     "DOCKING_CONCURRENCY", "P2RANK_THREADS",
+                     "DOCKING_EXHAUSTIVENESS", "DOCKING_MAX_PAIRS",
+                     "MAX_DOWNLOAD_ZIP_SIZE")
     @classmethod
     def _positive_int(cls, v: int, info) -> int:
         if v <= 0:

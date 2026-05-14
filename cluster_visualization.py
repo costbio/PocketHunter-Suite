@@ -1,11 +1,8 @@
 """Shared cluster-visualization helpers for the heatmap + 3D viewer.
 
-Pipeline_app's ``_show_pipeline_cluster_inline`` and cluster_pockets_app's
-``results_tab2`` previously carried near-identical implementations of the
-consensus heatmap, residue sort, layout pixel math, and the
-protein-with-highlighted-pocket 3D viewer. This module is the one source of
-truth — both pages import the pure helpers + the ``render_consensus_panel``
-Streamlit function.
+The consensus heatmap, residue sort, layout pixel math, and the
+protein-with-highlighted-pocket 3D viewer all live here. Used by
+:mod:`panels.cluster` to render the cluster panel's results body.
 
 The pure helpers (``residue_sort_key``, ``build_consensus_matrix``,
 ``filter_residue_columns``, ``sort_residues_in_matrix``,
@@ -77,6 +74,84 @@ def filter_residue_columns(
     filtered_residues = [r for r, m in zip(residues, col_mask) if m]
     filtered_matrix = matrix[:, col_mask]
     return filtered_residues, filtered_matrix
+
+
+def build_per_pocket_matrix(
+    df_clustered: pd.DataFrame,
+    residue_cols: list[str],
+    *,
+    insert_spacers: bool = True,
+) -> tuple[np.ndarray, list[dict]]:
+    """One row per pocket, grouped by cluster, p-sorted within cluster.
+
+    Used by :func:`render_per_pocket_heatmap` to show every
+    member pocket (not just the cluster representative) so within-cluster
+    variation is visible. Pure — no Streamlit imports.
+
+    Args:
+        df_clustered: ``pockets_clustered.csv``-shaped DataFrame.
+        residue_cols: Names of the residue-frequency columns. Must all
+            be present in ``df_clustered``.
+        insert_spacers: When ``True``, an all-zero spacer row is inserted
+            between cluster groups so the heatmap renders a visible band
+            gap. The spacer's ``row_meta`` entry has ``is_spacer=True``
+            and no other keys.
+
+    Returns:
+        ``(matrix, row_meta)``. ``matrix`` has shape
+        ``(n_pockets [+ spacers], len(residue_cols))``. ``row_meta`` is a
+        list of dicts the same length as ``matrix``'s row count — either
+        ``{"is_spacer": True}`` or
+        ``{"is_spacer": False, "cluster": int, "probability": float,
+           "file_name": str, "residues": str, "pocket_index": Any}``.
+        Callers use ``row_meta`` to wire heatmap row clicks back to the
+        Mol* viewer (frame + surface).
+    """
+    if df_clustered is None or len(df_clustered) == 0:
+        return np.zeros((0, len(residue_cols))), []
+    if "cluster" not in df_clustered.columns:
+        return np.zeros((0, len(residue_cols))), []
+
+    df = df_clustered.sort_values(
+        ["cluster", "probability"],
+        ascending=[True, False],
+        kind="mergesort",  # stable so equal-prob rows keep insertion order
+    )
+
+    matrix_rows: list[np.ndarray] = []
+    row_meta: list[dict] = []
+    prev_cluster: Optional[int] = None
+
+    for _, pocket in df.iterrows():
+        try:
+            cid = int(pocket["cluster"])
+        except (TypeError, ValueError):
+            continue
+        if insert_spacers and prev_cluster is not None and cid != prev_cluster:
+            matrix_rows.append(np.zeros(len(residue_cols)))
+            row_meta.append({"is_spacer": True})
+
+        matrix_rows.append(
+            np.array([float(pocket.get(c, 0) or 0) for c in residue_cols])
+        )
+        prob_val = pocket.get("probability")
+        try:
+            prob = float(prob_val) if pd.notna(prob_val) else 0.0
+        except (TypeError, ValueError):
+            prob = 0.0
+        row_meta.append({
+            "is_spacer": False,
+            "cluster": cid,
+            "probability": prob,
+            "file_name": str(pocket.get("File name", "") or ""),
+            "residues": str(pocket.get("residues", "") or ""),
+            "pocket_index": pocket.get("pocket_index"),
+        })
+        prev_cluster = cid
+
+    if not matrix_rows:
+        return np.zeros((0, len(residue_cols))), []
+    return np.array(matrix_rows), row_meta
 
 
 def sort_residues_in_matrix(
@@ -269,35 +344,39 @@ def _resolve_rep_pdb_path(file_name: str, job_id: str) -> Optional[str]:
     return None
 
 
-def render_consensus_panel(
+def render_cluster_heatmap_wide(
     df_clustered: pd.DataFrame,
     df_reps: pd.DataFrame,
     results_job_id: str,
     *,
     key_prefix: str,
-    viewer_size: tuple[int, int] = (400, 420),
 ) -> None:
-    """3-column heatmap panel shared by Step 2 (Cluster) and Full Pipeline.
+    """Wide cluster heatmap + docking selector for the v2 analysis app.
 
-    Renders ``[checkboxes | consensus heatmap | 3D viewer]``. Ticking a cluster
-    checkbox updates ``st.session_state.cluster_preview_*`` so the 3D viewer
-    shows that cluster's representative; toggling the "Select for Docking"
-    checkbox inside the viewer panel mutates
-    ``st.session_state.docking_target_clusters`` (the canonical key from
-    7fd202d).
+    Layout: a 2-column strip ``[cluster checkboxes | consensus heatmap]``
+    using ``st.columns([1, 4])``. Designed to render full-width below
+    the analysis panel (see ``analysis_app._render_cluster_heatmap_strip``);
+    no internal 3D viewer column — the persistent Mol* viewer in the
+    left column of the page covers 3D.
 
-    ``key_prefix`` namespaces the per-cluster Streamlit widget keys so the
-    two callers (cluster page + pipeline page) don't collide. Pass e.g.
-    ``"cluster"`` from cluster_pockets_app and ``"pipe_cluster"`` from
-    pipeline_app.
+    Each cluster's checkbox is *the* "select this cluster for docking"
+    affordance — toggling it mutates ``st.session_state.docking_target_clusters``
+    directly (the key the docking panel reads via the heatmap-bridge).
+
+    ``key_prefix`` namespaces the per-cluster widget keys so analysis_app
+    can mount this multiple times (it currently mounts it once).
     """
-    import os
     import streamlit as st
 
     from cluster_labels import describe_cluster_spatially
 
     if df_clustered is None or len(df_clustered) == 0:
         return
+
+    # B9: the legacy ``session_state.initialize_session_state`` (deleted in
+    # B7) seeded these keys at page load. The v2 panels don't, so do it
+    # here defensively — first render no longer crashes on the bare reads.
+    st.session_state.setdefault("docking_target_clusters", [])
 
     meta_cols = {
         "Frame_pocket_index", "File name", "Frame", "pocket_index",
@@ -320,10 +399,10 @@ def render_consensus_panel(
     layout = calculate_heatmap_layout(len(unique_clusters))
     fig = build_consensus_heatmap_figure(filtered_matrix, filtered_residues, cluster_labels, layout)
 
-    cb_col, heat_col, viewer_col = st.columns([1, 3, 2])
+    cb_col, heat_col = st.columns([1, 4])
 
     with cb_col:
-        st.markdown("**Select cluster:**")
+        st.markdown("**Select for docking:**")
         st.markdown(f'<div style="height:{layout["top_pad"]:.0f}px"></div>', unsafe_allow_html=True)
         for cid in unique_clusters:
             rep = cluster_to_rep.get(cid)
@@ -332,29 +411,22 @@ def render_consensus_panel(
             clust_df = df_clustered[df_clustered["cluster"] == cid]
             n_pockets = len(clust_df)
             avg_prob = clust_df["probability"].mean()
-
-            def _on_change(_cid=cid, _rep=rep, _rj=results_job_id):
-                cb_key = f"{key_prefix}_cb_{_cid}"
-                if st.session_state[cb_key]:
-                    pdb_path = _resolve_rep_pdb_path(str(_rep["File name"]), _rj)
-                    res_raw = str(_rep.get("residues", ""))
-                    res_list = [r.strip() for r in res_raw.replace(",", " ").split() if r.strip()]
-                    st.session_state.cluster_preview_id = _cid
-                    st.session_state.cluster_preview_pdb = pdb_path
-                    st.session_state.cluster_preview_residues = res_list
-                else:
-                    if st.session_state.cluster_preview_id == _cid:
-                        st.session_state.cluster_preview_id = None
-                        st.session_state.cluster_preview_pdb = None
-                        st.session_state.cluster_preview_residues = []
-
             spatial = describe_cluster_spatially(rep.get("residues") if rep is not None else None)
-            st.checkbox(
+
+            checkbox_key = f"{key_prefix}_dock_{cid}"
+            currently_selected = cid in st.session_state.docking_target_clusters
+
+            sel = st.checkbox(
                 f"Cluster {cid} · {spatial}",
-                key=f"{key_prefix}_cb_{cid}",
-                on_change=_on_change,
+                value=currently_selected,
+                key=checkbox_key,
                 help=f"{n_pockets} pockets · avg probability {avg_prob:.3f}",
             )
+            if sel and cid not in st.session_state.docking_target_clusters:
+                st.session_state.docking_target_clusters.append(cid)
+            elif not sel and cid in st.session_state.docking_target_clusters:
+                st.session_state.docking_target_clusters.remove(cid)
+
             st.markdown(f'<div style="height:{layout["gap"]:.0f}px"></div>', unsafe_allow_html=True)
 
     with heat_col:
@@ -365,32 +437,314 @@ def render_consensus_panel(
             "Color = how often that residue appears across the cluster's pockets "
             "(0 = never, 1 = always). "
             "**The representative pocket may not include every bright residue here** — "
-            "its exact residues are listed in the 3D viewer panel to the right."
+            "the persistent Mol* viewer on the left shows the rep structure once a "
+            "cluster is selected."
         )
 
-    with viewer_col:
-        sel_id = st.session_state.cluster_preview_id
-        if sel_id is not None:
-            sel_path = st.session_state.cluster_preview_pdb
-            sel_residues = st.session_state.cluster_preview_residues
-            rep = cluster_to_rep.get(sel_id)
-            spatial = describe_cluster_spatially(rep.get("residues") if rep is not None else None)
-            st.markdown(f"**Cluster {sel_id}** · {spatial}")
-            st.caption("Representative structure (medoid pocket)")
-            if rep is not None:
-                m1, m2 = st.columns(2)
-                m1.metric("Probability", f"{rep.get('probability', 0):.3f}")
-                m2.metric("Residues", len(sel_residues))
-            is_selected = sel_id in st.session_state.docking_target_clusters
-            if st.checkbox("Select for Docking", value=is_selected, key=f"{key_prefix}_dock_sel_{sel_id}"):
-                if sel_id not in st.session_state.docking_target_clusters:
-                    st.session_state.docking_target_clusters.append(sel_id)
-            else:
-                if sel_id in st.session_state.docking_target_clusters:
-                    st.session_state.docking_target_clusters.remove(sel_id)
-            if sel_path and os.path.exists(sel_path):
-                show_pocket_3d(sel_path, sel_residues, width=viewer_size[0], height=viewer_size[1])
-            else:
-                st.warning(f"PDB not found: `{sel_path}`")
-        else:
-            st.info("← Check a cluster to view its 3D structure here")
+
+def render_per_pocket_heatmap(
+    df_clustered: pd.DataFrame,
+    df_reps: pd.DataFrame,
+    results_job_id: str,
+    *,
+    key_prefix: str,
+    session_short: str,
+    pdb_source_job_id: str,
+) -> None:
+    """B11.2: pockethunter-style per-cluster heatmap with click → viewer.
+
+    Inspired by ``PocketHunter/pockethunter.py:plot_clustermap``: one
+    matplotlib-equivalent subplot per cluster, each subplot drawn with
+    that cluster's own light_palette colormap on the binary
+    pocket-residue one-hot matrix. We adapt that to plotly via
+    ``make_subplots(rows=n_clusters, cols=1, shared_xaxes=True)`` with
+    per-row heights proportional to each cluster's pocket count.
+
+    The colorscale is binary (white → cluster_color) — present residues
+    paint in the cluster's hue, absent residues are blank. Each row's
+    y-axis label is ``p={prob:.2f} · F={Frame}``. Subplot titles read
+    ``Cluster 0``, ``Cluster 1``, …
+
+    B11.20: clicking a row (no longer hover — too easy to trip while
+    moving the mouse) pushes a single-pocket annotation into the Mol*
+    viewer and jumps the frame slider to that pocket's source frame.
+
+    Args:
+        df_clustered: ``pockets_clustered.csv`` DataFrame (already
+            filtered to drop ``cluster == -1`` noise rows).
+        df_reps: ``cluster_representatives.csv`` DataFrame.
+        results_job_id: cluster job's legacy_id — used only for keying
+            the cache busts; the frame index lookup uses
+            ``pdb_source_job_id``.
+        key_prefix: namespace for widget keys.
+        session_short: session ``short_code`` (already ``__``-sanitised).
+        pdb_source_job_id: legacy_id of the find_pockets / pipeline job
+            that produced the trajectory's per-frame PDBs. Required
+            because ``frame_index_for_filename`` reads
+            ``Config.RESULTS_DIR / <job_id> / pdbs/`` — and the
+            *cluster* job has no such directory.
+    """
+    import streamlit as st
+    from streamlit_plotly_events import plotly_events
+
+    from components.molstar_annotations import _palette, merge_annotations
+    from panels._shared import frame_index_for_filename
+
+    if df_clustered is None or len(df_clustered) == 0:
+        st.caption("No clustered pockets to visualise yet.")
+        return
+    if "cluster" not in df_clustered.columns:
+        st.warning("`pockets_clustered.csv` missing a `cluster` column.")
+        return
+
+    meta_cols = {
+        "Frame_pocket_index", "File name", "Frame", "pocket_index",
+        "probability", "residues", "cluster", "num_residues",
+    }
+    residue_cols = [c for c in df_clustered.columns if c not in meta_cols]
+    if not residue_cols:
+        st.warning("No residue columns found in clustered data.")
+        return
+
+    # Drop residue columns that are zero across every pocket — keeps the
+    # heatmap focused on residues that actually appear in at least one
+    # pocket. Then numerically sort what's left so A_5 sits before A_50.
+    raw_matrix = df_clustered[residue_cols].values
+    col_mask = raw_matrix.sum(axis=0) > 0
+    kept_residues = [r for r, m in zip(residue_cols, col_mask) if m]
+    if not kept_residues:
+        st.caption("No residues are occupied in any pocket — nothing to plot.")
+        return
+    sort_idx = sorted(
+        range(len(kept_residues)),
+        key=lambda i: residue_sort_key(kept_residues[i]),
+    )
+    sorted_residues = [kept_residues[i] for i in sort_idx]
+    kept_cols = [c for c, m in zip(residue_cols, col_mask) if m]
+    sorted_cols = [kept_cols[i] for i in sort_idx]
+
+    # Group pockets by cluster (sorted ids); within each cluster, sort
+    # by probability descending so the highest-confidence pocket sits
+    # at the top of its subplot.
+    cluster_ids = sorted(int(c) for c in df_clustered["cluster"].unique())
+    palette = _palette(len(cluster_ids))
+    cluster_color = {cid: color for cid, color in zip(cluster_ids, palette)}
+
+    # Per-cluster matrices + row metadata (used to map hover events
+    # back to specific pockets).
+    cluster_matrices: dict[int, np.ndarray] = {}
+    cluster_meta: dict[int, list[dict]] = {}
+    for cid in cluster_ids:
+        clust_df = df_clustered[df_clustered["cluster"] == cid].sort_values(
+            "probability", ascending=False, kind="mergesort",
+        )
+        cluster_matrices[cid] = clust_df[sorted_cols].values.astype(float)
+        meta_rows: list[dict] = []
+        for _, pocket in clust_df.iterrows():
+            try:
+                prob = float(pocket.get("probability") or 0.0)
+            except (TypeError, ValueError):
+                prob = 0.0
+            try:
+                frame = int(pocket.get("Frame") or 0)
+            except (TypeError, ValueError):
+                frame = 0
+            meta_rows.append({
+                "cluster": cid,
+                "probability": prob,
+                "Frame": frame,
+                "file_name": str(pocket.get("File name", "") or ""),
+                "Frame_pocket_index": str(pocket.get("Frame_pocket_index", "") or ""),
+                "pocket_index": pocket.get("pocket_index"),
+                "residues": str(pocket.get("residues", "") or ""),
+            })
+        cluster_meta[cid] = meta_rows
+
+    # Subplot heights: proportional to each cluster's pocket count, with
+    # a floor so single-pocket clusters don't disappear. Total height
+    # capped so the heatmap doesn't dominate the viewport.
+    n_clusters = len(cluster_ids)
+    total_pockets = sum(len(cluster_meta[c]) for c in cluster_ids)
+    total_height = min(420, max(280, total_pockets * 16 + 40 * n_clusters))
+    raw_heights = [max(1.0, float(len(cluster_meta[c]))) for c in cluster_ids]
+    s = sum(raw_heights) or 1.0
+    row_heights = [h / s for h in raw_heights]
+
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+
+    fig = make_subplots(
+        rows=n_clusters, cols=1,
+        shared_xaxes=True,
+        row_heights=row_heights,
+        vertical_spacing=0.04,
+        subplot_titles=[f"Cluster {cid}" for cid in cluster_ids],
+    )
+
+    for idx, cid in enumerate(cluster_ids):
+        m = cluster_matrices[cid]
+        meta = cluster_meta[cid]
+        color = cluster_color[cid]
+        y_labels = [f"p={x['probability']:.2f} · F={x['Frame']}" for x in meta]
+        fig.add_trace(
+            go.Heatmap(
+                z=m,
+                x=sorted_residues,
+                y=y_labels,
+                # Binary colorscale: 0 transparent, 1 cluster's hue.
+                colorscale=[[0, "rgba(255,255,255,0)"], [1, color]],
+                zmin=0,
+                zmax=1,
+                showscale=False,
+                hovertemplate=(
+                    f"<b>Cluster {cid}</b><br>"
+                    "%{y}<br>"
+                    "Residue: %{x}<br>"
+                    "<extra></extra>"
+                ),
+            ),
+            row=idx + 1, col=1,
+        )
+        fig.update_yaxes(
+            autorange="reversed",
+            tickfont=dict(size=9),
+            row=idx + 1, col=1,
+        )
+
+    fig.update_layout(
+        height=total_height,
+        margin=dict(t=30, l=20, r=20, b=70),
+        showlegend=False,
+        plot_bgcolor="white",
+    )
+    # X-axis labels only on the bottom subplot to save vertical space.
+    for i in range(1, n_clusters):
+        fig.update_xaxes(showticklabels=False, row=i, col=1)
+    fig.update_xaxes(
+        showticklabels=True, tickangle=45, tickfont=dict(size=8),
+        title="Residue", row=n_clusters, col=1,
+    )
+
+    st.info(
+        "👆 **Click** a heatmap row to preview that pocket in the viewer — "
+        "moving the mouse over the heatmap alone does nothing.",
+        icon="👆",
+    )
+    events = plotly_events(
+        fig,
+        click_event=True,
+        hover_event=False,
+        select_event=False,
+        override_height=total_height,
+        key=f"{key_prefix}_per_pocket_events",
+    )
+
+    st.caption(
+        "**Click a row** to preview that pocket in the viewer (cluster "
+        "color matches the Mol* overpaint). The viewer stays on the "
+        "last-clicked pocket — use **Clear preview** to return to the "
+        "cartoon-only view."
+    )
+    if st.button("Clear preview", key=f"{key_prefix}_clear_sel"):
+        ann_key = f"viewer_annotations_{session_short}"
+        ann_dict = st.session_state.setdefault(ann_key, {})
+        if ann_dict.get("pockets") or ann_dict.get("focus"):
+            merge_annotations(ann_dict, pockets=None, focus=None)
+        st.session_state.pop(f"{key_prefix}_last_event_fp", None)
+        st.rerun()
+
+    if not events:
+        return
+
+    # plotly_events returns events with ``curveNumber`` (trace index) +
+    # ``pointNumber`` ([row, col] for heatmaps). Each subplot is its own
+    # trace, so curveNumber → cluster_ids[curveNumber].
+    point = events[-1]
+    curve = point.get("curveNumber")
+    point_number = point.get("pointNumber")
+    if point_number is None:
+        point_number = point.get("pointIndex")
+
+    row_idx: Optional[int] = None
+    if isinstance(point_number, (list, tuple)) and point_number:
+        try:
+            row_idx = int(point_number[0])
+        except (TypeError, ValueError):
+            row_idx = None
+    elif isinstance(point_number, int):
+        ncols = max(1, len(sorted_residues))
+        row_idx = point_number // ncols
+
+    if curve is None or row_idx is None:
+        return
+    try:
+        curve = int(curve)
+    except (TypeError, ValueError):
+        return
+    if curve < 0 or curve >= n_clusters:
+        return
+    cid = cluster_ids[curve]
+    meta_list = cluster_meta[cid]
+    if row_idx < 0 or row_idx >= len(meta_list):
+        return
+    meta = meta_list[row_idx]
+
+    color = cluster_color.get(cid, "#d4ff00")
+    residue_list = [tok for tok in str(meta.get("residues", "")).split() if tok]
+    if len(residue_list) < 3:
+        return  # surface mesh degenerates with <3 residues
+
+    fingerprint = (
+        cid,
+        str(meta.get("file_name", "")),
+        str(meta.get("Frame_pocket_index", "")),
+    )
+    last_key = f"{key_prefix}_last_event_fp"
+    if st.session_state.get(last_key) == fingerprint:
+        return
+    st.session_state[last_key] = fingerprint
+
+    label = f"Cluster {cid} · p={meta['probability']:.2f}"
+    ann_key = f"viewer_annotations_{session_short}"
+    ann_dict = st.session_state.setdefault(ann_key, {})
+    merge_annotations(
+        ann_dict,
+        pockets=[{
+            "residues": residue_list,
+            "color": color,
+            "label": label,
+        }],
+        focus={"type": "pocket", "target": 0},
+    )
+
+    # B11.2: use the *source find_pockets* job id (which owns ``pdbs/``)
+    # — NOT the cluster job's id. The cluster job has no pdbs directory,
+    # so the prior call returned None and the viewer never jumped frames.
+    target_frame = frame_index_for_filename(
+        pdb_source_job_id, meta.get("file_name", "")
+    )
+    if target_frame is not None:
+        target_key = f"viewer_frame_target_{session_short}"
+        st.session_state[target_key] = int(target_frame)
+
+    st.rerun()
+
+
+def render_consensus_panel(
+    df_clustered: pd.DataFrame,
+    df_reps: pd.DataFrame,
+    results_job_id: str,
+    *,
+    key_prefix: str,
+    viewer_size: tuple[int, int] = (400, 420),  # noqa: ARG001 — kept for back-compat
+) -> None:
+    """Back-compat shim — see :func:`render_cluster_heatmap_wide`.
+
+    The B9 layout drops the inline 3D viewer sub-column entirely, so the
+    ``viewer_size`` argument is ignored. Existing callers keep working
+    without code changes; new callers should call
+    :func:`render_cluster_heatmap_wide` directly.
+    """
+    render_cluster_heatmap_wide(
+        df_clustered, df_reps, results_job_id, key_prefix=key_prefix,
+    )

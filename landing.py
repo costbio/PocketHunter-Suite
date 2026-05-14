@@ -69,6 +69,35 @@ def render_landing() -> None:
             else:
                 navigate_to_session(short, edit_secret=secret)
 
+    _render_recent_sessions()
+
+
+def _render_recent_sessions() -> None:
+    """List the sessions this browser has created/visited (B11.21).
+
+    Backed by ``recent_sessions`` (a client-side cookie) — empty on the
+    CookieManager's first render, populated after its mount-rerun.
+    """
+    import recent_sessions
+
+    entries = recent_sessions.list_recent()
+    if not entries:
+        return
+    st.markdown("### Your recent sessions")
+    st.caption(
+        "Sessions you've opened in this browser — stored only here, "
+        "never on the server."
+    )
+    for e in entries:
+        short = e.get("short_code")
+        if not short:
+            continue
+        name = e.get("display_name") or f"session {short}"
+        created = (e.get("created") or "")[:10]
+        label = f"{name} · `{short}`" + (f" · {created}" if created else "")
+        if st.button(label, key=f"recent_{short}", use_container_width=True):
+            navigate_to_session(short, edit_secret=e.get("edit_secret"))
+
 
 def render_session_not_found(short_code: Optional[str]) -> None:
     """``/?s=<bogus>`` — short_code didn't resolve."""
@@ -120,8 +149,19 @@ def render_session_chip(resolved: ResolvedSession) -> None:
     with st.container():
         col_name, col_url, col_role = st.columns([3, 5, 1])
         col_name.caption(f"📁 **{name}**")
-        col_url.caption(f"🔗 `{full_url}`")
+        if resolved.is_editor:
+            # B11.21: st.code gives a native copy button so editors can
+            # re-share / re-find their ?edit= URL without hunting for it.
+            with col_url:
+                st.code(full_url, language=None)
+        else:
+            col_url.caption(f"🔗 `{full_url}`")
         col_role.caption(f"{'✏️' if resolved.is_editor else '👁'} {role}")
+    st.caption(
+        "**Editor** links (with `?edit=…`) can run jobs and edit the "
+        "session; plain links are **read-only viewers**. Anyone holding "
+        "the editor URL has editor access."
+    )
 
 
 # ── helpers ──────────────────────────────────────────────────────────────

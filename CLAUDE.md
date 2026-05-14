@@ -9,7 +9,7 @@ This repo has **two layers** that are easy to confuse:
 - **Top level** (`/`): the Streamlit + Celery web suite that orchestrates the pipeline. This is what you usually edit.
 - **`PocketHunter/`**: a vendored CLI tool (`pockethunter.py`) that the suite *shells out to* for the extract/detect/cluster steps. It has its own `CLAUDE.md` and `requirements.txt`. It is listed in `.gitignore` and is treated as a black-box subprocess by the suite — do not couple the suite to its internals beyond CLI args.
 
-Docking (Step 4) does **not** go through the PocketHunter CLI — it lives in `step4_docking.py` and `docking_app.py` and calls `smina` directly.
+Docking does **not** go through the PocketHunter CLI — it lives in `step4_docking.py` (the task-side helper) and is invoked from `panels/docking.py`; it calls `smina` directly.
 
 ## Commands
 
@@ -63,43 +63,61 @@ docker compose run --rm streamlit alembic upgrade head
 
 The Postgres service uses a named volume `pgdata`; `docker compose down` keeps data, `docker compose down -v` wipes it. `DATABASE_URL` and `BASE_URL` are required env vars — `.env.example` has the defaults.
 
-The test suite under `tests/` runs with `pytest tests/` (109+ tests as of the latest batch). New Phase A tests live in `tests/test_db_*.py`.
+The test suite under `tests/` runs with `pytest tests/` (190 tests as of the v2 Phase B B7 batch). DB tests live in `tests/test_db_*.py`; viewer/annotation tests live in `tests/test_viewer_*.py` and `tests/test_molstar_annotations.py`; panel-helper tests in `tests/test_panels_shared.py` and `tests/test_derive_session_annotations.py`.
 
 ## Architecture
 
 ### Request flow
 
 ```
-Streamlit (main.py → page module) ──► Celery task (tasks.py)
-                                            │
-                                            ├─► subprocess: python PocketHunter/pockethunter.py <step>
-                                            │   (extract / detect / cluster)
-                                            │
-                                            └─► subprocess: smina  (docking only)
+Browser (Mol* viewer + panels) ──► Streamlit (main.py → analysis_app.py)
                                             │
                                             ▼
-                              uploads/<job_id>/ ─► results/<job_id>/ + results/<job_id>_status.json
+                                  Postgres (sessions, jobs) + Redis
+                                            │
+                                            ▼
+                                    Celery task (tasks.py)
+                                            │
+                            ├─► subprocess: python PocketHunter/pockethunter.py <step>
+                            │   (extract / detect / cluster)
+                            └─► subprocess: smina  (docking)
+                                            │
+                                            ▼
+                       uploads/<job_id>/ ─► results/<job_id>/
+                       (per-session viewer.cif symlinked into static/<short>/)
 ```
 
 Redis is both the Celery broker and result backend. Two queues isolate workloads: the long, CPU-heavy `docking` queue has its own worker so docking jobs never starve pipeline steps. `worker_prefetch_multiplier = 1` is set globally — keep it that way; raising it makes one slow task block its sibling slots.
 
-### Multi-page Streamlit (important quirk)
+### Single-page Streamlit shell (`main.py` + `analysis_app.py` + `panels/`)
 
-`main.py` is the only real Streamlit entrypoint. Page navigation is done with `option_menu`, and selected pages are executed via `runpy.run_path(..., init_globals={'st': st, ...}, run_name='__main__')` — **not** imported as modules. Consequences:
+`main.py` is a thin dispatcher: it resolves the session from `st.query_params` via `session_routes.resolve_session_from_query`, renders the landing / not-found / expired pages when applicable, then calls `analysis_app.render_analysis_app(_resolved)`. The legacy `option_menu` nav and `runpy.run_path` multi-page machinery are gone (B7).
 
-- Page files (`pipeline_app.py`, `extract_frames_app.py`, `detect_pockets_app.py`, `cluster_pockets_app.py`, `docking_app.py`, `task_monitor_app.py`) are written to be run as `__main__` and call `initialize_session_state()` from `session_state.py` at the top.
-- Programmatic page switches set `st.session_state.pending_nav = "<page label>"` and rerun; `main.py` translates that to `option_menu`'s `manual_select` index.
-- Don't `from pipeline_app import …` from another page — module identity is unstable under `runpy`.
+**Editor vs Viewer.** A session URL is `/?s=<short_code>&edit=<edit_secret>`. Visiting with a valid `edit=` token makes `resolve_session` return `is_editor=True` (can run jobs, mutate the session); visiting with just `?s=` is a read-only **viewer** (`is_editor=False`). The check is `db.sessions.is_editor` (constant-time compare on the unhashed `edit_secret`); panels gate writes with `disabled=not is_editor`. The header chip (`landing.render_session_chip`) shows ✏️ Editor / 👁 Viewer and, for editors, the full copyable share URL. `recent_sessions.py` keeps a per-browser history of visited sessions in a cookie (client-side only — never persisted server-side).
+
+`analysis_app.py` is the only page. It renders:
+
+- A dynamic brutalist header (`● POCKETS ► ● CLUSTER ► ○ DOCK`, dots reflect completed jobs in the session).
+- A `Run all stages` button + `st.segmented_control(["Pockets", "Cluster", "Dock"])` stage selector.
+- A two-column body via `st.columns([3, 2])`:
+  - **Left**: the persistent Mol* viewer, wrapped in `@st.fragment(run_every="3s")`. The fragment re-derives pocket + cluster annotations from the latest completed Job rows via `components.molstar_annotations.derive_session_annotations` and overlays the panel-set UI state (`ligand_pose`, `focus`) on top.
+  - **Right**: dispatch to the active stage panel — `panels/find_pockets.py`, `panels/cluster.py`, or `panels/docking.py`. Each panel is a `render(session, is_editor) -> None` function with three states (settings → running → results), polling its own task with `celery_app.AsyncResult` + `time.sleep(3) + st.rerun()`.
+- A full-width `Jobs` expander below the columns, also wrapped in `@st.fragment(run_every="3s")`. Renders the session's jobs newest-first with kind / status / duration / inline failure details.
+
+Use `Skill` / Read / Edit on the panel modules — they're regular Python imports, not `__main__`-style scripts. Don't add new top-level Streamlit pages; everything goes through analysis_app or a new panel module.
 
 ### Job IDs and on-disk state
 
-All persistent state for a run lives under a single `job_id` (a UUID generated when the job starts):
+All persistent state for a run lives under a single `job_id` (a timestamp + uuid fragment generated when the job starts):
 
-- `uploads/<job_id>/...` — user-uploaded inputs (sanitized via `Config.get_upload_path`)
-- `results/<job_id>/...` — pipeline outputs (subfolders `pdbs/`, `pockets/`, `pocket_clusters/`, `docking/`)
-- `results/<job_id>_status.json` — single source of truth for job state. Written by `tasks._update_status_file(...)` on every state change and by the page modules when they kick off a task. Schema: `{status, step, task_id, result_info, last_updated}`. The Task Monitor page reads these files; the pages also read them to recover state after a rerun.
+- `uploads/<job_id>/...` — user-uploaded inputs (sanitized via `security.handle_file_upload_secure`).
+- `results/<job_id>/...` — pipeline outputs (subfolders `pdbs/`, `pockets/`, `pocket_clusters/`, `docking/`, plus a top-level `viewer.cif` produced by `viewer_pipeline.convert_pdb_dir_to_viewer`).
+- `static/<session_short>/viewer.cif` — runtime symlink (or copy fallback) created by `viewer_pipeline.link_viewer_for_session` so Streamlit's static-file route can serve the Mol* trajectory to the browser. Listed in `.gitignore`.
+- `results/<job_id>_status.json` — disk mirror of the Job row. Written by `tasks._update_status_file(...)` on every state change for backwards compatibility (read by older diagnostic tooling). The Postgres `Job` table is the authoritative source.
 
-Page modules pass the `job_id` between steps via `st.session_state.cached_job_ids` (keys: `extract`, `detect`, `cluster`, `docking`, `pipeline`) so a user can run Step 2 against a Step 1 job without re-uploading.
+Per-session state lives in the Postgres `Session` and `Job` tables (see `db/models.py`). Each `Job` carries a `legacy_id` column matching the disk `job_id` so the task layer's disk writes + the panel-side DB reads stay consistent. `session_routes.register_session_job(job_id, kind)` tags a new disk job with the current session at submission time; `db.jobs.update_by_legacy_id(...)` updates a row from the task layer.
+
+`failure_view.load_status_for_session(session_id)` returns the session's Job rows as dicts in the same shape the legacy on-disk status JSON used. Panels + the viewer fragment use it as their primary state source.
 
 ### `tasks.py` conventions
 
@@ -115,9 +133,29 @@ Tunables come from `.env` (see `.env.example`). Notable: `MAX_UPLOAD_SIZE`, `MAX
 
 ### Security boundary
 
-`security.py` (`FileValidator`, `handle_file_upload_secure`) is the choke point for user input — extension allowlist, size limits, ZIP-bomb checks, path-traversal prevention. Every upload should go through it; do not write raw `st.file_uploader` bytes to disk in new code. User-supplied job IDs (from text inputs) go through `FileValidator.validate_job_id` before any `os.path.join(RESULTS_DIR, job_id, ...)` — see `session_state.render_load_previous_widget` for the canonical input boundary.
+`security.py` (`FileValidator`, `handle_file_upload_secure`) is the choke point for user input — extension allowlist, size limits, ZIP-bomb checks, path-traversal prevention. Every upload should go through it; do not write raw `st.file_uploader` bytes to disk in new code. Disk-style job IDs round-trip through `FileValidator.validate_job_id` before any `os.path.join(RESULTS_DIR, job_id, ...)` (see the validation calls in `panels/cluster.py` and `panels/docking.py`).
 
-`rate_limiter.py` provides `check_upload_rate_limit` / `check_task_rate_limit`, backed by Redis. Pages call these before kicking off Celery tasks. `RATE_LIMIT_ENABLED=false` in `.env` is the local-dev escape hatch.
+`rate_limiter.py` provides `check_upload_rate_limit` / `check_task_rate_limit`, backed by Redis. Panels call these before kicking off Celery tasks. `RATE_LIMIT_ENABLED=false` in `.env` is the local-dev escape hatch.
+
+### Mol* viewer + annotations
+
+The persistent Mol* viewer is a Streamlit Components v2 component (`components/molstar_viewer.py`). It loads our **own bundle** at `/app/static/js/molstar-bridge.js` — built from `frontend/src/index.ts` via Vite. Mol*'s default jsDelivr UMD only exposes the `Viewer` class; everything we need for programmatic residue selection (`MolScriptBuilder`, `StructureSelection`, `Color`, `StateTransforms`) is bundled-but-private. The bridge re-exposes a focused API on `window.molstarBridge.MolViewer` covering: `loadStructure`, `setCurrentModel`, `showPocketSurface`, `clearPocketSurfaces`, `showClusterOverpaint`, `clearClusterOverpaints`, `loadLigandPose`, `clearLigandPose`, `focusOnResidues`, `resetCamera`, `onResidueClick`.
+
+The Python signature accepts `structure_url`, `structure_format`, an `annotations` dict, `current_model`, and an `on_residue_clicked_change` callback. The component JS owns idempotent annotation application (fingerprint check on `lastAnnotations`) and frame switching via `setCurrentModel`.
+
+`components/molstar_annotations.py` is the Python side. `derive_session_annotations(session_id, results_dir)` is what the viewer fragment calls every 3 s; the panels' own annotation writes are for UI state (`ligand_pose`, `focus`, table-driven pocket surfaces).
+
+### Frontend build (Mol* bridge)
+
+The bridge bundle ships in git at `static/js/molstar-bridge.js` + `static/js/molstar-bridge.css`. Contributors who don't edit it don't need Node. To rebuild after editing `frontend/src/`:
+
+```bash
+cd frontend
+npm install      # one-time
+npm run build    # writes the .js + .css into ../static/js/
+```
+
+Commit the rebuilt artefacts alongside your source change. Pinned to `molstar@4.7.0` + `vite@5.2.11` in `frontend/package.json`. Dockerfile does NOT install Node — `COPY . .` brings the pre-built bundle in.
 
 ## External binaries
 

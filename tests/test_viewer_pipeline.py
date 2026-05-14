@@ -46,29 +46,33 @@ def _write_synthetic_pdb_frames(tmpdir: Path, n_frames: int = 3) -> Path:
     return pdbs_dir
 
 
-def test_convert_produces_nonempty_mmcif(tmp_path):
+def test_convert_produces_nonempty_pdb(tmp_path):
     from viewer_pipeline import convert_pdb_dir_to_viewer
 
     pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=3)
-    out_path = tmp_path / "viewer.cif"
+    out_path = tmp_path / "viewer.pdb"
     result = convert_pdb_dir_to_viewer(pdbs_dir, out_path)
     assert result == out_path
     assert out_path.exists()
     assert out_path.stat().st_size > 0
 
 
-def test_mmcif_is_gemmi_parseable_with_expected_model_count(tmp_path):
-    """Round-trip: the file we wrote contains exactly 3 models."""
+def test_pdb_is_multi_model_with_expected_count(tmp_path):
+    """Round-trip: the file we wrote contains exactly 3 MODEL blocks."""
     import gemmi
 
     from viewer_pipeline import convert_pdb_dir_to_viewer
 
     pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=3)
-    out_path = tmp_path / "viewer.cif"
+    out_path = tmp_path / "viewer.pdb"
     convert_pdb_dir_to_viewer(pdbs_dir, out_path)
 
     structure = gemmi.read_structure(str(out_path))
     assert len(structure) == 3, f"expected 3 models, got {len(structure)}"
+    # Multi-model PDB grammar — header / MODEL / ENDMDL bracketing.
+    text = out_path.read_text()
+    assert text.count("\nMODEL ") + text.startswith("MODEL ") >= 3
+    assert text.count("\nENDMDL") >= 3
 
 
 def test_empty_directory_raises_viewer_conversion_error(tmp_path):
@@ -77,7 +81,7 @@ def test_empty_directory_raises_viewer_conversion_error(tmp_path):
     empty = tmp_path / "no_pdbs"
     empty.mkdir()
     with pytest.raises(ViewerConversionError, match="No .pdb files"):
-        convert_pdb_dir_to_viewer(empty, tmp_path / "out.cif")
+        convert_pdb_dir_to_viewer(empty, tmp_path / "out.pdb")
 
 
 def test_estimate_viewer_size_sums_input_files(tmp_path):
@@ -112,7 +116,7 @@ def test_tasks_write_viewer_file_size_cap_writes_warning(tmp_path, monkeypatch):
     info = tasks._write_viewer_file(job_id, str(pdbs_dir))
     assert "viewer_file_warning" in info
     assert "viewer_file_path" not in info
-    assert not (tmp_path / "results" / job_id / "viewer.cif").exists()
+    assert not (tmp_path / "results" / job_id / "viewer.pdb").exists()
 
 
 def test_tasks_write_viewer_file_success_returns_path(tmp_path, monkeypatch):
@@ -124,7 +128,7 @@ def test_tasks_write_viewer_file_success_returns_path(tmp_path, monkeypatch):
     monkeypatch.setattr(tasks, "RESULTS_DIR", str(tmp_path / "results"))
 
     info = tasks._write_viewer_file(job_id, str(pdbs_dir))
-    assert info["viewer_file_format"] == "mmcif"
+    assert info["viewer_file_format"] == "pdb"
     out_path = Path(info["viewer_file_path"])
     assert out_path.exists()
     assert out_path.stat().st_size > 0
