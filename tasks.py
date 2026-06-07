@@ -88,6 +88,58 @@ def _update_status_file(job_id, status, step=None, task_id=None, result_info=Non
 update_status_file = _update_status_file
 
 
+_EXC_LINE_RE = re.compile(
+    r"^([A-Za-z][\w.]*?(?:Error|Exception|Warning|Exit))\s*:\s*(.+)$",
+    re.MULTILINE,
+)
+
+
+def _extract_last_exception_line(stderr: str | None) -> str | None:
+    """Return the LAST `XError: …` / `XException: …` line from stderr, or None.
+
+    Walks the captured subprocess stderr from the bottom and grabs the
+    one line a human cares about — e.g. ``ValueError: The number of
+    observations cannot be determined on an empty distance matrix``.
+    Skip lines from logging output that *contain* `Error:` but aren't
+    actual raises (those don't start the line with the exception type).
+    """
+    if not stderr:
+        return None
+    matches = list(_EXC_LINE_RE.finditer(stderr))
+    if not matches:
+        return None
+    m = matches[-1]
+    return f"{m.group(1)}: {m.group(2).strip()}"
+
+
+def _load_done_pairs(partial_csv_path: str) -> set[tuple[str, str]]:
+    """Return the set of (receptor, ligand) pairs already in the partial CSV.
+
+    Used by ``run_docking_task`` to resume after a worker restart (the
+    celery ack-late path re-delivers killed tasks). Empty set when:
+    the file doesn't exist; the file is corrupt or missing the receptor
+    / ligand columns; the file is present but empty. Never raises —
+    callers should treat empty as 'start fresh'.
+
+    Atomicity contract: the writer in ``run_docking_task`` rewrites the
+    whole CSV via tmp + os.replace after every successful pair, so any
+    row present here represents a fully-completed smina invocation.
+    """
+    if not partial_csv_path or not os.path.exists(partial_csv_path):
+        return set()
+    try:
+        import pandas as _pd
+        df = _pd.read_csv(partial_csv_path)
+    except Exception:
+        return set()
+    if df.empty or not {"receptor", "ligand"}.issubset(df.columns):
+        return set()
+    return set(
+        (str(r), str(l))
+        for r, l in zip(df["receptor"], df["ligand"])
+    )
+
+
 def _fail_job(celery_task, job_id, stage, exc, log_path=None):
     """Single chokepoint for marking a Celery task FAILED on disk + backend.
 
@@ -153,10 +205,14 @@ def _write_viewer_file(job_id: str, pdb_dir: str) -> dict:
             logger.warning(f"viewer skipped for {job_id}: {msg}")
             return {"viewer_file_warning": msg}
 
-        convert_pdb_dir_to_viewer(pdb_dir_path, out_path)
+        build_info = convert_pdb_dir_to_viewer(pdb_dir_path, out_path)
         return {
-            "viewer_file_path": str(out_path),
+            "viewer_file_path": build_info["viewer_file_path"],
             "viewer_file_format": VIEWER_FILE_FORMAT,
+            "viewer_index_path": build_info["viewer_index_path"],
+            "viewer_stride": build_info["viewer_stride"],
+            "n_viewer_models": build_info["n_viewer_models"],
+            "n_extracted_frames": build_info["n_extracted_frames"],
         }
     except Exception as e:
         logger.warning(f"viewer file generation failed for {job_id}: {e}")
@@ -380,9 +436,84 @@ def _sdf_molecule_names(path: str) -> list[str]:
     return names or [""]
 
 
+# Canonical element symbols (periodic table). Used to confirm a
+# case-normalized atom-block token is a real element before rewriting it.
+_ELEMENT_SYMBOLS = frozenset(
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn "
+    "Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag "
+    "Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm "
+    "Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa "
+    "U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh "
+    "Fl Mc Lv Ts Og".split()
+)
+
+
+def _normalize_sdf_elements(path: str) -> int:
+    """Rewrite MDL V2000 atom-block element symbols to canonical case.
+
+    RCSB / Mol* ModelServer SDF exports copy element symbols straight
+    from mmCIF, which stores them all-uppercase (``CL``, ``BR``, ``FE``).
+    The MDL molfile spec wants mixed case (``Cl``, ``Br``, ``Fe``), and
+    OpenBabel silently mistypes the uppercase form — it emits PDBQT atoms
+    with no AutoDock type, which smina then rejects with "ATOM syntax
+    incorrect", failing the whole docking job. Single-letter symbols
+    (``C``, ``N``, ``O``) are unaffected: uppercase is already canonical.
+
+    Rewrites ``path`` in place, but only when something actually
+    changes. Returns the number of atom lines corrected. Safe no-op for
+    V3000 blocks (their counts line reports 0 atoms), for query/wildcard
+    atoms (``*``, ``R#``, ``LP``…), for non-molfiles, and for files
+    already in canonical case.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return 0
+
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = [ln[:-1] if ln.endswith("\r") else ln for ln in text.split("\n")]
+
+    fixed = 0
+    i = 0
+    n = len(lines)
+    while i + 3 < n:
+        # The 4th line of every molfile is the counts line; its first
+        # three chars are the atom count. A non-numeric value means this
+        # isn't a molfile we understand — bail and leave the file alone.
+        try:
+            natoms = int(lines[i + 3][0:3])
+        except ValueError:
+            break
+        # V2000 atom lines are fixed-format: the element symbol is a
+        # 3-char field at columns 32-34 (0-indexed 31:34).
+        for a in range(i + 4, min(i + 4 + natoms, n)):
+            ln = lines[a]
+            if len(ln) < 34:
+                continue
+            sym = ln[31:34].strip()
+            if not sym or not sym.isalpha():
+                continue
+            canon = sym[0].upper() + sym[1:].lower()
+            if canon != sym and canon in _ELEMENT_SYMBOLS:
+                lines[a] = ln[:31] + f"{canon:<3}" + ln[34:]
+                fixed += 1
+        # Skip to the line after this molecule's ``$$$$`` delimiter.
+        j = i + 4 + natoms
+        while j < n and lines[j].strip() != "$$$$":
+            j += 1
+        i = j + 1
+
+    if fixed:
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(newline.join(lines))
+    return fixed
+
+
 def _prepare_ligands_with_progress(
     celery_task,
-    ligand_folder: str,
+    source_folder: str,
+    work_folder: str,
     *,
     gen_3d: bool = False,
     progress_low: int = 2,
@@ -390,12 +521,23 @@ def _prepare_ligands_with_progress(
 ) -> tuple[list[dict], dict[str, str]]:
     """Convert SDF/PDB ligand inputs to PDBQT, posting progress to the task.
 
-    Reads every non-PDBQT file in ``ligand_folder``, runs obabel with
-    ``-m`` (one PDBQT per molecule, what smina wants), and deletes the
-    source file on *full* success. Pre-counts molecules via
-    ``_count_sdf_molecules`` so progress reflects "N of M molecules
-    prepared". When ``gen_3d`` is true, passes ``--gen3d`` to obabel
-    (slower, but needed for 2D inputs).
+    ``source_folder`` is the user-uploaded ligand directory under
+    ``/app/uploads/ligands_<job>/`` — read-only inside hardened workers
+    (Phase C). ``work_folder`` lives under
+    ``/app/results/<job>/ligands/`` (read-write) and is where this helper
+    stages copies of the inputs *and* writes the converted PDBQT files.
+    Splitting the two directories keeps user uploads pristine and works
+    around the read-only mount.
+
+    Behaviour:
+      * Copies every ``*.sdf`` / ``*.pdb`` / ``*.pdbqt`` from
+        ``source_folder`` into ``work_folder`` (preserves PDBQT files
+        that don't need conversion).
+      * Runs obabel with ``-m`` (one PDBQT per molecule, what smina
+        wants) against each SDF / PDB copy inside ``work_folder``.
+      * Pre-counts molecules via ``_count_sdf_molecules`` so progress
+        reflects "N of M molecules prepared". ``gen_3d=True`` passes
+        ``--gen3d`` to obabel (slower, needed for 2D inputs).
 
     When obabel converts *fewer* PDBQT than the input held (a malformed
     SDF record, an obabel error), the shortfall is **recorded, not
@@ -406,7 +548,7 @@ def _prepare_ligands_with_progress(
       * ``conversion_failures`` — list of ``{source_file, expected,
         converted, error}`` records, empty on a clean conversion.
       * ``ligand_names`` — ``{pdbqt_stem: display_name}`` map (B11.21),
-        also written to ``ligand_names.json`` in ``ligand_folder``, so
+        also written to ``ligand_names.json`` in ``work_folder``, so
         the docking grid can show real molecule names instead of
         ``<stem>_<N>`` PDBQT stems.
 
@@ -415,9 +557,32 @@ def _prepare_ligands_with_progress(
     prep + dock stages.
     """
     import glob as _glob
-    folder = ligand_folder
+    import shutil
+
+    os.makedirs(work_folder, exist_ok=True)
+
+    # Stage every ligand input from the RO source into the RW work dir.
+    # Already-PDBQT files come along unchanged — smina reads them
+    # directly. SDF/PDB files get converted in-place by obabel below.
+    for src in sorted(_glob.glob(os.path.join(source_folder, "*"))):
+        if not src.lower().endswith((".sdf", ".pdb", ".pdbqt")):
+            continue
+        dst = os.path.join(work_folder, os.path.basename(src))
+        if not os.path.exists(dst):
+            shutil.copy2(src, dst)
+        # RCSB / Mol* ModelServer SDF exports use mmCIF-style uppercase
+        # element symbols that obabel mistypes (see _normalize_sdf_elements).
+        # Fix the staged copy before conversion — idempotent, so re-staged
+        # files are fine. Uploads stay pristine; only this RW copy changes.
+        # Best-effort: a normalization hiccup must never block ligand prep.
+        if dst.lower().endswith(".sdf"):
+            try:
+                _normalize_sdf_elements(dst)
+            except Exception:
+                pass
+
     inputs = sorted(
-        p for p in _glob.glob(os.path.join(folder, "*"))
+        p for p in _glob.glob(os.path.join(work_folder, "*"))
         if p.lower().endswith((".sdf", ".pdb"))
     )
     if not inputs:
@@ -520,9 +685,10 @@ def _prepare_ligands_with_progress(
                 "converted": n_produced,
                 "error": err,
             })
-            # Leave the source file in place so it stays inspectable.
+            # Leave the staged source in place so it stays inspectable.
         else:
-            # Full success — drop the source so the dir holds only PDBQT.
+            # Full success — drop the staged source so the work dir
+            # only holds PDBQT files (cleaner for the smina glob below).
             try:
                 os.remove(path)
             except OSError:
@@ -532,323 +698,13 @@ def _prepare_ligands_with_progress(
     # robustness) and return it so run_docking_task can label the CSV.
     if ligand_names:
         try:
-            with open(os.path.join(folder, "ligand_names.json"), "w") as fh:
+            with open(os.path.join(work_folder, "ligand_names.json"), "w") as fh:
                 json.dump(ligand_names, fh)
         except OSError:
             pass
 
     return conversion_failures, ligand_names
 
-
-@celery_app.task(bind=True)
-def run_pockethunter_pipeline(self, xtc_file_path, topology_file_path, job_id, stride=10, num_threads=None,
-                               min_prob=0.5, clustering_method='dbscan', run_docking=False,
-                               ligand_folder=None, num_poses=10, exhaustiveness=8, ph_value=7.4,
-                               box_size_x=20.0, box_size_y=20.0, box_size_z=20.0):
-    """
-    PocketHunter full pipeline: extract → detect → cluster → (optional) dock.
-    Each stage reports real progress via Celery state updates.
-
-    Progress ranges:
-      0  –  25%  Extract frames to PDB
-      25 –  60%  Detect pockets (p2rank)
-      60 –  80%  Cluster pockets
-      80 –  97%  Molecular docking (optional)
-    """
-    from task_errors import ClusteringFoundNoClusters, DetectionProducedNoOutput
-
-    # B11.21: p2rank thread count is .env-driven (Config.P2RANK_THREADS),
-    # not user-facing. ``num_threads`` is kept as an optional override.
-    if num_threads is None:
-        num_threads = Config.P2RANK_THREADS
-
-    pipeline_start = time.time()
-    output_folder_job = os.path.join(RESULTS_DIR, job_id)
-    os.makedirs(output_folder_job, exist_ok=True)
-    error_log_path = os.path.join(output_folder_job, 'error.log')
-
-    # ── Stage 1: Extract frames ──────────────────────────────────────────
-    output_pdb_dir = os.path.join(output_folder_job, 'pdbs')
-    os.makedirs(output_pdb_dir, exist_ok=True)
-
-    self.update_state(state='PROGRESS', meta={
-        'current_step': 'Extracting frames from trajectory…',
-        'progress': 0,
-        'stage': 'extract',
-    })
-
-    cmd_extract = [
-        'python', POCKETHUNTER_CLI, 'extract_to_pdb',
-        '--xtc', os.path.abspath(xtc_file_path),
-        '--topology', os.path.abspath(topology_file_path),
-        '--outfolder', os.path.abspath(output_pdb_dir),
-        '--stride', str(stride),
-        '--overwrite',
-    ]
-
-    try:
-        _run_stage(self, cmd_extract, POCKETHUNTER_DIR, EXTRACT_TIMEOUT, 0, 25,
-                   'Extracting frames', job_id=job_id)
-    except Exception as e:
-        _fail_job(self, job_id, 'extract', e, log_path=error_log_path)
-        raise
-
-    pdb_files = [f for f in os.listdir(output_pdb_dir) if f.endswith('.pdb')]
-    self.update_state(state='PROGRESS', meta={
-        'current_step': f'Extracted {len(pdb_files)} frames — starting pocket detection…',
-        'progress': 25,
-        'stage': 'detect',
-        'frames_extracted': len(pdb_files),
-    })
-
-    # ── Stage 2: Detect pockets ──────────────────────────────────────────
-    output_pockets_dir = os.path.join(output_folder_job, 'pockets')
-    os.makedirs(output_pockets_dir, exist_ok=True)
-
-    cmd_detect = [
-        'python', POCKETHUNTER_CLI, 'detect_pockets',
-        '--infolder', os.path.abspath(output_pdb_dir),
-        '--outfolder', os.path.abspath(output_pockets_dir),
-        '--numthreads', str(num_threads),
-        '--compress',
-        '--overwrite',
-    ]
-
-    try:
-        _run_stage(self, cmd_detect, POCKETHUNTER_DIR, DETECT_TIMEOUT, 25, 60,
-                   'Detecting pockets', job_id=job_id)
-    except Exception as e:
-        _fail_job(self, job_id, 'detect', e, log_path=error_log_path)
-        raise
-
-    pockets_csv = os.path.join(output_pockets_dir, 'pockets.csv')
-    pockets_detected = 0
-    if os.path.exists(pockets_csv):
-        try:
-            pockets_detected = len(pd.read_csv(pockets_csv))
-        except Exception:
-            pass
-
-    # F1 — silent p2rank failure detection (exit 0 but missing/empty CSV).
-    # Two distinct sub-cases share the same error type but get different
-    # messages so the panel + live log can guide the user to the right
-    # diagnosis path.
-    if not os.path.exists(pockets_csv):
-        err = DetectionProducedNoOutput(
-            f"p2rank ran for job {job_id} but pockets.csv was never written. "
-            "This is a silent crash — see the persisted stderr in "
-            f"results/{job_id}/.live/detecting_pockets.stderr.log."
-        )
-        _fail_job(self, job_id, 'detect', err, log_path=error_log_path)
-        raise err
-    if pockets_detected == 0:
-        err = DetectionProducedNoOutput(
-            f"Detection completed but produced zero pockets for job {job_id} "
-            "(pockets.csv has 0 rows). Two likely causes:\n"
-            "  1. p2rank ran cleanly but found no pockets above its default "
-            "probability threshold — common on small or flat-surface proteins "
-            "(e.g. T4 lysozyme).\n"
-            "  2. p2rank crashed mid-write and emitted only the CSV header.\n"
-            f"Check the live log + results/{job_id}/.live/detecting_pockets.stderr.log "
-            "to distinguish."
-        )
-        _fail_job(self, job_id, 'detect', err, log_path=error_log_path)
-        raise err
-
-    self.update_state(state='PROGRESS', meta={
-        'current_step': f'Detected {pockets_detected} pockets — clustering…',
-        'progress': 60,
-        'stage': 'cluster',
-        'pockets_detected': pockets_detected,
-    })
-
-    # ── Stage 3: Cluster pockets ─────────────────────────────────────────
-    output_clusters_dir = os.path.join(output_folder_job, 'pocket_clusters')
-    os.makedirs(output_clusters_dir, exist_ok=True)
-
-    cmd_cluster = [
-        'python', POCKETHUNTER_CLI, 'cluster_pockets',
-        '--infile', os.path.abspath(pockets_csv),
-        '--outfolder', os.path.abspath(output_clusters_dir),
-        '--min_prob', str(min_prob),
-        '--method', clustering_method,
-        '--overwrite',
-    ]
-    if clustering_method == 'dbscan':
-        cmd_cluster.append('--hierarchical')
-
-    try:
-        _run_stage(self, cmd_cluster, POCKETHUNTER_DIR, CLUSTER_TIMEOUT, 60, 80,
-                   'Clustering pockets', job_id=job_id)
-    except Exception as e:
-        _fail_job(self, job_id, 'cluster', e, log_path=error_log_path)
-        raise
-
-    reps_csv = os.path.join(output_clusters_dir, 'cluster_representatives.csv')
-    representatives = 0
-    if os.path.exists(reps_csv):
-        try:
-            representatives = len(pd.read_csv(reps_csv))
-        except Exception:
-            pass
-
-    # F2 — DBSCAN zero-clusters detection
-    if not os.path.exists(reps_csv) or representatives == 0:
-        err = ClusteringFoundNoClusters(
-            f"Clustering produced no representatives for job {job_id} at min_prob={min_prob}. "
-            "Lower min_prob (try 0.3 or 0.2), reduce the trajectory stride, "
-            "or switch to the Hierarchical method."
-        )
-        _fail_job(self, job_id, 'cluster', err, log_path=error_log_path)
-        raise err
-
-    self.update_state(state='PROGRESS', meta={
-        'current_step': f'Found {representatives} cluster representatives',
-        'progress': 80,
-        'stage': 'cluster_done',
-        'representatives': representatives,
-    })
-
-    # v2 Phase B B2: generate viewer.cif from the PDB folder for Mol*.
-    # Best-effort; failure surfaces in result_info, doesn't fail the pipeline.
-    viewer_info = _write_viewer_file(job_id, output_pdb_dir)
-
-    results_overview = {
-        'status': 'completed',
-        'output_folder': output_folder_job,
-        'frames_extracted': len(pdb_files),
-        'pockets_detected': pockets_detected,
-        'representatives': representatives,
-        'cluster_job_id': job_id,
-        'processing_time': time.time() - pipeline_start,
-        **viewer_info,
-    }
-
-    # ── Stage 4: Optional docking ────────────────────────────────────────
-    if run_docking and ligand_folder and os.path.exists(reps_csv):
-        self.update_state(state='PROGRESS', meta={
-            'current_step': 'Starting molecular docking…',
-            'progress': 80,
-            'stage': 'docking',
-        })
-        try:
-            from step4_docking import pdb_to_pdbqt, calc_box, run_smina, parse_smina_log
-            from prody import parsePDB, writePDB
-            import glob as _glob
-            from docking_pair_failures import build_pair_failure_record
-            from task_errors import NoPosesParsed
-
-            df_rep = pd.read_csv(reps_csv)
-            docking_out = os.path.join(output_folder_job, 'docking')
-            os.makedirs(docking_out, exist_ok=True)
-            pdb_source_dir = output_pdb_dir
-
-            ligand_paths = sorted(_glob.glob(os.path.join(ligand_folder, '*.pdbqt')))
-            total_pairs = max(1, len(df_rep) * len(ligand_paths))
-            completed_pairs = 0
-            list_outputs = []
-            pair_failures: list[dict] = []
-
-            for rec_idx, (_, pocket_row) in enumerate(df_rep.iterrows()):
-                receptor_pdb_pred = pocket_row['File name']
-                receptor_pdb = receptor_pdb_pred[:-12] if receptor_pdb_pred.endswith('_predictions') else receptor_pdb_pred
-                receptor_pdb_path = os.path.join(pdb_source_dir, receptor_pdb)
-
-                if not os.path.exists(receptor_pdb_path):
-                    logger.warning(f"Receptor PDB not found, skipping: {receptor_pdb_path}")
-                    miss_err = FileNotFoundError(f"Receptor PDB not found: {receptor_pdb_path}")
-                    for lp in ligand_paths:
-                        pair_failures.append(build_pair_failure_record(
-                            os.path.basename(receptor_pdb), os.path.basename(lp), miss_err,
-                        ))
-                    completed_pairs += len(ligand_paths)
-                    continue
-
-                self.update_state(state='PROGRESS', meta={
-                    'current_step': f'Preparing receptor {rec_idx + 1}/{len(df_rep)}: {receptor_pdb}',
-                    'progress': 80 + int((completed_pairs / total_pairs) * 17),
-                    'stage': 'docking',
-                })
-
-                syst = parsePDB(receptor_pdb_path)
-                protein = syst.select('protein')
-                protein_pdb = os.path.join(docking_out, os.path.basename(receptor_pdb))
-                writePDB(protein_pdb, protein)
-                receptor_pdbqt = protein_pdb[:-4] + '.pdbqt'
-                pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
-
-                box_center, _, _ = calc_box(protein_pdb, pocket_row['residues'])
-                box_size = [box_size_x, box_size_y, box_size_z]
-                dock_folder = protein_pdb[:-4] + '_smina'
-                os.makedirs(dock_folder, exist_ok=True)
-
-                for lig_path in ligand_paths:
-                    self.update_state(state='PROGRESS', meta={
-                        'current_step': (
-                            f'Docking {os.path.basename(lig_path)} → '
-                            f'receptor {rec_idx + 1}/{len(df_rep)}'
-                        ),
-                        'progress': 80 + int((completed_pairs / total_pairs) * 17),
-                        'stage': 'docking',
-                        'pairs_done': completed_pairs,
-                        'pairs_total': total_pairs,
-                    })
-                    out_path = os.path.join(dock_folder, os.path.basename(lig_path)[:-6] + '_smina.sdf')
-                    try:
-                        output_txt, _ = run_smina(
-                            lig_path, receptor_pdbqt, out_path, box_center, box_size,
-                            Config.SMINA_PATH, num_poses=num_poses, exhaustiveness=exhaustiveness,
-                            log_dir=dock_folder,
-                        )
-                        df_out = parse_smina_log(output_txt)
-                        if not df_out.empty:
-                            df_out['ligand'] = os.path.basename(lig_path)[:-6]
-                            df_out['receptor'] = os.path.basename(receptor_pdb)
-                            df_out['receptor_path'] = receptor_pdbqt
-                            df_out['receptor_pdb_path'] = protein_pdb
-                            df_out['output_sdf'] = out_path
-                            list_outputs.append(df_out)
-                        else:
-                            pair_failures.append(build_pair_failure_record(
-                                os.path.basename(receptor_pdb),
-                                os.path.basename(lig_path),
-                                NoPosesParsed(
-                                    "smina exited 0 but produced no parseable poses — "
-                                    "likely a malformed input PDBQT or an empty result file."
-                                ),
-                                stderr_tail=output_txt[-1500:] if output_txt else "",
-                            ))
-                    except Exception as dock_pair_err:
-                        logger.warning(f"Docking pair failed ({receptor_pdb} / {os.path.basename(lig_path)}): {dock_pair_err}")
-                        pair_failures.append(build_pair_failure_record(
-                            os.path.basename(receptor_pdb), os.path.basename(lig_path), dock_pair_err,
-                        ))
-                    completed_pairs += 1
-
-            pair_failures_log = _write_pair_failure_log(job_id, pair_failures, total_pairs)
-            pairs_failed = len(pair_failures)
-            results_overview['pairs_total'] = total_pairs
-            results_overview['pairs_succeeded'] = total_pairs - pairs_failed
-            results_overview['pairs_failed'] = pairs_failed
-            results_overview['pair_failures'] = pair_failures
-            results_overview['pair_failures_log'] = pair_failures_log
-
-            if list_outputs:
-                df_dock = pd.concat(list_outputs, ignore_index=True)
-                docking_results_file = os.path.join(docking_out, 'docking_results.csv')
-                df_dock.to_csv(docking_results_file, index=False)
-                results_overview['docking_poses'] = len(df_dock)
-                results_overview['docking_results_file'] = docking_results_file
-            else:
-                results_overview['docking_poses'] = 0
-        except Exception as dock_err:
-            logger.warning(f"Optional docking step failed: {dock_err}")
-            results_overview['docking_error'] = str(dock_err)
-
-    _update_status_file(job_id, 'completed', 'Full pipeline completed', task_id=self.request.id,
-                        result_info=results_overview)
-    self.update_state(state='SUCCESS', meta=results_overview)
-    return results_overview
 
 
 @celery_app.task(bind=True)
@@ -870,7 +726,11 @@ def run_find_pockets_task(
     Same on-disk layout and pockets.csv schema as the legacy two-task flow, so
     Step 2 (Cluster Pockets) consumes the output unchanged.
     """
-    from find_pockets_helpers import progress_ranges, validate_find_pockets_inputs
+    from find_pockets_helpers import (
+        progress_ranges,
+        validate_find_pockets_inputs,
+        write_pdb_list_for_detect,
+    )
     from task_errors import DetectionProducedNoOutput
 
     # B11.21: p2rank thread count is .env-driven (Config.P2RANK_THREADS),
@@ -927,9 +787,44 @@ def run_find_pockets_task(
         detect_infolder = output_pdb_dir
         frames_extracted = len(pdb_files)
     else:
-        # pdb_dir mode — skip extraction, use the supplied directory directly.
-        detect_infolder = os.path.abspath(pdb_input_dir)
+        # pdb_dir mode — skip extraction.
+        #
+        # Phase C C3: ``pdb_input_dir`` lives in the RO uploads bind-mount,
+        # so we can't write ``pdb_list.ds`` directly into it (the helper
+        # ``write_pdb_list_for_detect`` does that for prank). Copy the
+        # user-uploaded PDBs into the job's results dir (RW), then point
+        # detect at that copy. Architecturally parallel to the trajectory
+        # branch above, which also produces PDBs in ``results/<job>/pdbs/``.
+        import shutil
+        source_pdb_dir = os.path.abspath(pdb_input_dir)
+        detect_infolder = os.path.join(output_folder_job, 'pdbs')
+        os.makedirs(detect_infolder, exist_ok=True)
+        try:
+            for src in os.listdir(source_pdb_dir):
+                if not src.lower().endswith('.pdb'):
+                    continue
+                shutil.copy2(os.path.join(source_pdb_dir, src),
+                             os.path.join(detect_infolder, src))
+            write_pdb_list_for_detect(detect_infolder)
+        except FileNotFoundError as e:
+            _fail_job(self, job_id, 'input_validation', e)
+            raise
         frames_extracted = len([f for f in os.listdir(detect_infolder) if f.endswith('.pdb')])
+
+    # Viewer-renderability cap. The panel pre-rejects ZIP inputs that
+    # exceed this; the trajectory path can't until we know the post-stride
+    # frame count, so we fail fast here before spending detect/cluster
+    # cycles on something the user won't be able to view.
+    if frames_extracted > Config.MAX_TRAJECTORY_FRAMES:
+        suggested_stride = max(2, int(stride * (frames_extracted /
+                                                Config.MAX_TRAJECTORY_FRAMES) + 1))
+        msg = (
+            f"Trajectory produced {frames_extracted} frames at stride={stride}, "
+            f"over the MAX_TRAJECTORY_FRAMES={Config.MAX_TRAJECTORY_FRAMES} "
+            f"cap. Re-run with stride>={suggested_stride}."
+        )
+        _fail_job(self, job_id, 'frame_cap', ValueError(msg))
+        raise ValueError(msg)
 
     self.update_state(state='PROGRESS', meta={
         'current_step': f'Starting pocket detection on {frames_extracted} structures…',
@@ -1125,8 +1020,40 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
 
         stdout, stderr = process.communicate(timeout=60)
         elapsed = time.time() - start_time
+        returncode = process.returncode
+        hierarchical_fallback = False
 
-        if process.returncode == 0:
+        # Auto-fallback: PocketHunter's hierarchical refinement calls
+        # scipy.cluster.hierarchy.linkage on the per-cluster data; with
+        # a single-member DBSCAN cluster scipy raises ValueError ("empty
+        # distance matrix") and the CLI exits 1. We can't gracefully
+        # patch the vendored CLI; instead re-run without `--hierarchical`
+        # so the user gets the DBSCAN-only result rather than a silent
+        # failure. Only fires on the exact known signature.
+        _HIERARCHICAL_CRASH_SIG = (
+            "The number of observations cannot be determined "
+            "on an empty distance matrix"
+        )
+        if (returncode != 0 and dbscan_hierarchical
+                and stderr and _HIERARCHICAL_CRASH_SIG in stderr):
+            logger.warning(
+                "cluster job %s: hierarchical refinement crashed on "
+                "single-member DBSCAN cluster; retrying without --hierarchical",
+                job_id,
+            )
+            retry_cmd = [c for c in command if c != '--hierarchical']
+            retry = subprocess.run(
+                retry_cmd, cwd=current_working_dir,
+                capture_output=True, text=True, encoding='utf-8',
+                timeout=CLUSTER_TIMEOUT,
+            )
+            returncode = retry.returncode
+            stdout = retry.stdout
+            stderr = retry.stderr
+            hierarchical_fallback = (returncode == 0)
+            elapsed = time.time() - start_time
+
+        if returncode == 0:
             # Find output files (check for both possible naming conventions)
             clustered_pockets_csv_abs = os.path.join(output_clusters_dir, 'pockets_clustered.csv')
             if not os.path.exists(clustered_pockets_csv_abs):
@@ -1227,22 +1154,40 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
             _update_status_file(job_id, 'completed', 'Pocket clustering completed successfully',
                 task_id=self.request.id, result_info={
                     'total_pockets': total_pockets, 'clusters_found': clusters_found,
-                    'representatives': representatives, 'processing_time': elapsed})
+                    'representatives': representatives, 'processing_time': elapsed,
+                    'hierarchical_fallback': hierarchical_fallback,
+                })
             self.update_state(state='SUCCESS', meta=results_overview)
             return results_overview
         else:
-            error_message = f"Pocket clustering failed. Return code: {process.returncode}"
-            _update_status_file(job_id, 'failed', error_message, task_id=self.request.id)
+            # Surface the *actionable* exception line (e.g. the scipy
+            # ValueError) rather than burying it under 500 lines of
+            # DBSCAN optimization chatter. Full stderr stays in `step`
+            # for diagnostics.
+            exc_line = _extract_last_exception_line(stderr)
+            error_message = (
+                f"Pocket clustering failed. Return code: {returncode}"
+            )
+            step_with_tail = f"{error_message}. Stderr: {stderr[-2000:]}"
+            structured_error = {
+                'exc_type': 'Exception',
+                'exc_message': exc_line or error_message,
+                'stage': 'cluster',
+            }
+            _update_status_file(
+                job_id, 'failed', step_with_tail,
+                task_id=self.request.id, error=structured_error,
+            )
             meta = {
                 'status': error_message,
                 'stdout': stdout,
                 'stderr': stderr,
                 'output_folder': job_main_output_folder,
                 'exc_type': 'Exception',
-                'exc_message': f"{error_message}. Stderr: {stderr}"
+                'exc_message': exc_line or f"{error_message}. Stderr: {stderr[-1000:]}",
             }
             self.update_state(state='FAILURE', meta=meta)
-            raise Exception(f"{error_message}. Stderr: {stderr}")
+            raise Exception(exc_line or f"{error_message}. Stderr: {stderr}")
 
     except subprocess.TimeoutExpired:
         error_message = f"Pocket clustering timed out after {CLUSTER_TIMEOUT} seconds"
@@ -1376,25 +1321,69 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, n
         # progress updates. The panel just saves files; conversion
         # happens server-side so obabel runtime appears on the
         # docking progress bar (2-15% of total).
+        #
+        # Phase C C3: uploads (where ``ligand_folder`` points) is RO
+        # inside hardened workers — obabel can't write its PDBQT
+        # outputs there. Stage everything into a writable work dir
+        # under the job's results tree.
+        ligand_work_folder = os.path.join(RESULTS_DIR, job_id, 'ligands')
         ligand_conversion_failures, ligand_names = _prepare_ligands_with_progress(
-            self, ligand_folder, gen_3d=gen_3d, progress_low=2, progress_high=15,
+            self, ligand_folder, ligand_work_folder,
+            gen_3d=gen_3d, progress_low=2, progress_high=15,
         )
-        ligand_paths = sorted(_glob.glob(os.path.join(ligand_folder, '*.pdbqt')))
+        ligand_paths = sorted(_glob.glob(os.path.join(ligand_work_folder, '*.pdbqt')))
         if not ligand_paths:
             raise FileNotFoundError(
-                f"No usable PDBQT ligand files in {ligand_folder} after prep."
+                f"No usable PDBQT ligand files in {ligand_work_folder} after prep."
             )
 
         n_receptors = len(df_rep_pockets)
         n_ligands = len(ligand_paths)
         total_pairs = n_receptors * n_ligands
-        completed_pairs = 0
         pair_failures: list[dict] = []
+
+        # T4: pair-level resume. The Celery retry path (task_acks_late +
+        # task_reject_on_worker_lost in celery_app.py) re-delivers a killed
+        # task with the same task_id and args, which means the same job_id
+        # and output dir. Reading any existing partial CSV lets us skip
+        # pairs already finished, so a resumed docking job costs only the
+        # remaining work rather than starting from scratch.
+        #
+        # Atomicity contract (read by this resume + written by the loop
+        # below): the partial CSV is rewritten via tmp + os.replace after
+        # every pair, so any row present here represents a fully-completed
+        # smina invocation. Do not change the writer to use mode='a' or
+        # any non-atomic primitive — it would let a torn write resurface
+        # as a "done" pair here and silently skip real work.
+        _partial_csv = os.path.join(output_folder_job, 'docking_results.csv')
+        done_pairs = _load_done_pairs(_partial_csv)
+        list_outputs: list[pd.DataFrame] = []
+        if done_pairs:
+            # Re-load the CSV so the final concat at end-of-task includes
+            # the resumed rows. _load_done_pairs only returns the set; we
+            # re-read here because we want the full DataFrame.
+            try:
+                list_outputs.append(pd.read_csv(_partial_csv))
+                logger.info(
+                    "docking %s: resuming, %d pairs already done in %s",
+                    job_id, len(done_pairs), _partial_csv,
+                )
+            except Exception:
+                # _load_done_pairs already returned a non-empty set, so the
+                # file is parseable; this branch should never fire. Be defensive.
+                done_pairs = set()
+                list_outputs = []
+        completed_pairs = len(done_pairs)
 
         _start_msg = (
             f'Starting docking: {n_receptors} receptors × '
             f'{n_ligands} ligands = {total_pairs} pairs'
         )
+        if done_pairs:
+            _start_msg = (
+                f'Resuming docking: {len(done_pairs)}/{total_pairs} pairs '
+                'already complete; running the rest'
+            )
         self.update_state(state='PROGRESS', meta={
             'current_step': _start_msg,
             'progress': 5,
@@ -1404,7 +1393,6 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, n
         })
         _live(_start_msg)
 
-        list_outputs = []
         prepped: list[dict] = []
 
         # ── Phase 1: prepare every receptor once (progress 5 → 15) ──
@@ -1481,7 +1469,15 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, n
         # next ligand, so the incremental docking_results.csv grows a
         # full ligand row at a time.
         for lig_idx, lig_path in enumerate(ligand_paths):
+            _lig_stem = os.path.basename(lig_path)[:-6]
             for rec in prepped:
+                # T4: skip pairs already in the partial CSV from a previous
+                # (killed-then-requeued) run. The key shape matches what
+                # the writer below sets on each df_out row.
+                _pair_key = (os.path.basename(rec['receptor_pdb']), _lig_stem)
+                if _pair_key in done_pairs:
+                    continue
+
                 # Progress: 15 → 95 across all pairs
                 progress = 15 + int((completed_pairs / total_pairs) * 80)
 

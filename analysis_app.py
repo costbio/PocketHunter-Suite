@@ -62,52 +62,31 @@ _STAGE_UNLOCK_REQUIREMENT = {
 
 
 # Job ``kind`` values that can produce a ``viewer_file_path``.
-_VIEWER_PRODUCING_KINDS = ("find_pockets", "pipeline")
+_VIEWER_PRODUCING_KINDS = ("find_pockets",)
 
 
 def _compute_completed_kinds(jobs: list[dict]) -> set[str]:
-    """Return the set of analysis kinds with at least one completed job.
-
-    Expands ``pipeline`` completion into both ``find_pockets`` and
-    ``cluster`` since the chained task does both.
-    """
+    """Return the set of analysis kinds with at least one completed job."""
     completed: set[str] = set()
     for row in jobs or []:
         if row.get("status") not in ("completed", "SUCCESS", "success"):
             continue
         kind = row.get("kind")
-        if kind == "pipeline":
-            completed.update({"find_pockets", "cluster"})
-        elif kind:
+        if kind:
             completed.add(kind)
     return completed
 
 
-def _render_header(completed_kinds: set[str]) -> None:
-    """Render the brutalist header strip with the dynamic stage indicator.
+def _render_header(resolved) -> None:
+    """Delegates to ``landing.render_masthead`` — single source of truth.
 
-    Brand identity (``POCKETHUNTER/SUITE`` + ``[v.2.0]``) matches
-    ``landing.render_landing`` so the title doesn't change when the
-    user enters a session.
+    Kept as a thin wrapper so the analysis-page render flow doesn't grow
+    a direct ``import landing`` at module top (avoids a circular import:
+    landing.py already imports from session_routes which analysis_app
+    also touches). Lazy import inside the function sidesteps that risk.
     """
-    parts = []
-    for kind, label in _STAGE_INDICATORS:
-        mark = "●" if kind in completed_kinds else "○"
-        parts.append(f"{mark} {label}")
-    stages_html = '<span class="sep">►</span>'.join(
-        f"<span>{p}</span>" for p in parts
-    )
-    html = f"""
-<div class="bh" style="margin-top: 4px;">
-    <div class="bh-row">
-        <span class="bh-title">POCKETHUNTER/SUITE</span>
-        <span class="bh-version">[v.2.0]</span>
-    </div>
-    <div class="bh-rule"></div>
-    <div class="bh-stages">{stages_html}</div>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+    from landing import render_masthead_fragment
+    render_masthead_fragment(resolved=resolved)
 
 
 def _pick_latest_viewer(jobs: Iterable[dict]) -> Optional[dict]:
@@ -170,6 +149,7 @@ def _viewer_fragment(resolved) -> None:
     """
     from config import Config
     from failure_view import load_status_for_session
+    from panels._shared import viewer_target_for_filename
     from viewer_pipeline import VIEWER_FILE_FORMAT, link_viewer_for_session
 
     session = resolved.session
@@ -233,12 +213,13 @@ def _viewer_fragment(resolved) -> None:
     from components.molstar_annotations import derive_session_annotations
     from components.molstar_viewer import molstar_viewer
 
-    # Streamlit's bidi-component key validation rejects ``__`` in the
-    # base. ``secrets.token_urlsafe`` occasionally emits double
-    # underscores; legacy sessions created before the generator was
-    # fixed (db.sessions.new_short_code) still contain them. Sanitise
-    # here too so those old sessions keep working.
-    safe_short = session.short_code.replace("__", "_")
+    # Streamlit's bidi-component key validator rejects ``__`` in the
+    # base. The central :func:`db.sessions.safe_bidi_short` handles
+    # both legacy short_codes containing ``__`` AND short_codes
+    # starting/ending with ``_`` (which would otherwise produce ``__``
+    # once concatenated as ``f"viewer_{...}"`` below).
+    from db.sessions import safe_bidi_short
+    safe_short = safe_bidi_short(session.short_code)
 
     # DB-derived sections (pockets, clusters) overlaid by panel-set UI
     # state (ligand_pose, focus). UI state wins — the docking panel's
@@ -263,9 +244,38 @@ def _viewer_fragment(resolved) -> None:
     # widget has rendered — so panels that want to drive the slider
     # have to push into ``target_key`` instead. The slider's
     # ``on_change`` callback keeps the two in sync when the user drags.
-    n_frames = int(info.get("frames_extracted") or 1)
+    #
+    # B12 (viewer stride): ``target_key`` now carries the *logical
+    # filename* (e.g. ``trajectory_..._fit_84.pdb``) rather than a dense
+    # model index. The fragment resolves it to a :class:`ViewerFrameTarget`
+    # via the manifest; if the frame is in the strided set we stay in
+    # overview mode (slider + setCurrentModel), else focused mode
+    # (single-frame URL + slider hidden).
+    n_extracted = int(info.get("n_extracted_frames") or info.get("frames_extracted") or 1)
+    n_viewer_models = int(info.get("n_viewer_models") or 0)
+    if n_viewer_models <= 0:
+        # Legacy job (built before the stride feature) — manifest is
+        # missing, so the dense map *is* the viewer's model list.
+        n_viewer_models = n_extracted
+
     target_key = f"viewer_frame_target_{safe_short}"
     slider_key = f"viewer_frame_slider_{safe_short}"
+    pockets_legacy_id = (latest or {}).get("legacy_id") or ""
+
+    def _resolve_target_filename(value):
+        """Accept the new (filename) and legacy (dense int) shapes."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        # Legacy callers wrote an int — translate it to a logical filename
+        # via the dense map so the fragment's branch logic stays uniform.
+        if isinstance(value, int):
+            from panels._shared import _frame_index_map  # local: cheap
+            for fname, idx in _frame_index_map(pockets_legacy_id).items():
+                if idx == value:
+                    return fname
+        return None
 
     # B11.18: on the Dock stage, the bottom slider switches semantics —
     # it walks the docking receptors (each at its own trajectory frame)
@@ -275,22 +285,78 @@ def _viewer_fragment(resolved) -> None:
     receptors = st.session_state.get(f"docking_receptors_{safe_short}", [])
     dock_mode = active_stage == "Dock" and bool(receptors)
 
+    mode = "overview"        # overview | focused
+    current_model = 1        # 1-based index into viewer.pdb (overview)
+    focused_url = None       # set in focused mode → single-frame PDB URL
+    focused_logical = None   # 1-based logical index for the "Frame N" label
+    # Resolved on-disk filename of whichever frame is currently rendered.
+    # Used by the "↓ Download view" button below to round-trip the user
+    # back to a per-frame PDB.
+    current_logical_filename = None
+    current_logical_index = None
+
     if dock_mode:
         recv_idx_key = f"docking_active_receptor_idx_{safe_short}"
         recv_idx = max(0, min(int(st.session_state.get(recv_idx_key, 0)), len(receptors) - 1))
-        fmi = receptors[recv_idx].get("frame_model_index")
-        current_frame = int(fmi) if fmi else 1
-    elif n_frames > 1:
-        st.session_state.setdefault(target_key, 1)
-        # If something (e.g. the pocket table) bumped ``target_key`` and
-        # we haven't synced the slider yet, push the new value into the
-        # widget's state *before* it renders this pass. Safe because the
-        # slider hasn't been instantiated yet in this run.
-        if st.session_state.get(slider_key) != st.session_state[target_key]:
-            st.session_state[slider_key] = int(st.session_state[target_key])
-        current_frame = int(st.session_state[target_key])
+        rec = receptors[recv_idx]
+        rec_filename = rec.get("frame_filename")
+        rec_target = (
+            viewer_target_for_filename(pockets_legacy_id, rec_filename)
+            if rec_filename else None
+        )
+        if rec_target is None:
+            # Legacy receptor row (frame_model_index only) — stay in
+            # overview at whatever index the panel published.
+            fmi = rec.get("frame_model_index")
+            current_model = int(fmi) if fmi else 1
+            current_logical_filename = rec_filename  # may be None
+        elif rec_target.viewer_model is not None:
+            current_model = int(rec_target.viewer_model)
+            current_logical_filename = rec_target.filename
+            current_logical_index = rec_target.logical_index
+        else:
+            mode = "focused"
+            focused_logical = rec_target.logical_index
+            focused_url = (
+                f"/app/static/{safe_short}/frames/{rec_target.filename}"
+            )
+            current_logical_filename = rec_target.filename
+            current_logical_index = rec_target.logical_index
     else:
-        current_frame = 1
+        target_value = _resolve_target_filename(st.session_state.get(target_key))
+        target = (
+            viewer_target_for_filename(pockets_legacy_id, target_value)
+            if target_value else None
+        )
+        if target is None:
+            # No selection (or legacy int couldn't be resolved) — overview at frame 1.
+            if n_viewer_models > 1:
+                st.session_state.setdefault(target_key, None)
+            current_model = 1
+            # Resolve model 1 → its logical filename via the manifest's
+            # inverse so the download button still works at idle.
+            from panels._shared import _viewer_manifest, _manifest_mtime_ns
+            _m = _viewer_manifest(pockets_legacy_id, _manifest_mtime_ns(pockets_legacy_id))
+            if _m:
+                _inv = {
+                    int(idx): fn
+                    for fn, idx in (_m.get("logical_to_viewer") or {}).items()
+                }
+                current_logical_filename = _inv.get(1)
+        elif target.viewer_model is not None:
+            current_model = int(target.viewer_model)
+            if st.session_state.get(slider_key) != current_model:
+                st.session_state[slider_key] = current_model
+            current_logical_filename = target.filename
+            current_logical_index = target.logical_index
+        else:
+            mode = "focused"
+            focused_logical = target.logical_index
+            focused_url = (
+                f"/app/static/{safe_short}/frames/{target.filename}"
+            )
+            current_logical_filename = target.filename
+            current_logical_index = target.logical_index
 
     # B11.1: bumped from 460 → 540. With the lonely segmented_control
     # hidden on fresh sessions (and tightened metric strips elsewhere),
@@ -298,15 +364,96 @@ def _viewer_fragment(resolved) -> None:
     # wants a different default.
     viewer_h = 540
 
+    # Surface JS-side load failures (Mol* threw inside loadStructureFromUrl).
+    # The component records the error in its state via load_error; without
+    # this callback, the failure is swallowed and the user sees an empty
+    # pane with no idea why.
+    load_error_key = f"viewer_load_error_{safe_short}"
+
+    def _on_load_error() -> None:
+        result = st.session_state.get(f"viewer_{safe_short}")
+        err = getattr(result, "load_error", None) if result else None
+        st.session_state[load_error_key] = err
+
+    # Pick the structure URL based on mode. Focused mode swaps to the
+    # single-frame PDB under ``static/<short>/frames/`` — Mol*'s
+    # ``loadStructure`` replaces the whole trajectory on URL change.
+    if mode == "focused" and focused_url:
+        active_structure_url = focused_url
+        active_current_model = 1
+    else:
+        active_structure_url = url
+        active_current_model = current_model
+
     molstar_viewer(
-        structure_url=url,
+        structure_url=active_structure_url,
         structure_format=fmt,
         annotations=annotations,
-        current_model=current_frame,
+        current_model=active_current_model,
         key=f"viewer_{safe_short}",
         height=viewer_h,
         on_residue_clicked_change=_on_residue_clicked,
+        on_load_error_change=_on_load_error,
     )
+
+    load_err = st.session_state.get(load_error_key)
+    if load_err:
+        st.error(
+            f"**Mol* couldn't load this trajectory.** {load_err}\n\n"
+            f"Common causes: too many frames for the browser to parse "
+            f"in memory; the structure has corrupt atom records; or the "
+            f"WebGL context was lost. Re-run Find Pockets with a larger "
+            f"stride (fewer frames) or try a different browser."
+        )
+
+    # Inline "download what's currently shown" button. Renders the
+    # currently-rendered single frame as PDB; bundles the active ligand
+    # pose (when present) into a ZIP alongside it. Hidden only when we
+    # genuinely have no on-disk frame to point at (e.g. an aborted job).
+    if current_logical_filename and pockets_legacy_id:
+        from downloads import current_view_artifact
+
+        frame_pdb_path = (
+            Path(Config.RESULTS_DIR)
+            / pockets_legacy_id
+            / "pdbs"
+            / current_logical_filename
+        )
+        if frame_pdb_path.exists():
+            pose = annotations.get("ligand_pose") if isinstance(annotations, dict) else None
+            pose_sdf = pose.get("sdf") if isinstance(pose, dict) else None
+            pose_label = pose.get("label") if isinstance(pose, dict) else None
+            label_n = current_logical_index or focused_logical or current_model
+            frame_label = f"F{label_n}"
+            try:
+                data, fname, mime = current_view_artifact(
+                    structure_path=frame_pdb_path,
+                    ligand_pose_sdf=pose_sdf,
+                    session_short=safe_short,
+                    frame_label=frame_label,
+                    ligand_label=pose_label,
+                )
+                st.download_button(
+                    label=(
+                        "↓ Download view (complex)"
+                        if pose_sdf
+                        else "↓ Download view (PDB)"
+                    ),
+                    data=data,
+                    file_name=fname,
+                    mime=mime,
+                    key=f"viewer_download_{safe_short}",
+                    help=(
+                        "Download the currently rendered frame. "
+                        + (
+                            "Bundles the active ligand pose alongside it as a ZIP."
+                            if pose_sdf
+                            else "Single-frame PDB suitable for PyMOL / ChimeraX."
+                        )
+                    ),
+                )
+            except OSError:
+                pass  # disk read failed; quietly omit the button
 
     if dock_mode:
         # B11.18: receptor slider — walks the selected ligand's pose
@@ -358,21 +505,67 @@ def _viewer_fragment(resolved) -> None:
         elif st.session_state[propagated_key] != cur_idx:
             st.session_state[propagated_key] = cur_idx
             st.rerun(scope="app")
-    elif n_frames > 1:
+    elif mode == "focused":
+        # Single-frame mode: slider is meaningless (we've replaced the
+        # trajectory with a one-model PDB), so swap it for a return button.
+        cap_label = (
+            f"Frame {focused_logical} of {n_extracted}"
+            if focused_logical else "Single frame"
+        )
+        cols = st.columns([4, 1])
+        with cols[0]:
+            st.caption(
+                f"Showing **{cap_label}** — single-frame mode "
+                f"(this frame isn't in the {n_viewer_models}-model overview)."
+            )
+        with cols[1]:
+            if st.button(
+                "↩ Overview",
+                key=f"viewer_focused_exit_{safe_short}",
+                use_container_width=True,
+                help="Return to the strided trajectory scrub view.",
+            ):
+                st.session_state.pop(target_key, None)
+                # Clear last-select sentinels so the next pocket click re-fires.
+                for k in list(st.session_state.keys()):
+                    if isinstance(k, str) and (
+                        k.startswith(f"fp_last_pocket_select_{safe_short}")
+                        or k.startswith(f"cluster_last_select_{safe_short}")
+                    ):
+                        st.session_state.pop(k, None)
+                st.rerun()
+    elif n_viewer_models > 1:
         def _sync_target():
             # User-driven drag → mirror the slider's value back into the
-            # target key so the next render picks it up.
-            st.session_state[target_key] = int(st.session_state[slider_key])
+            # target key so the next render picks it up. The slider walks
+            # the strided viewer models 1..n_viewer_models; we resolve
+            # the corresponding logical filename via the manifest's
+            # inverse map so the target remains filename-shaped.
+            from panels._shared import _viewer_manifest, _manifest_mtime_ns
+
+            new_idx = int(st.session_state[slider_key])
+            manifest = _viewer_manifest(
+                pockets_legacy_id, _manifest_mtime_ns(pockets_legacy_id)
+            )
+            inverse = {}
+            if manifest:
+                for fname, idx in (manifest.get("logical_to_viewer") or {}).items():
+                    inverse[int(idx)] = fname
+            st.session_state[target_key] = inverse.get(new_idx)
 
         st.slider(
-            f"Frame {current_frame} / {n_frames}",
+            f"Frame {current_model} / {n_viewer_models}",
             min_value=1,
-            max_value=n_frames,
+            max_value=n_viewer_models,
             step=1,
             key=slider_key,
             on_change=_sync_target,
             label_visibility="visible",
-            help="Drag to scrub through trajectory frames.",
+            help=(
+                "Drag to scrub through the strided trajectory. Click a "
+                "pocket / receptor row to jump to its exact frame "
+                "(loads on demand if outside this strided set)."
+            ),
         )
 
 
@@ -508,21 +701,10 @@ def render_analysis_app(resolved) -> None:
     session_jobs = load_status_for_session(resolved.session.id) or []
     completed_kinds = _compute_completed_kinds(session_jobs)
 
-    _render_header(completed_kinds)
+    _render_header(resolved)
 
-    # B11.21: "New session" affordance — there was previously no way back
-    # to the landing page from inside a session. Clears the ``s``/``edit``
-    # query params; the landing page then offers new-vs-open.
-    _, _new_sess_col = st.columns([6, 1])
-    with _new_sess_col:
-        if st.button(
-            "⌂ New session",
-            key="new_session_btn",
-            use_container_width=True,
-            help="Return to the landing page to start or open another analysis.",
-        ):
-            from session_routes import clear_session_query
-            clear_session_query()
+    # B11.22: the "New session" affordance now lives inside the header
+    # row (see _render_header) — the standalone button row is gone.
 
     # Progressive disclosure: build the segmented_control's options list
     # from ``completed_kinds`` so locked stages don't appear. Each entry
@@ -543,12 +725,19 @@ def render_analysis_app(resolved) -> None:
             unlocked.append("Dock")
 
     # Force-reset ``active_stage`` if the user is sitting on a stage that
-    # got locked (e.g., results were pruned after a refresh). Keeps the
-    # segmented_control's value in sync with its current options.
+    # got locked (e.g., results were pruned after a refresh, or session
+    # state was carried over from a previous session via NEW SESSION
+    # click). Keeps the segmented_control's value in sync with its
+    # current options.
+    #
+    # NB: NO st.rerun() here. We update session_state BEFORE the
+    # segmented_control widget instantiates a few lines down; per
+    # Streamlit's widget-state rules, the widget reads the new value at
+    # creation time. Re-running would cause an extra render iteration —
+    # user-visible as a flicker on NEW SESSION navigation.
     current = st.session_state.get("active_stage") or "Pockets"
     if current not in unlocked:
         st.session_state["active_stage"] = unlocked[-1]
-        st.rerun()
 
     # B11.1: only render the segmented_control when there's a real
     # choice — a lone "Pockets" button above an empty column looks

@@ -34,7 +34,7 @@ class NoPosesParsed(Exception):
 
     Raised per receptor/ligand pair, not per task — a pair-level partial
     failure. The task itself continues; the bookkeeping happens in
-    ``tasks.run_docking_task`` / ``tasks.run_pockethunter_pipeline``.
+    ``tasks.run_docking_task``.
     """
 
 
@@ -42,8 +42,8 @@ class ViewerConversionError(Exception):
     """Raised by ``viewer_pipeline`` when per-frame PDBs can't be combined
     into a multi-model mmCIF for the Mol* viewer.
 
-    Always handled gracefully by the task layer — find_pockets / pipeline
-    complete normally; the viewer simply lacks a trajectory and falls
+    Always handled gracefully by the task layer — find_pockets completes
+    normally; the viewer simply lacks a trajectory and falls
     back to its placeholder state. The error message is recorded in the
     Job row's ``result_info["viewer_file_error"]``.
     """

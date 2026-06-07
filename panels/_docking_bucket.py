@@ -11,7 +11,7 @@ Each bucket entry is a plain dict carrying every field the downstream
 docking task needs:
 
     {
-        "source_job_id": str,        # find_pockets / pipeline job_id
+        "source_job_id": str,        # find_pockets job_id
         "File name": str,            # used for receptor PDB lookup
         "Frame_pocket_index": str,   # dedup key, e.g. "84_1"
         "Frame": int,

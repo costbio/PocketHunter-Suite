@@ -52,9 +52,103 @@ def test_convert_produces_nonempty_pdb(tmp_path):
     pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=3)
     out_path = tmp_path / "viewer.pdb"
     result = convert_pdb_dir_to_viewer(pdbs_dir, out_path)
-    assert result == out_path
+    # Returns the full build manifest now (B12 stride).
+    assert Path(result["viewer_file_path"]) == out_path
+    assert result["n_viewer_models"] == 3
+    assert result["n_extracted_frames"] == 3
+    assert result["viewer_stride"] == 1
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+
+
+def test_stride_applied_when_count_exceeds_cap(tmp_path, monkeypatch):
+    """Stride decimates the input set when n_extracted > MAX_VIEWER_LOADED_FRAMES."""
+    import viewer_pipeline
+    from viewer_pipeline import convert_pdb_dir_to_viewer
+
+    monkeypatch.setattr(viewer_pipeline, "MAX_VIEWER_LOADED_FRAMES", 4)
+    pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=12)
+    out_path = tmp_path / "viewer.pdb"
+
+    info = convert_pdb_dir_to_viewer(pdbs_dir, out_path)
+    # ceil(12/4) = 3 → [::3] picks 4 of 12.
+    assert info["viewer_stride"] == 3
+    assert info["n_viewer_models"] == 4
+    assert info["n_extracted_frames"] == 12
+
+
+def test_manifest_logical_to_viewer_map_is_correct(tmp_path, monkeypatch):
+    """The manifest's logical_to_viewer map names every kept frame at its index."""
+    import json
+    import viewer_pipeline
+    from viewer_pipeline import convert_pdb_dir_to_viewer, sorted_frame_pdbs
+
+    monkeypatch.setattr(viewer_pipeline, "MAX_VIEWER_LOADED_FRAMES", 3)
+    pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=9)
+    out_path = tmp_path / "viewer.pdb"
+    convert_pdb_dir_to_viewer(pdbs_dir, out_path)
+
+    manifest = json.loads((tmp_path / "viewer_index.json").read_text())
+    all_sorted = [p.name for p in sorted_frame_pdbs(pdbs_dir)]
+    expected_selected = all_sorted[::3]  # ceil(9/3) = 3 → [::3] picks 3 of 9
+    assert manifest["stride"] == 3
+    assert manifest["n_extracted_frames"] == 9
+    assert manifest["n_viewer_models"] == 3
+    assert list(manifest["logical_to_viewer"].keys()) == expected_selected
+    assert list(manifest["logical_to_viewer"].values()) == [1, 2, 3]
+
+
+def test_manifest_written_with_stride_one_for_small_input(tmp_path):
+    """Stride-1 path (n <= cap) still writes a manifest with every frame mapped."""
+    import json
+    from viewer_pipeline import convert_pdb_dir_to_viewer
+
+    pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=3)
+    out_path = tmp_path / "viewer.pdb"
+    convert_pdb_dir_to_viewer(pdbs_dir, out_path)
+
+    manifest = json.loads((tmp_path / "viewer_index.json").read_text())
+    assert manifest["stride"] == 1
+    assert manifest["n_viewer_models"] == 3
+    assert len(manifest["logical_to_viewer"]) == 3
+    # Every logical filename maps to a dense 1-based index.
+    assert set(manifest["logical_to_viewer"].values()) == {1, 2, 3}
+
+
+def test_link_viewer_for_session_mirrors_manifest_and_frames(tmp_path, monkeypatch):
+    """link_viewer_for_session copies manifest + per-frame PDBs into static/."""
+    import viewer_pipeline
+    from viewer_pipeline import convert_pdb_dir_to_viewer, link_viewer_for_session
+
+    monkeypatch.setattr(viewer_pipeline, "MAX_VIEWER_LOADED_FRAMES", 2)
+    pdbs_dir = _write_synthetic_pdb_frames(tmp_path, n_frames=5)
+    job_dir = tmp_path / "job_dir"
+    job_dir.mkdir()
+    # link_viewer_for_session globs the viewer file's parent for pdbs/ —
+    # place the per-frame inputs there so the symlink loop finds them.
+    target_pdbs = job_dir / "pdbs"
+    target_pdbs.mkdir()
+    for p in pdbs_dir.glob("*.pdb"):
+        (target_pdbs / p.name).write_text(p.read_text())
+
+    out_path = job_dir / "viewer.pdb"
+    convert_pdb_dir_to_viewer(target_pdbs, out_path)
+
+    base = tmp_path / "repo"
+    base.mkdir()
+    url = link_viewer_for_session("short_abc", out_path, base)
+    assert url == "/app/static/short_abc/viewer.pdb"
+
+    static_root = base / "static" / "short_abc"
+    assert (static_root / "viewer.pdb").exists()
+    assert (static_root / "viewer_index.json").exists()
+    frames_root = static_root / "frames"
+    assert frames_root.is_dir()
+    # All 5 per-frame PDBs should be mirrored (including the 3 that
+    # aren't baked into the strided viewer.pdb).
+    assert sorted(p.name for p in frames_root.glob("*.pdb")) == sorted(
+        p.name for p in target_pdbs.glob("*.pdb")
+    )
 
 
 def test_pdb_is_multi_model_with_expected_count(tmp_path):
@@ -101,6 +195,24 @@ def test_estimate_returns_zero_for_empty_dir(tmp_path):
     assert estimate_viewer_size(empty) == 0
 
 
+def test_max_viewer_bytes_sourced_from_settings():
+    """MAX_VIEWER_BYTES is now env-configurable via settings (was a
+    hardcoded constant). Tracks the live settings value at module-load."""
+    import viewer_pipeline
+    from settings import settings
+
+    assert viewer_pipeline.MAX_VIEWER_BYTES == settings.MAX_VIEWER_BYTES
+
+
+def test_max_viewer_bytes_default_is_1gb():
+    """Default kept at 1 GB for backwards-compat with the previous
+    hardcoded value."""
+    from settings import Settings
+
+    fresh = Settings(_env_file=None)  # avoid picking up local .env overrides
+    assert fresh.MAX_VIEWER_BYTES == 1024 * 1024 * 1024
+
+
 def test_tasks_write_viewer_file_size_cap_writes_warning(tmp_path, monkeypatch):
     """When the size estimate exceeds MAX_VIEWER_BYTES, the helper returns a
     warning dict + skips conversion. No exception."""
@@ -132,6 +244,11 @@ def test_tasks_write_viewer_file_success_returns_path(tmp_path, monkeypatch):
     out_path = Path(info["viewer_file_path"])
     assert out_path.exists()
     assert out_path.stat().st_size > 0
+    # Manifest fields surface in result_info so the Job row carries them.
+    assert info["n_viewer_models"] == 3
+    assert info["n_extracted_frames"] == 3
+    assert info["viewer_stride"] == 1
+    assert Path(info["viewer_index_path"]).exists()
 
 
 def test_tasks_write_viewer_file_handles_failure(tmp_path, monkeypatch):

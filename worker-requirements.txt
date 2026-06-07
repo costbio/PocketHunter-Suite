@@ -1,0 +1,36 @@
+# Python deps for the slim worker image (C1).
+#
+# Worker-side only: NO streamlit / streamlit-* / py3Dmol / extra-streamlit-
+# components / ipywidgets. tasks.py + celery_app.py + the PocketHunter CLI
+# don't import Streamlit; the UI lives in the separate streamlit image.
+
+# Data processing
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+matplotlib>=3.7.0,<4.0.0
+seaborn>=0.12.0,<1.0.0
+
+# Scientific computing
+scipy>=1.10.0,<2.0.0
+scikit-learn>=1.3.0,<2.0.0
+mdtraj>=1.9.8,<2.0.0
+
+# Task queue & broker
+celery>=5.3.0,<6.0.0
+redis>=4.6.0,<5.0.0
+
+# Persistence (workers write Job rows via _update_status_file)
+sqlalchemy>=2.0,<3.0
+alembic>=1.13,<2.0
+psycopg[binary]>=3.1,<4.0
+pydantic-settings>=2.0,<3.0
+
+# Per-frame PDB → multi-model mmCIF (workers run this during find_pockets)
+gemmi>=0.6.5,<1.0
+
+# Utilities
+python-dotenv>=1.0.0,<2.0.0
+tqdm>=4.65.0,<5.0.0
+# B3.3: MIME sniffing on uploaded files (defence-in-depth above the
+# extension allowlist). Needs libmagic1 in the system layer of the image.
+python-magic>=0.4.27,<1.0

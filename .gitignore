@@ -33,3 +33,26 @@ frontend/dist/
 
 # Celery beat runtime schedule state — not source.
 celerybeat-schedule*
+
+# Dev / single-box Postgres data dir (bind-mount target). The named
+# volume retired 2026-05-16; the data now lives at the host path
+# pointed to by POSTGRES_DATA_DIR (defaults to ./pgdata). Never source.
+pgdata/
+
+# v2 Phase C C6: application log churn — operator-side, never source.
+# Worker containers (re)write this on every boot via logging_config.py's
+# rotating handler. logrotate (host-side, see docs/deployment.md) keeps
+# its size bounded in production.
+pockethunter-suite.log
+pockethunter-suite.log.*
+logs/
+
+# Editor swap files
+*.swp
+*.swo
+
+# Example datasets — carried to deployment hosts out-of-band, not in repo.
+examples/
+
+# Manuscript drafts — handled separately from tool source.
+docs/manuscript/

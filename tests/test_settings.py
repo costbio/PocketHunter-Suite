@@ -119,13 +119,21 @@ def test_paths_are_resolved(base_env, monkeypatch, tmp_path):
 def test_config_facade_attributes_match_settings(base_env):
     """The ``Config`` class re-exports settings under the v1 names."""
     # Need to re-import config.py with a clean Settings load. Because the
-    # module is cached, force a reload here.
+    # module is cached, force a reload here. Reload any other module that
+    # captured a settings field at module-load time, so subsequent tests
+    # don't see a settings singleton that's out of sync with module-level
+    # constants (e.g. viewer_pipeline.MAX_VIEWER_BYTES) → would otherwise
+    # surface as a baffling "viewer_pipeline.X != settings.X" diff in a
+    # later test.
     import importlib
+    import sys
 
     import settings as settings_mod
     import config as config_mod
     importlib.reload(settings_mod)
     importlib.reload(config_mod)
+    if "viewer_pipeline" in sys.modules:
+        importlib.reload(sys.modules["viewer_pipeline"])
 
     assert config_mod.Config.MAX_UPLOAD_SIZE == settings_mod.settings.MAX_UPLOAD_SIZE
     assert config_mod.Config.DATABASE_URL == settings_mod.settings.DATABASE_URL if hasattr(config_mod.Config, "DATABASE_URL") else True

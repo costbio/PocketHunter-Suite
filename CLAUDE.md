@@ -9,7 +9,7 @@ This repo has **two layers** that are easy to confuse:
 - **Top level** (`/`): the Streamlit + Celery web suite that orchestrates the pipeline. This is what you usually edit.
 - **`PocketHunter/`**: a vendored CLI tool (`pockethunter.py`) that the suite *shells out to* for the extract/detect/cluster steps. It has its own `CLAUDE.md` and `requirements.txt`. It is listed in `.gitignore` and is treated as a black-box subprocess by the suite — do not couple the suite to its internals beyond CLI args.
 
-Docking does **not** go through the PocketHunter CLI — it lives in `step4_docking.py` (the task-side helper) and is invoked from `panels/docking.py`; it calls `smina` directly.
+Docking does **not** go through the PocketHunter CLI — it lives in `step4_docking.py` (the task-side helper) and is invoked from `panels/docking.py`; it calls `smina` directly. The score grid the panel renders aggregates per-receptor best-pose affinities via `docking_aggregation.py` (`best_per_pair`, `aggregate_ensemble`, `ecr_scores`) — the four ranking metrics surfaced in the UI are Mean (arithmetic), Median (robust to one mis-scoring receptor), Best (RCS-style ensemble minimum), and ECR (Exponential Consensus Ranking, rank-based per Palacio-Rodríguez et al., Sci Rep 2019).
 
 ## Commands
 
@@ -22,28 +22,37 @@ docker compose logs -f streamlit    # Tail Streamlit logs
 docker compose restart celery-worker
 ```
 
-Compose brings up five containers: `redis`, `celery-worker` (queue `default`, concurrency 8), `celery-docking-worker` (queue `docking`, concurrency 4), `celery-beat` (scheduled cleanup), `streamlit` (port 8501). The repo is bind-mounted into the Streamlit container, so code edits hot-reload — but Celery workers do **not** hot-reload; restart them after editing `tasks.py`, `step4_docking.py`, or `celery_app.py`.
+Compose brings up six static services: `redis`, `postgres`, `docker-socket-proxy`, `orchestrator` (port 9001 → 9000), `celery-beat`, `streamlit` (port 8511 → 8501). The **orchestrator** (Phase C) then dynamically spawns hardened worker containers named `ph-worker-<pool>-<id>` — `FAST_POOL_SIZE` of them on the `default,celery` queue and `DOCKING_POOL_SIZE` on the `docking` queue. The repo is bind-mounted into `streamlit` so its code edits hot-reload — workers do **not** hot-reload; after editing `tasks.py`, `step4_docking.py`, or `celery_app.py`, kill the workers (`docker rm -f $(docker ps -aq -f label=pockethunter.role=worker)`) and the orchestrator's reconcile loop will respawn them within 30 s on the new code.
 
 ### Local development (no Docker)
+
+The orchestrator-managed pool design is Docker-native — on a bare host the simplest approximation is to run regular Celery workers (no container hardening, no recycle policy, no `/pool/status` API):
 
 ```bash
 pip install -r requirements.txt
 redis-server --daemonize yes
 
-# In separate terminals — note the queue routing must match docker-compose
+# In separate terminals — queue routing matches celery_app.task_routes
 celery -A celery_app worker -Q default,celery --concurrency=8 --loglevel=info
 celery -A celery_app worker -Q docking --concurrency=4 --loglevel=info
 celery -A celery_app beat --loglevel=info
 streamlit run main.py --server.port=8501
 ```
 
-`start_app.sh` and `setup.sh` reference a conda env named `dockspot` — these are legacy bootstrappers, not the documented path. Prefer Docker or a plain venv.
+Skipping the orchestrator here is fine for unit-test / panel-development work; the hardening only matters when running untrusted inputs (production). `legacy/start_app.sh` and `legacy/setup.sh` reference a conda env named `dockspot` — these are pre-v2 bootstrappers preserved only for historical reference (see `legacy/README.md`). Prefer Docker or a plain venv.
 
 ### Health / config / cleanup
 
 ```bash
-python health.py                                                # Redis + Celery + disk health
-python -c "from config import Config; Config.print_config()"    # Effective config
+# Orchestrator deep healthz (Phase C5): postgres + redis + docker + per-pool counts.
+curl -s http://localhost:9001/healthz | python3 -m json.tool
+
+# Worker pool snapshot — one entry per fast/docking pool with each worker's state.
+curl -s http://localhost:9001/pool/status | python3 -m json.tool
+
+# Legacy host-side health probe (still works; pre-dates the orchestrator).
+python health.py
+python -c "from config import Config; Config.print_config()"
 python -c "from resource_manager import ResourceManager; print(ResourceManager.get_usage_report())"
 python -c "from cleanup_job import cleanup_old_jobs_task; cleanup_old_jobs_task()"
 ```
@@ -63,7 +72,9 @@ docker compose run --rm streamlit alembic upgrade head
 
 The Postgres service uses a named volume `pgdata`; `docker compose down` keeps data, `docker compose down -v` wipes it. `DATABASE_URL` and `BASE_URL` are required env vars — `.env.example` has the defaults.
 
-The test suite under `tests/` runs with `pytest tests/` (190 tests as of the v2 Phase B B7 batch). DB tests live in `tests/test_db_*.py`; viewer/annotation tests live in `tests/test_viewer_*.py` and `tests/test_molstar_annotations.py`; panel-helper tests in `tests/test_panels_shared.py` and `tests/test_derive_session_annotations.py`.
+The test suite under `tests/` runs with `pytest tests/` (280 tests as of the v2 Phase C C5 batch). DB tests live in `tests/test_db_*.py`; viewer/annotation tests live in `tests/test_viewer_*.py` and `tests/test_molstar_annotations.py`; panel-helper tests in `tests/test_panels_shared.py` and `tests/test_derive_session_annotations.py`; orchestrator + abuse-limits + observability tests in `tests/test_orchestrator_*.py`, `tests/test_c4_abuse_limits.py`, `tests/test_c5_observability.py`.
+
+The streamlit container doesn't ship pytest by default — `docker compose exec streamlit pip install pytest pytest-mock` (one-shot) and then `docker compose exec streamlit python -m pytest tests/`.
 
 ## Architecture
 
@@ -75,9 +86,18 @@ Browser (Mol* viewer + panels) ──► Streamlit (main.py → analysis_app.py)
                                             ▼
                                   Postgres (sessions, jobs) + Redis
                                             │
-                                            ▼
-                                    Celery task (tasks.py)
-                                            │
+                                            ▼               ┌─ Orchestrator
+                                    Celery task (tasks.py)  │  /pool/status
+                                            │               │  /healthz
+                            spawned + recycled by ──────────┤  reconcile loop
+                            the Phase C orchestrator        │  spawns workers
+                                            │               │  via the socket
+                                            ▼               │  proxy (not host
+                            HARDENED WORKER CONTAINER       │  /var/run/...)
+                            (--read-only, cap-drop=ALL,     │
+                             UID 1000, tmpfs /tmp:exec,     │
+                             no public network egress)      │
+                                            │               │
                             ├─► subprocess: python PocketHunter/pockethunter.py <step>
                             │   (extract / detect / cluster)
                             └─► subprocess: smina  (docking)
@@ -87,7 +107,21 @@ Browser (Mol* viewer + panels) ──► Streamlit (main.py → analysis_app.py)
                        (per-session viewer.cif symlinked into static/<short>/)
 ```
 
-Redis is both the Celery broker and result backend. Two queues isolate workloads: the long, CPU-heavy `docking` queue has its own worker so docking jobs never starve pipeline steps. `worker_prefetch_multiplier = 1` is set globally — keep it that way; raising it makes one slow task block its sibling slots.
+Redis is both the Celery broker and result backend. **Two pools** (Phase C cut-over from the B-era two-worker setup): `fast_pool` consumes `default,celery` (find_pockets / cluster / pipeline tasks); `docking_pool` consumes `docking` (smina runs). A flood of slow docking jobs pins at most `DOCKING_POOL_SIZE` workers — the fast pool keeps draining. `worker_prefetch_multiplier = 1` is set globally — keep it that way; raising it makes one slow task block its sibling slots.
+
+### Phase C orchestrator + worker pools
+
+`orchestrator/` is its own slim Python service (Flask + Docker SDK, ~150 MB image). It runs in a container alongside Streamlit, talks to the Docker daemon **only** through `docker-socket-proxy` (tecnativa, allow-listed endpoints), and exposes:
+
+- `GET /healthz` — deep liveness (postgres + redis + docker + per-pool occupancy). Returns 200 or 503 + JSON naming the failing component.
+- `GET /pool/status` — per-pool snapshot: `{"fast": {desired, actual, workers:[…]}, "docking": {…}}`.
+- `POST /pool/recycle/<worker_id>` — manual tear-down + respawn.
+
+Worker hardening applied at spawn time (see `orchestrator/docker_sdk.py:_spawn_worker`): `--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --user 1000:1000 --tmpfs /tmp:exec,size=1g --tmpfs /scratch:size=4g --memory=$WORKER_MEMORY_LIMIT --cpus=$WORKER_CPU_LIMIT --network=pockethunter_internal --init`. The internal network has `internal: true` — workers have **no public internet egress**, but DNS to `redis` and `postgres` still resolves within the bridge.
+
+Worker recycle policy: after `WORKER_JOBS_BEFORE_RECYCLE` completed tasks (default 10), the orchestrator tears the container down and spawns a fresh replacement. `/app` is bind-mounted read-only into every worker so suite source changes hot-reload across recycles without rebuilding the image.
+
+`USE_ORCHESTRATOR=true` is the C3 default — the orchestrator owns the pools. Setting it to `false` runs the orchestrator process with zero workers (HTTP API still serves), useful for development scenarios where you want to run a celery worker outside the hardening (see "Local development" above).
 
 ### Single-page Streamlit shell (`main.py` + `analysis_app.py` + `panels/`)
 
@@ -119,6 +153,8 @@ Per-session state lives in the Postgres `Session` and `Job` tables (see `db/mode
 
 `failure_view.load_status_for_session(session_id)` returns the session's Job rows as dicts in the same shape the legacy on-disk status JSON used. Panels + the viewer fragment use it as their primary state source.
 
+**Worker write contract (Phase C C3).** Inside hardened workers (every container the orchestrator spawns) the bind mounts are `/app:ro`, `/app/uploads:ro`, `/app/results:rw`, `/app/logs:rw`. **Workers must never write to `/app/uploads`** — that mount holds raw user inputs and is read-only by design so a compromised worker can't tamper with another session's uploads. Any worker-generated artifact (obabel-converted PDBQTs, `pdb_list.ds`, anything else) belongs under `/app/results/<job_id>/`. The two places that broke this rule pre-fix (`tasks._prepare_ligands_with_progress` writing alongside SDF inputs in `ligands_<job>/`, and `find_pockets_helpers.write_pdb_list_for_detect` called against an uploads dir) now stage their inputs into `results/<job>/{ligands,pdbs}/` before any writes. Streamlit-side code paths (`panels/docking._prepare_ligand_dir`, `panels/find_pockets._submit`) still write uploads RW because the `streamlit` service has `/app/uploads` RW — only workers are gated.
+
 ### `tasks.py` conventions
 
 - `_run_stage(celery_task, command, cwd, timeout, prog_start, prog_end, stage_name)` is the only blessed way to run a subprocess inside a task. It redirects stdout/stderr to temp files — **don't switch to `subprocess.PIPE`**, p2rank and smina can emit >64 KB and deadlock the worker on the pipe buffer. It also emits `PROGRESS` state updates on a logarithmic ramp so the UI progress bar never lies by hitting 100% prematurely.
@@ -129,13 +165,19 @@ Per-session state lives in the Postgres `Session` and `Job` tables (see `db/mode
 
 `Config` is a class with classmethods, not an instance. **It validates on import** — if `PocketHunter/pockethunter.py` is missing, the upload/results dirs can't be created, or the Redis URL is malformed, `from config import Config` will raise `ConfigurationError` and crash the worker/UI at startup. Treat this as the contract: never bypass `Config.validate()`, and always use `Config.get_upload_path(job_id, filename)` / `Config.get_results_path(job_id)` / `Config.get_status_file(job_id)` for path construction (they sanitize filenames and prevent path traversal).
 
-Tunables come from `.env` (see `.env.example`). Notable: `MAX_UPLOAD_SIZE`, `MAX_ZIP_SIZE`, `RATE_LIMIT_*`, `CLEANUP_AFTER_DAYS`, `MAX_DOCKING_PDBS`, `DOCKING_TIMEOUT`, `P2RANK_PATH`, `SMINA_PATH`.
+Tunables come from `.env` (see `.env.example`). Notable: `MAX_UPLOAD_SIZE`, `MAX_ZIP_SIZE`, `RATE_LIMIT_*`, `CLEANUP_AFTER_DAYS`, `MAX_DOCKING_PDBS`, `DOCKING_TIMEOUT`, `P2RANK_PATH`, `SMINA_PATH`. Phase C added: `USE_ORCHESTRATOR`, `FAST_POOL_SIZE`, `DOCKING_POOL_SIZE`, `WORKER_CPU_LIMIT`, `WORKER_MEMORY_LIMIT`, `WORKER_JOBS_BEFORE_RECYCLE`, `WORKER_IMAGE_TAG`, `PER_SESSION_DISK_QUOTA_MB`, `MAX_CONCURRENT_FAST_JOBS`, `MAX_CONCURRENT_DOCKING_JOBS`, `MAX_CONCURRENT_FAST_PER_SESSION`, `MAX_CONCURRENT_DOCKING_PER_SESSION`, `MAX_SESSIONS_PER_IP_PER_DAY`.
 
 ### Security boundary
 
 `security.py` (`FileValidator`, `handle_file_upload_secure`) is the choke point for user input — extension allowlist, size limits, ZIP-bomb checks, path-traversal prevention. Every upload should go through it; do not write raw `st.file_uploader` bytes to disk in new code. Disk-style job IDs round-trip through `FileValidator.validate_job_id` before any `os.path.join(RESULTS_DIR, job_id, ...)` (see the validation calls in `panels/cluster.py` and `panels/docking.py`).
 
-`rate_limiter.py` provides `check_upload_rate_limit` / `check_task_rate_limit`, backed by Redis. Panels call these before kicking off Celery tasks. `RATE_LIMIT_ENABLED=false` in `.env` is the local-dev escape hatch.
+`rate_limiter.py` provides `check_upload_rate_limit` / `check_task_rate_limit` (per-browser sliding windows) and `check_session_create_rate_limit(ip)` (Phase C C4 — Redis-backed per-IP daily cap, fail-open on Redis hiccups). Panels call these before kicking off Celery tasks. `client_ip.py` resolves the client IP from `st.context.headers` (`X-Forwarded-For` first hop, fallback `X-Real-IP`, then `"unknown"`). `RATE_LIMIT_ENABLED=false` in `.env` is the local-dev escape hatch.
+
+**Phase C C4 abuse limits** (gated by `RATE_LIMIT_ENABLED`):
+
+- Per-session disk quota: `security.handle_file_upload_secure(..., session_id=)` raises `SessionQuotaExceeded` when accepting the upload would push `db.sessions.disk_usage_mb(session_id)` over `PER_SESSION_DISK_QUOTA_MB`. Enforced periodically by `cleanup_job.enforce_session_disk_quotas_task` (hourly beat schedule), which prunes oldest job dirs until the session is back under quota.
+- Per-pool concurrency: `panels/_shared.assert_submit_allowed(pool, session_id)` refuses a submission with `PoolCapHit` when `db.jobs.in_flight_count` hits `MAX_CONCURRENT_*_JOBS` (global) or `MAX_CONCURRENT_*_PER_SESSION` (per session). All three panels call it before `.delay()`.
+- Per-IP session creation: `landing.py` routes all three "Start new analysis" buttons through `_create_session_with_rate_limit()`.
 
 ### Mol* viewer + annotations
 
@@ -162,6 +204,10 @@ Commit the rebuilt artefacts alongside your source change. Pinned to `molstar@4.
 The pipeline depends on two binaries that are **not** Python packages:
 
 - **p2rank** (`prank`): used inside `PocketHunter/` for pocket prediction. The Dockerfile installs Java; `PocketHunter/first_setup.sh` downloads p2rank into `PocketHunter/tools/p2rank/`.
-- **smina**: used by `step4_docking.py` for docking. Compose bind-mounts `/usr/local/bin/smina` from the host read-only into the workers — make sure it's installed on the host before bringing the stack up, or set `SMINA_PATH` to point elsewhere.
+- **smina**: used by `step4_docking.py` for docking. Now installed *inside* the worker image via the micromamba `docking` conda env (`worker.Dockerfile`); previous host-bind-mount approach is gone. Set `SMINA_PATH` only if you're running locally (no Docker) and your smina binary isn't on `$PATH`.
 
 `install_docking_deps.sh` is a conda-specific helper (ProDy + OpenBabel) and is orthogonal to the Docker path.
+
+## Phase C deployment
+
+Public deployment guidance lives in `docs/deployment.md` (single-box / 64-core target sizing, reverse-proxy / TLS, production env-overrides, smoke checklist, rollback). The hardening checklist for every flag the orchestrator applies to spawned workers is in `docs/security.md` — refer to those before flipping the stack live for untrusted internet users.

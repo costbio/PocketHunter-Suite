@@ -1,7 +1,11 @@
 """Tests for find_pockets_helpers — input validation + progress ranges."""
 import pytest
 
-from find_pockets_helpers import progress_ranges, validate_find_pockets_inputs
+from find_pockets_helpers import (
+    progress_ranges,
+    validate_find_pockets_inputs,
+    write_pdb_list_for_detect,
+)
 
 
 class TestValidateFindPocketsInputs:
@@ -47,3 +51,29 @@ class TestProgressRanges:
     def test_unknown_mode_rejected(self):
         with pytest.raises(ValueError):
             progress_ranges("bogus")
+
+
+class TestWritePdbListForDetect:
+    def test_writes_basenames_one_per_line(self, tmp_path):
+        for name in ("frame_001.pdb", "frame_002.pdb", "frame_003.pdb"):
+            (tmp_path / name).write_text("ATOM\n")
+        out = write_pdb_list_for_detect(tmp_path)
+        assert out == tmp_path / "pdb_list.ds"
+        lines = out.read_text().splitlines()
+        assert lines == ["frame_001.pdb", "frame_002.pdb", "frame_003.pdb"]
+
+    def test_ignores_non_pdb_files(self, tmp_path):
+        (tmp_path / "a.pdb").write_text("")
+        (tmp_path / "ignore.txt").write_text("")
+        (tmp_path / "also.gro").write_text("")
+        out = write_pdb_list_for_detect(tmp_path)
+        assert out.read_text().splitlines() == ["a.pdb"]
+
+    def test_empty_dir_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="No .pdb"):
+            write_pdb_list_for_detect(tmp_path)
+
+    def test_accepts_string_path(self, tmp_path):
+        (tmp_path / "a.pdb").write_text("")
+        out = write_pdb_list_for_detect(str(tmp_path))
+        assert out.exists()

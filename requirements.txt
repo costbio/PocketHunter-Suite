@@ -52,6 +52,9 @@ gemmi>=0.6.5,<1.0
 python-dotenv>=1.0.0,<2.0.0
 tqdm>=4.65.0,<5.0.0
 ipython>=8.0.0,<9.0.0
+# B3.3: MIME sniffing on uploaded files (defence-in-depth above the
+# extension allowlist). Needs libmagic1 in the system layer of the image.
+python-magic>=0.4.27,<1.0
 
 # Optional (Jupyter Integration)
 ipywidgets>=8.0.0,<9.0.0 

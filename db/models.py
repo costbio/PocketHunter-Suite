@@ -139,3 +139,39 @@ class Job(Base):
 
     def __repr__(self) -> str:  # pragma: no cover — debug only
         return f"<Job id={self.id} kind={self.kind} status={self.status}>"
+
+
+class AuditEvent(Base):
+    """Server-side forensic record of every editor mutation (B3.4).
+
+    Captures session-create + per-stage submit events with the client
+    IP and any small structured ``details`` payload (e.g. the job_id
+    that was dispatched). Never surfaced in the UI — purely for
+    post-incident review.
+
+    Inserts are defensive: ``db.audit.record`` wraps the write so a DB
+    hiccup never blocks a user action.
+    """
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        _UUID, primary_key=True, default=uuid.uuid4
+    )
+    # Nullable because session-create happens *before* the row exists
+    # in some races; the helper always passes the new session_id but the
+    # FK is permissive to allow that ordering.
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        _UUID, ForeignKey("sessions.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    details: Mapped[dict | None] = mapped_column(_JSONB, nullable=True)
+    created_at: Mapped[_dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), index=True,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover — debug only
+        return f"<AuditEvent action={self.action} session={self.session_id} ip={self.ip}>"

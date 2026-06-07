@@ -1,7 +1,7 @@
 """Find-Pockets stage panel (v2 analysis app).
 
 Three states selected by ``st.session_state.find_pockets_task_id`` and
-the presence of a completed find_pockets/pipeline Job row:
+the presence of a completed find_pockets Job row:
 
     settings → running → results
 
@@ -29,38 +29,32 @@ from session_routes import register_session_job
 from tasks import run_find_pockets_task
 
 from panels._shared import (
-    frame_index_for_filename,
+    PoolCapHit,
+    _normalise_pdb_filename,
+    assert_submit_allowed,
     get_async_result,
     job_by_legacy_id,
     latest_job_of_kind,
     new_job_id,
-    pipeline_in_flight,
     render_failure,
+    render_pool_cap_error,
     render_running_progress,
+    viewer_target_for_filename,
 )
 
 
 _PANEL = "find_pockets"
-_VIEWER_PRODUCING_KINDS = ("find_pockets", "pipeline")
+_VIEWER_PRODUCING_KINDS = ("find_pockets",)
 
 
 def _live_task_or_none():
-    """Return ``(task, owner)`` for the in-flight task driving this panel.
+    """Return ``(task, owner)`` for the in-flight find_pockets task, or
+    ``(None, None)`` when nothing is running.
 
-    ``owner`` is ``"pipeline"`` when a Run-all task is taking the wheel,
-    ``"find_pockets"`` for a single-stage submission, or ``None`` when no
-    task is running.
+    ``owner`` is always ``"find_pockets"`` post-B2.1 (the pipeline task
+    was removed); the tuple shape is kept for back-compat with call
+    sites that destructure it.
     """
-    pipeline_id = st.session_state.get("pipeline_task_id")
-    if pipeline_id:
-        task = get_async_result(pipeline_id)
-        if task is not None and task.state in (
-            "PENDING", "PROGRESS", "RECEIVED", "STARTED", "RETRY",
-        ):
-            return task, "pipeline"
-        if task is not None and task.state == "FAILURE":
-            return task, "pipeline"
-
     fp_id = st.session_state.get("find_pockets_task_id")
     if fp_id:
         task = get_async_result(fp_id)
@@ -70,14 +64,6 @@ def _live_task_or_none():
 
 
 def _render_settings(session, is_editor: bool) -> None:
-    pipeline_busy = pipeline_in_flight()
-
-    if pipeline_busy:
-        st.warning(
-            "Pipeline run in progress — wait for it to finish or cancel "
-            "before kicking off a separate Find Pockets job."
-        )
-
     mode_label = st.radio(
         "Input source",
         ["From trajectory (XTC + topology)", "From PDB ZIP archive"],
@@ -121,7 +107,7 @@ def _render_settings(session, is_editor: bool) -> None:
     # B11.21: p2rank thread count is an .env knob (P2RANK_THREADS),
     # not user-facing — the "Threads" number_input was removed.
 
-    disabled = (not is_editor) or pipeline_busy
+    disabled = not is_editor
     label = "Find Pockets" if is_editor else "Find Pockets (read-only)"
     if not st.button(
         label,
@@ -132,10 +118,20 @@ def _render_settings(session, is_editor: bool) -> None:
     ):
         return
 
-    _submit(mode_is_trajectory)
+    _submit(mode_is_trajectory, session)
 
 
-def _submit(mode_is_trajectory: bool) -> None:
+def _submit(mode_is_trajectory: bool, session) -> None:
+    # Phase C C4: refuse early when the fast pool or this session's
+    # fast-pool slots are saturated. Avoids spending an upload before
+    # finding out we have nowhere to send the job.
+    sess_id = getattr(session, "id", None) if session else None
+    try:
+        assert_submit_allowed("fast", sess_id)
+    except PoolCapHit as e:
+        render_pool_cap_error(e)
+        return
+
     job_id = new_job_id("find_pockets")
     upload_dir = str(Config.UPLOAD_DIR)
 
@@ -148,8 +144,10 @@ def _submit(mode_is_trajectory: bool) -> None:
             st.error("Both trajectory and topology files are required.")
             return
         try:
-            xtc_path = str(handle_file_upload_secure(xtc_file, job_id, "trajectory_"))
-            topology_path = str(handle_file_upload_secure(topology_file, job_id, "topology_"))
+            xtc_path = str(handle_file_upload_secure(
+                xtc_file, job_id, "trajectory_", session_id=sess_id))
+            topology_path = str(handle_file_upload_secure(
+                topology_file, job_id, "topology_", session_id=sess_id))
         except RateLimitExceeded as e:
             st.error(f"Rate limit exceeded — wait {e.retry_after:.0f}s.")
             return
@@ -162,7 +160,8 @@ def _submit(mode_is_trajectory: bool) -> None:
             st.error("Upload a ZIP archive containing PDB files.")
             return
         try:
-            zip_path = handle_file_upload_secure(pdb_zip, job_id, "pdbs_")
+            zip_path = handle_file_upload_secure(
+                pdb_zip, job_id, "pdbs_", session_id=sess_id)
             FileValidator.validate_zip_file(Path(str(zip_path)))
         except SecurityError as e:
             st.error(f"ZIP upload failed: {e}")
@@ -178,8 +177,23 @@ def _submit(mode_is_trajectory: bool) -> None:
                 )
                 return
             zf.extractall(pdb_input_dir)
-        if sum(1 for _ in Path(pdb_input_dir).rglob("*.pdb")) == 0:
+        pdb_count = sum(1 for _ in Path(pdb_input_dir).rglob("*.pdb"))
+        if pdb_count == 0:
             st.error("No PDB files found after extracting the ZIP.")
+            return
+        # Frame-count cap: the Mol* viewer falls over silently above this,
+        # even when MAX_VIEWER_BYTES is satisfied. Refuse pre-dispatch with
+        # a clear message rather than letting the job run and produce an
+        # unviewable trajectory.
+        if pdb_count > Config.MAX_TRAJECTORY_FRAMES:
+            st.error(
+                f"This ZIP contains {pdb_count} PDB structures — over the "
+                f"`MAX_TRAJECTORY_FRAMES = {Config.MAX_TRAJECTORY_FRAMES}` "
+                f"limit. The viewer can't render this many frames "
+                f"reliably. Pre-stride your structures (e.g. keep every "
+                f"{max(2, pdb_count // Config.MAX_TRAJECTORY_FRAMES + 1)}th "
+                f"file) or raise the cap in .env."
+            )
             return
 
     try:
@@ -201,37 +215,50 @@ def _submit(mode_is_trajectory: bool) -> None:
     st.session_state.find_pockets_job_id = job_id
     st.session_state.find_pockets_task_id = task.id
     st.session_state.find_pockets_status = "running"
+    # B3.4: forensic record. Defensive — failure is logged, not raised.
+    from client_ip import client_ip
+    from db import audit
+    audit.record(sess_id, client_ip(), "find_pockets_submit",
+                 {"job_id": job_id, "mode": "trajectory" if mode_is_trajectory else "pdb_dir"})
     # B11.10: clear the force-settings flag — the new task IS the
     # transition we held the settings view to enable.
     st.session_state.pop("fp_force_settings", None)
     st.rerun()
 
 
-def _render_running(task, owner: str) -> None:
+@st.fragment(run_every="3s")
+def _render_running_fragment() -> None:
+    """Polls find_pockets task state every 3 s without re-rendering the whole page.
+
+    Mirrors the docking panel's ``_docking_running_fragment``. Before
+    this refactor, the running state used ``time.sleep(3); st.rerun()``
+    inside ``render_running_progress`` — that pattern caused the entire
+    analysis_app DOM to be APPENDED (faded) below itself on every tick
+    because the new render started while the old one was still visible.
+
+    Fragment scope means ``st.rerun()`` inside reruns *only this
+    block*, leaving the header/viewer/jobs panel alone. On terminal
+    states (SUCCESS / FAILURE / task vanished) we escalate to an
+    app-scope rerun so the panel transitions to the results view.
+    """
+    task, owner = _live_task_or_none()
+    if task is None:
+        st.rerun(scope="app")  # task gone — fall through to results/settings
+        return
+
     state = task.state
     if state == "FAILURE":
-        job_id = st.session_state.get(
-            "pipeline_job_id" if owner == "pipeline" else "find_pockets_job_id",
-            "",
-        )
+        job_id = st.session_state.get("find_pockets_job_id", "")
         render_failure(task, job_id, panel_prefix=owner)
         return
 
     if state == "SUCCESS":
-        # The task completed between renders. Clear the in-memory task_id
-        # so the next render falls through to the results state pulled
-        # from the DB.
-        if owner == "pipeline":
-            st.session_state.pop("pipeline_task_id", None)
-        else:
-            st.session_state.pop("find_pockets_task_id", None)
-            st.session_state.find_pockets_status = "completed"
-        st.rerun()
+        st.session_state.pop("find_pockets_task_id", None)
+        st.session_state.find_pockets_status = "completed"
+        st.rerun(scope="app")  # exit to results view
         return
 
-    if owner == "pipeline":
-        st.caption("Run-all pipeline in progress — find pockets is the first stage.")
-    render_running_progress(task, "Working on pocket detection…")
+    render_running_progress(task, "Working on pocket detection…", pool="fast")
 
 
 def _render_results(latest_job: dict, is_editor: bool, session) -> None:
@@ -420,18 +447,24 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
                 )
 
                 # Also jump the viewer to the trajectory frame where this
-                # pocket was detected. The panel writes to ``target_key``
-                # (NOT the slider's own key) — analysis_app's viewer
-                # fragment syncs it into the slider widget on the next
-                # render. We also guard with ``last_select_key`` so the
-                # frame doesn't get re-pushed every rerun while the same
-                # pocket stays selected — that would fight the user
+                # pocket was detected. The panel writes the logical PDB
+                # *filename* into ``target_key``; the viewer fragment
+                # resolves it via the stride manifest (overview snap if
+                # the frame is in the strided set, single-frame focused
+                # mode otherwise). We guard with ``last_select_key`` so
+                # the frame doesn't get re-pushed every rerun while the
+                # same pocket stays selected — that would fight the user
                 # dragging the slider afterwards.
                 file_name = row.get("File name") if "File name" in row else None
-                target_frame = frame_index_for_filename(
-                    results_job_id, str(file_name) if file_name else ""
+                norm_name = (
+                    _normalise_pdb_filename(str(file_name)) if file_name else None
                 )
-                safe_short = session.short_code.replace("__", "_")
+                target = (
+                    viewer_target_for_filename(results_job_id, norm_name)
+                    if norm_name else None
+                )
+                from db.sessions import safe_bidi_short
+                safe_short = safe_bidi_short(session.short_code)
                 last_select_key = f"fp_last_pocket_select_{safe_short}"
                 target_key = f"viewer_frame_target_{safe_short}"
                 fingerprint = (
@@ -440,11 +473,11 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
                     str(row.get("pocket_index", "")),
                 )
                 if (
-                    target_frame is not None
+                    target is not None
                     and st.session_state.get(last_select_key) != fingerprint
                 ):
                     st.session_state[last_select_key] = fingerprint
-                    st.session_state[target_key] = int(target_frame)
+                    st.session_state[target_key] = target.filename
                     st.rerun()
             else:
                 st.warning(
@@ -549,9 +582,9 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
 
 def render(session, is_editor: bool) -> None:
     """Stage-panel entry point dispatched from ``analysis_app.py``."""
-    task, owner = _live_task_or_none()
+    task, _owner = _live_task_or_none()
     if task is not None:
-        _render_running(task, owner)
+        _render_running_fragment()
         return
 
     # B11.10: the Re-run button sets this flag so the user lands back

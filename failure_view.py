@@ -340,7 +340,7 @@ def render_pair_failures_callout(task_result: Optional[dict], job_id: Optional[s
 
     Reads ``pairs_failed``, ``pairs_total``, ``pair_failures``, and
     ``pair_failures_log`` from ``task_result`` (the dict returned by
-    ``run_docking_task`` / ``run_pockethunter_pipeline`` on SUCCESS).
+    ``run_docking_task`` on SUCCESS).
     No-op if ``pairs_failed`` is missing or zero — fully successful tasks
     render nothing.
     """

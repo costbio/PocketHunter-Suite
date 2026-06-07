@@ -251,8 +251,8 @@ def merge_annotations(base: dict, **overrides: Any) -> dict:
     return base
 
 
-_POCKET_PRODUCING_KINDS = ("find_pockets", "pipeline")
-_CLUSTER_PRODUCING_KINDS = ("cluster", "pipeline")
+_POCKET_PRODUCING_KINDS = ("find_pockets",)
+_CLUSTER_PRODUCING_KINDS = ("cluster",)
 _COMPLETED_STATUSES = ("completed", "SUCCESS", "success")
 
 

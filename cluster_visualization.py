@@ -18,6 +18,14 @@ import numpy as np
 import pandas as pd
 
 
+# Pixels reserved for each cluster's "Cluster N" subplot title + the gap
+# above its heatmap content. Drives both the total figure height and
+# ``vertical_spacing`` in ``render_per_pocket_heatmap`` — Plotly's default
+# 0.04 fraction shrinks to ~17 px on a 420 px figure with 10 clusters, too
+# narrow for the title text to render uncropped above the cells.
+CLUSTER_TITLE_GAP_PX = 30
+
+
 # ── Pure helpers (no Streamlit) ──────────────────────────────────────────
 
 
@@ -560,15 +568,42 @@ def render_per_pocket_heatmap(
             })
         cluster_meta[cid] = meta_rows
 
-    # Subplot heights: proportional to each cluster's pocket count, with
-    # a floor so single-pocket clusters don't disappear. Total height
-    # capped so the heatmap doesn't dominate the viewport.
+    # Subplot heights: a compact figure (cap=500 px) — once pocket counts
+    # reach thousands the per-row resolution stops being meaningful and a
+    # bigger figure just forces scrolling. The previous 420 px cap was
+    # right; what was missing was a per-cluster *proportional* floor so
+    # small clusters next to a dominant one still get vertical room for
+    # their "Cluster N" title to render uncropped.
     n_clusters = len(cluster_ids)
     total_pockets = sum(len(cluster_meta[c]) for c in cluster_ids)
-    total_height = min(420, max(280, total_pockets * 16 + 40 * n_clusters))
-    raw_heights = [max(1.0, float(len(cluster_meta[c]))) for c in cluster_ids]
-    s = sum(raw_heights) or 1.0
-    row_heights = [h / s for h in raw_heights]
+    total_height = min(
+        500,
+        max(280, total_pockets * 16 + 40 * n_clusters),
+    )
+
+    # Each subplot needs ~CLUSTER_TITLE_GAP_PX of vertical space to render
+    # its title legibly. Compute a floor fraction, allocate that to every
+    # cluster, then distribute the remainder proportionally to cluster
+    # size. The result still sums to 1.0 by construction.
+    floor_frac = min(
+        CLUSTER_TITLE_GAP_PX / total_height,
+        0.95 / n_clusters,
+    )
+    remaining_frac = max(0.0, 1.0 - floor_frac * n_clusters)
+    raw = [float(len(cluster_meta[c])) for c in cluster_ids]
+    s = sum(raw) or 1.0
+    raw_proportions = [h / s for h in raw]
+    row_heights = [
+        floor_frac + p * remaining_frac for p in raw_proportions
+    ]
+
+    # ``vertical_spacing`` stays modest — Plotly renders subplot_titles
+    # *inside* each subplot's allocated band, so the per-row floor above
+    # is what actually saves the titles. The gap is just visual breathing
+    # room between rows. Clamp under Plotly's spacing × (n_rows-1) < 1
+    # limit so high cluster counts don't trip the validator.
+    n_gaps = max(1, n_clusters - 1)
+    vertical_spacing = min(0.04, 0.85 / n_gaps)
 
     from plotly.subplots import make_subplots
     import plotly.graph_objects as go
@@ -577,7 +612,7 @@ def render_per_pocket_heatmap(
         rows=n_clusters, cols=1,
         shared_xaxes=True,
         row_heights=row_heights,
-        vertical_spacing=0.04,
+        vertical_spacing=vertical_spacing,
         subplot_titles=[f"Cluster {cid}" for cid in cluster_ids],
     )
 

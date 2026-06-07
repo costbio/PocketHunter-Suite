@@ -1,0 +1,46 @@
+# Caddy reverse-proxy template for PocketHunter Suite.
+#
+# Copy to /etc/caddy/Caddyfile on the deploy host:
+#     sudo cp Caddyfile.example /etc/caddy/Caddyfile
+#     sudo systemctl reload caddy
+#
+# Caddy resolves {$DOMAIN} from the environment. Either set it in the
+# shell that starts caddy (`DOMAIN=app.example.com sudo systemctl start caddy`)
+# or — more typical — write it into /etc/caddy/Caddyfile.env which the
+# packaged Caddy systemd unit loads automatically:
+#     echo 'DOMAIN=app.example.com' | sudo tee -a /etc/caddy/Caddyfile.env
+#
+# The reverse-proxy points at 127.0.0.1:8511 — the host-local port the
+# streamlit container publishes when the production compose overlay
+# (docs/deployment.md § 3) is in effect.
+
+{$DOMAIN} {
+    encode gzip zstd
+
+    # Streamlit's UI uses long-lived WebSockets — Caddy's reverse_proxy
+    # auto-detects + upgrades them. The header_up lines preserve the
+    # client IP so the suite's per-IP rate limiter (and the audit log)
+    # sees the real caller, not 127.0.0.1.
+    reverse_proxy 127.0.0.1:8511 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP       {remote_host}
+        header_up Host            {host}
+    }
+
+    # Optional: a higher request body limit if you expect large XTC
+    # uploads through the reverse proxy. Default is 10 MiB. Match the
+    # suite's MAX_UPLOAD_SIZE (500 MB by default).
+    request_body {
+        max_size 500MB
+    }
+
+    # Optional but recommended: log to a rotated access log so the
+    # operator can audit traffic / hunt abuse separately from app logs.
+    log {
+        output file /var/log/caddy/pockethunter.access.log {
+            roll_size 100MB
+            roll_keep 7
+        }
+        format json
+    }
+}

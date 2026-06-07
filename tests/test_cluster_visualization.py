@@ -171,6 +171,92 @@ class TestCalculateHeatmapLayout:
         assert layout["height"] >= 400
 
 
+class TestPerPocketHeatmapTitleGap:
+    """The per-pocket heatmap stays compact (capped at 500 px) while
+    floor-allocating each subplot enough proportional height to render
+    its "Cluster N" title uncropped. Pins the height + row-height math."""
+
+    @staticmethod
+    def _compute(cluster_meta):
+        """Mirror the height + row_heights math from
+        ``render_per_pocket_heatmap``."""
+        from cluster_visualization import CLUSTER_TITLE_GAP_PX
+
+        cluster_ids = list(cluster_meta.keys())
+        n_clusters = len(cluster_ids)
+        total_pockets = sum(len(cluster_meta[c]) for c in cluster_ids)
+        total_height = min(500, max(280, total_pockets * 16 + 40 * n_clusters))
+        floor_frac = min(
+            CLUSTER_TITLE_GAP_PX / total_height, 0.95 / n_clusters
+        )
+        remaining = max(0.0, 1.0 - floor_frac * n_clusters)
+        raw = [float(len(cluster_meta[c])) for c in cluster_ids]
+        s = sum(raw) or 1.0
+        proportions = [h / s for h in raw]
+        row_heights = [floor_frac + p * remaining for p in proportions]
+        return total_height, row_heights, floor_frac
+
+    def test_height_stays_capped_at_500(self):
+        """A massive clustering doesn't blow up the figure height."""
+        cluster_meta = {
+            0: [{"i": i} for i in range(8000)],
+            1: [{"i": i} for i in range(500)],
+            2: [{"i": i} for i in range(300)],
+            3: [{"i": i} for i in range(200)],
+            4: [{"i": i} for i in range(100)],
+            5: [{"i": i} for i in range(50)],
+        }
+        total_height, _, _ = self._compute(cluster_meta)
+        assert total_height == 500
+
+    def test_height_floor_for_tiny_clustering(self):
+        """A single-cluster small case still gets the 280 px floor."""
+        cluster_meta = {0: [{"i": 0}]}
+        total_height, _, _ = self._compute(cluster_meta)
+        assert total_height == 280
+
+    def test_row_heights_sum_to_one(self):
+        """Floor + proportional remainder must still partition the figure."""
+        cluster_meta = {
+            0: [{"i": i} for i in range(8000)],
+            1: [{"i": i} for i in range(50)],
+            2: [{"i": 0}],
+        }
+        _, row_heights, _ = self._compute(cluster_meta)
+        assert sum(row_heights) == pytest.approx(1.0)
+
+    def test_small_cluster_gets_title_floor(self):
+        """In a dominant-big + tiny-small mix, the tiny cluster's row
+        is lifted to the title-gap floor (not crushed to ~0)."""
+        from cluster_visualization import CLUSTER_TITLE_GAP_PX
+
+        cluster_meta = {
+            0: [{"i": i} for i in range(8000)],
+            1: [{"i": i} for i in range(500)],
+            2: [{"i": i} for i in range(300)],
+            3: [{"i": i} for i in range(200)],
+            4: [{"i": i} for i in range(100)],
+            5: [{"i": 0}],
+        }
+        total_height, row_heights, floor_frac = self._compute(cluster_meta)
+        # The 1-pocket cluster gets at least the floor (it has near-zero
+        # proportional share but gains the full floor fraction).
+        smallest_px = row_heights[-1] * total_height
+        assert smallest_px >= CLUSTER_TITLE_GAP_PX - 1  # tolerance for FP
+
+    def test_proportions_preserved_when_all_clusters_above_floor(self):
+        """If every cluster's natural share exceeds the floor (small
+        clusterings), the floor binds for all equally, so the *ordering*
+        of row_heights matches cluster sizes."""
+        cluster_meta = {
+            0: [{"i": i} for i in range(20)],
+            1: [{"i": i} for i in range(5)],
+            2: [{"i": 0}],
+        }
+        _, row_heights, _ = self._compute(cluster_meta)
+        assert row_heights[0] > row_heights[1] > row_heights[2]
+
+
 class TestBuildPerPocketMatrix:
     @staticmethod
     def _df():

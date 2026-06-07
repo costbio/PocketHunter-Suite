@@ -111,6 +111,130 @@ def check_disk_usage_task():
         return {'status': 'error', 'error': str(e)}
 
 
+@celery_app.task
+def enforce_session_disk_quotas_task():
+    """Phase C C5: prune oldest jobs for sessions over PER_SESSION_DISK_QUOTA_MB.
+
+    Walks every non-expired session, computes its on-disk usage, and if
+    over the quota deletes the oldest result + upload directories until
+    usage drops below the cap. Job rows stay (so the UI still shows the
+    history); only their on-disk artefacts are removed — same contract
+    ``ResourceManager.cleanup_old_jobs`` has for time-based pruning.
+
+    Returns a per-session report so beat logs make the action visible.
+    """
+    import shutil
+
+    from config import Config
+    from db.jobs import find_by_session
+    from db.session import get_db
+    from db.sessions import disk_usage_mb
+    from db.models import Session as SessionRow
+    from sqlalchemy import select
+
+    quota = Config.PER_SESSION_DISK_QUOTA_MB
+    logger.info("session-quota enforcement starting (quota=%d MB)", quota)
+
+    pruned = {}
+    try:
+        with get_db() as db:
+            rows = db.scalars(
+                select(SessionRow).where(SessionRow.expired_at.is_(None))
+            ).all()
+            for s in rows:
+                used = disk_usage_mb(s.id, db=db)
+                if used <= quota:
+                    continue
+                jobs = find_by_session(s.id, db=db)
+                # Oldest first — find_by_session sorts newest-first, reverse it.
+                victims = list(reversed(jobs))
+                removed = []
+                for job in victims:
+                    if used <= quota:
+                        break
+                    if not job.legacy_id:
+                        continue
+                    rdir = Config.RESULTS_DIR / job.legacy_id
+                    udir = Config.UPLOAD_DIR / job.legacy_id
+                    if rdir.exists():
+                        shutil.rmtree(rdir, ignore_errors=True)
+                    if udir.exists():
+                        shutil.rmtree(udir, ignore_errors=True)
+                    removed.append(job.legacy_id)
+                    used = disk_usage_mb(s.id, db=db)
+                if removed:
+                    pruned[str(s.id)] = {"final_mb": round(used, 1),
+                                          "removed": removed}
+                    logger.warning(
+                        "session %s pruned %d job(s) to land at %.1f MB / %d MB cap",
+                        s.short_code, len(removed), used, quota,
+                    )
+    except Exception as e:
+        logger.error("session-quota enforcement failed: %s", e, exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+    return {
+        "status": "success",
+        "quota_mb": quota,
+        "sessions_pruned": len(pruned),
+        "details": pruned,
+    }
+
+
+@celery_app.task
+def cleanup_abandoned_sessions_task():
+    """Delete sessions that have zero job rows and are older than
+    ``SESSION_GRACE_MINUTES``.
+
+    These sessions were created (Session row + audit log) but the user
+    never dispatched any work — typically a tab opened on the landing
+    page and closed without interaction. They:
+
+    * shouldn't pollute the DB long-term, and
+    * shouldn't count toward the per-IP daily limit
+      (``check_session_create_rate_limit``).
+
+    The cascade on ``Job.session_id`` (``ondelete=CASCADE``) cleans up
+    any job rows that race in between the EXISTS check and the delete.
+    ``AuditEvent.session_id`` is ``ondelete=SET NULL``, so audit rows
+    survive for forensics with a NULL session reference.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import exists, not_, select
+
+    from config import Config
+    from db.models import Job, Session
+    from db.sessions import get_db
+
+    grace = timedelta(minutes=Config.SESSION_GRACE_MINUTES)
+    cutoff = datetime.now(timezone.utc) - grace
+    logger.info(
+        "cleanup_abandoned_sessions: starting (cutoff=%s, grace=%dm)",
+        cutoff.isoformat(), Config.SESSION_GRACE_MINUTES,
+    )
+    deleted = 0
+    try:
+        with get_db() as db:
+            stmt = select(Session).where(
+                Session.created_at < cutoff,
+                not_(exists().where(Job.session_id == Session.id)),
+            )
+            rows = list(db.scalars(stmt).all())
+            for row in rows:
+                db.delete(row)
+                deleted += 1
+        logger.info(
+            "cleanup_abandoned_sessions: deleted %d empty session(s)", deleted,
+        )
+    except Exception as e:
+        logger.error(
+            "cleanup_abandoned_sessions failed: %s", e, exc_info=True,
+        )
+        return {"status": "error", "error": str(e), "deleted": deleted}
+    return {"status": "success", "deleted": deleted}
+
+
 if __name__ == '__main__':
     # Test cleanup task
     print("Testing cleanup task...")

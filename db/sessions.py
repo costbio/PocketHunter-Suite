@@ -17,6 +17,7 @@ stay terse.
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import secrets
 from typing import Optional
 
@@ -35,18 +36,56 @@ _EDIT_SECRET_BYTES = 24
 
 
 def new_short_code() -> str:
-    """Generate a fresh URL-safe short_code that avoids Streamlit's
-    bidi-component key delimiter (``__``).
+    """Generate a fresh URL-safe short_code that's safe to embed in
+    Streamlit bidirectional component keys.
 
+    Streamlit's CCv2 validator rejects keys containing ``__``.
     ``secrets.token_urlsafe`` uses ``-`` and ``_`` as the URL-safe
-    base64 substitutes, so a roughly 1-in-256 chance of a ``__`` slips
-    through per draw. When that happens, retry until we get a clean
-    code — the loop terminates in expectation in ≪10 iterations.
+    base64 substitutes, so we must reject candidates with ``__`` AND
+    candidates that start/end with ``_`` — the latter would otherwise
+    produce ``__`` once concatenated as ``f"prefix_{short_code}"`` at
+    a component-key call site. Retry until the candidate is clean;
+    each constraint trims ~1/256 of the draw space, so the loop
+    terminates in expectation in ≪10 iterations.
     """
     while True:
         candidate = secrets.token_urlsafe(_SHORT_CODE_BYTES)
-        if "__" not in candidate:
+        if (
+            "__" not in candidate
+            and not candidate.startswith("_")
+            and not candidate.endswith("_")
+        ):
             return candidate
+
+
+def safe_bidi_short(code: str) -> str:
+    """Normalise a session short_code into a form safe for embedding in
+    Streamlit bidirectional component keys.
+
+    Honours the CCv2 validator's "no ``__``" rule across both
+    pre-existing ``__`` substrings AND ``__`` introduced by f-string
+    concatenation (e.g. ``f"viewer_{code}"`` when ``code`` starts with
+    ``_``). Uniqueness is preserved by padding boundary underscores
+    with the literal letter ``s`` rather than stripping — two codes
+    that differ only in a leading/trailing ``_`` still map to distinct
+    safe forms.
+
+    New short_codes from :func:`new_short_code` are already free of
+    every condition this function handles; the helper exists to keep
+    legacy codes in the DB (created before the generator was tightened)
+    working without a data migration.
+    """
+    safe = code
+    # Collapse any run of underscores to a single one — handles legacy
+    # ``__`` and the theoretical ``___``. ``replace("__", "_")`` would
+    # only collapse one pass, so loop until idempotent.
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    if safe.startswith("_"):
+        safe = "s" + safe
+    if safe.endswith("_"):
+        safe = safe + "s"
+    return safe
 
 
 def new_edit_secret() -> str:
@@ -114,6 +153,45 @@ def touch_last_active(session: SessionRow, *, db: Optional[OrmSession] = None) -
         return
     session.last_active_at = now
     db.flush()
+
+
+def disk_usage_mb(session_id, *, db: Optional[OrmSession] = None) -> float:
+    """Sum results/<legacy_id>/ and uploads/<legacy_id>/ bytes for the session.
+
+    Phase C C4 quota check: callers compare this against
+    ``settings.PER_SESSION_DISK_QUOTA_MB`` before allowing an upload.
+
+    Walks the disk rather than reading file-size columns out of the DB —
+    the schema doesn't track per-file size today, and the disk-walk is
+    fast enough (one ``os.scandir`` per job, jobs-per-session is small).
+    Returns megabytes (float). Missing dirs contribute 0; never raises.
+    """
+    from db import jobs as _jobs_repo
+    from settings import settings
+
+    def _dir_bytes(path) -> int:
+        total = 0
+        try:
+            for root, _dirs, files in os.walk(path):
+                for fn in files:
+                    fp = os.path.join(root, fn)
+                    try:
+                        total += os.path.getsize(fp)
+                    except OSError:
+                        # File raced out from under us; ignore.
+                        pass
+        except OSError:
+            pass
+        return total
+
+    rows = _jobs_repo.find_by_session(session_id, db=db)
+    bytes_total = 0
+    for job in rows:
+        if not job.legacy_id:
+            continue
+        bytes_total += _dir_bytes(settings.RESULTS_DIR / job.legacy_id)
+        bytes_total += _dir_bytes(settings.UPLOAD_DIR / job.legacy_id)
+    return bytes_total / (1024 * 1024)
 
 
 def mark_expired(session: SessionRow, *, db: Optional[OrmSession] = None) -> None:

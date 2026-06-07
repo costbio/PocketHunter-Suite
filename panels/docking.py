@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -25,20 +26,23 @@ from session_routes import register_session_job
 from tasks import run_docking_task, _count_sdf_molecules
 
 from panels._shared import (
+    PoolCapHit,
+    _normalise_pdb_filename,
+    assert_submit_allowed,
     get_async_result,
     job_by_legacy_id,
     jobs_of_kind,
     latest_job_of_kind,
     new_job_id,
-    pipeline_in_flight,
     render_failure,
+    render_pool_cap_error,
     render_running_progress,
 )
 
 
 _PANEL = "docking"
 _RESULTS_KINDS = ("docking",)
-_SOURCE_KINDS = ("cluster", "pipeline")
+_SOURCE_KINDS = ("cluster",)
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -66,12 +70,11 @@ def _results_zip_cached(output_dir: str, job_id: str):
     csv_path = os.path.join(output_dir, "docking_results.csv")
     full_csv = best_csv = ""
     try:
+        from docking_aggregation import best_poses_per_pair
+
         df = pd.read_csv(csv_path)
         full_csv = df.to_csv(index=False)
-        df_best = df.loc[
-            df.groupby(["ligand", "receptor"])["affinity (kcal/mol)"].idxmin()
-        ]
-        best_csv = df_best.to_csv(index=False)
+        best_csv = best_poses_per_pair(df).to_csv(index=False)
     except Exception:  # noqa: BLE001 — degrade to SDFs-only on a bad CSV
         pass
 
@@ -117,14 +120,129 @@ def _live_task_or_none():
     return None
 
 
-def _render_settings(session, is_editor: bool) -> None:
-    pipeline_busy = pipeline_in_flight()
-    if pipeline_busy:
-        st.warning(
-            "Pipeline run in progress — wait for it to finish before "
-            "starting a docking job."
-        )
+# Threshold for declaring a PENDING Celery task "lost" — running tasks
+# update _update_status_file after every smina pair (usually <1 min,
+# occasionally several minutes for hard pairs). With task_track_started
+# enabled (celery_app.py), a healthy task is in STARTED/PROGRESS state,
+# so PENDING for >10 min strongly indicates the broker doesn't know it
+# and the worker is gone.
+_LOST_TASK_THRESHOLD_S = 600
 
+
+def _reattach_if_running(latest_job: dict) -> str | None:
+    """Re-attach the panel to a running docking task across browser closes.
+
+    Returns:
+      ``"reattached"`` — task is alive in Celery; session_state restored
+        and the caller should re-enter ``_docking_running_fragment``.
+      ``"lost"`` — task claims to be running per the DB row but Celery
+        has no record (PENDING + stale Job). The Job row is mutated to
+        ``status='failed'`` so the caller falls through to ``_render_failed``.
+      ``None`` — the job isn't in a running state (completed / failed /
+        too-fresh to judge); caller proceeds normally.
+    """
+    status = str(latest_job.get("status", "")).lower()
+    if status not in ("submitted", "queued", "running", "started", "progress"):
+        return None
+
+    task_id = latest_job.get("task_id")
+    legacy_id = latest_job.get("legacy_id") or ""
+    if not task_id:
+        # Pre-T1a runs have no celery_task_id stored — can't recover.
+        # Mark failed so the user gets a clear message + re-run CTA.
+        _mark_lost(legacy_id)
+        return "lost"
+
+    from celery.result import AsyncResult
+
+    from celery_app import celery_app
+
+    try:
+        result = AsyncResult(task_id, app=celery_app)
+        state = result.state
+    except Exception:
+        # Broker unreachable — leave alone; running fragment will
+        # surface the error on its own next tick.
+        return None
+
+    if state in ("STARTED", "PROGRESS", "RETRY"):
+        # Healthy — rehydrate session_state so _docking_running_fragment
+        # picks up where it left off.
+        from config import Config as _Config
+
+        st.session_state["docking_task_id"] = task_id
+        st.session_state["docking_job_id"] = legacy_id
+        st.session_state["docking_status"] = "running"
+        st.session_state["docking_running_results_dir"] = os.path.join(
+            str(_Config.RESULTS_DIR), f"dock_{legacy_id}",
+        )
+        # Rebuild the bucket from the snapshot we persisted at dispatch.
+        result_info = latest_job.get("result_info") or {}
+        bucket_records = (
+            result_info.get("bucket_records", [])
+            if isinstance(result_info, dict) else []
+        )
+        st.session_state["docking_running_bucket"] = bucket_records
+        return "reattached"
+
+    if state in ("SUCCESS", "FAILURE"):
+        # Task already finished — let the existing results/failed branch
+        # handle it. The task's own _update_status_file will have moved
+        # the Job row to 'completed'/'failed' on the worker side.
+        return None
+
+    if state == "PENDING":
+        last_updated = latest_job.get("last_updated") or ""
+        if _is_stale(last_updated, _LOST_TASK_THRESHOLD_S):
+            _mark_lost(legacy_id)
+            return "lost"
+        # Recently submitted — give the worker a chance to pick it up.
+        return None
+
+    return None
+
+
+def _is_stale(iso_ts: str, threshold_s: float) -> bool:
+    """True if ``iso_ts`` is older than ``threshold_s`` seconds from now."""
+    if not iso_ts:
+        return True
+    try:
+        from datetime import datetime, timezone
+        # The DB stores naive UTC; failure_view.py:269 emits .isoformat()
+        # without a tz suffix. Treat as UTC to compare with utcnow().
+        dt = datetime.fromisoformat(iso_ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() > threshold_s
+    except Exception:
+        return True
+
+
+def _mark_lost(legacy_id: str) -> None:
+    """Mutate the Job row to ``status='failed'`` with a 'WorkerLost' error."""
+    if not legacy_id:
+        return
+    try:
+        from db.jobs import update_by_legacy_id
+        update_by_legacy_id(
+            legacy_id,
+            status="failed",
+            error={
+                "exc_type": "WorkerLost",
+                "exc_message": (
+                    "Docking task was killed before it could complete — "
+                    "most likely a worker restart. Re-run to resume from "
+                    "any partial results."
+                ),
+                "stage": "docking",
+            },
+        )
+    except Exception:
+        # Best-effort; the failed-status banner is the priority, not the DB write.
+        pass
+
+
+def _render_settings(session, is_editor: bool) -> None:
     # B11.2: docking source is the cross-stage pocket bucket
     # (``st.session_state["docking_selected_pockets"]``) populated by
     # the Pockets / Cluster panels. The old cluster-job selectbox + PDB
@@ -182,6 +300,13 @@ def _render_settings(session, is_editor: bool) -> None:
         docking_bucket.clear()
         st.rerun()
 
+    # Bucket-bulk receptor download. The bucket carries each pocket's
+    # source_job_id + File name, which uniquely identifies its on-disk
+    # per-frame PDB at ``results/<job>/pdbs/<file>``. Pack them all
+    # into a single ZIP with metadata.csv.
+    with btn_cols[2]:
+        _render_bucket_receptors_download(df_bucket)
+
     if len(bucket) > Config.MAX_DOCKING_PDBS:
         st.warning(
             f"{len(bucket)} pockets selected — the docking task will cap "
@@ -232,11 +357,7 @@ def _render_settings(session, is_editor: bool) -> None:
         # not user-facing — the slider was removed.
         st.slider("pH (protonation)", 4.0, 10.0, 7.4, step=0.1, key="docking_ph")
 
-    disabled = (
-        (not is_editor)
-        or pipeline_busy
-        or not uploaded_files
-    )
+    disabled = (not is_editor) or not uploaded_files
     if not st.button(
         "Dock",
         type="primary",
@@ -248,7 +369,7 @@ def _render_settings(session, is_editor: bool) -> None:
             st.caption("Upload at least one ligand.")
         return
 
-    _submit(df_bucket, uploaded_files)
+    _submit(df_bucket, uploaded_files, session)
 
 
 def _prepare_ligand_dir(job_id: str, uploaded_files) -> list[str]:
@@ -302,7 +423,7 @@ def _prepare_ligand_dir(job_id: str, uploaded_files) -> list[str]:
     return saved
 
 
-def _submit(df_bucket: pd.DataFrame, uploaded_files):
+def _submit(df_bucket: pd.DataFrame, uploaded_files, session=None):
     """B11.2: submit a docking job from the cross-stage pocket bucket.
 
     The bucket DataFrame carries ``File name``, ``residues``,
@@ -313,6 +434,13 @@ def _submit(df_bucket: pd.DataFrame, uploaded_files):
     ``residues``), and pass that as ``cluster_representatives_csv``
     for backwards compatibility.
     """
+    # Phase C C4: refuse early on docking pool / per-session caps.
+    sess_id = getattr(session, "id", None) if session else None
+    try:
+        assert_submit_allowed("docking", sess_id)
+    except PoolCapHit as e:
+        render_pool_cap_error(e)
+        return
     try:
         check_task_rate_limit()
     except RateLimitExceeded as e:
@@ -357,7 +485,7 @@ def _submit(df_bucket: pd.DataFrame, uploaded_files):
     df_bucket.to_csv(filtered_reps_file, index=False)
 
     # Resolve the source PDB directory from the bucket's source_job_id
-    # (the find_pockets / pipeline job that owns the pdbs/ folder).
+    # (the find_pockets job that owns the pdbs/ folder).
     pdb_source_dir = None
     if "source_job_id" in df_bucket.columns:
         sources = df_bucket["source_job_id"].dropna().unique().tolist()
@@ -374,7 +502,7 @@ def _submit(df_bucket: pd.DataFrame, uploaded_files):
         # Legacy fallback — last-known PDB-producing job in results/.
         results_dir = str(Config.RESULTS_DIR)
         for dirname in sorted(os.listdir(results_dir), reverse=True):
-            if dirname.startswith(("extract_", "find_pockets_", "pipeline_")):
+            if dirname.startswith(("extract_", "find_pockets_")):
                 candidate = os.path.join(results_dir, dirname, "pdbs")
                 if os.path.exists(candidate):
                     pdb_source_dir = candidate
@@ -406,10 +534,219 @@ def _submit(df_bucket: pd.DataFrame, uploaded_files):
     st.session_state.docking_job_id = job_id
     st.session_state.docking_task_id = task.id
     st.session_state.docking_status = "running"
+
+    # Persist the Celery task_id + a JSON-serialisable bucket snapshot
+    # onto the Job row so the panel can re-attach on revisit (browser
+    # close, page refresh, network blip). Without this, a still-running
+    # task is invisible to the panel and `_render_results` lies about
+    # partial progress as if it were final. See plan: Tier 1.
+    try:
+        from db.jobs import update_by_legacy_id
+        update_by_legacy_id(
+            job_id,
+            status="submitted",  # preserve initial status from register_session_job
+            celery_task_id=task.id,
+            result_info={"bucket_records": df_bucket.to_dict("records")},
+        )
+    except Exception as e:
+        logger = __import__("logging").getLogger(__name__)
+        logger.warning("docking dispatch: could not persist task_id/bucket: %s", e)
+    # B3.4: forensic record. Defensive — failure is logged, not raised.
+    from client_ip import client_ip
+    from db import audit
+    audit.record(sess_id, client_ip(), "docking_submit",
+                 {"job_id": job_id,
+                  "n_receptors": len(df_bucket),
+                  "n_ligands": len(uploaded_files)})
     # B11.10: clear the force-settings flag — fresh task is the
     # transition we held the settings view to enable.
     st.session_state.pop("docking_force_settings", None)
     st.rerun()
+
+
+def _resolve_receptor_pdb_path(
+    file_name: str, source_job_id: str
+) -> Optional[Path]:
+    """Return the on-disk path for a receptor's source-frame PDB, or
+    ``None`` when the file isn't reachable."""
+    if not file_name or not source_job_id:
+        return None
+    norm = _normalise_pdb_filename(str(file_name))
+    p = Path(Config.RESULTS_DIR) / source_job_id / "pdbs" / norm
+    return p if p.exists() else None
+
+
+def _render_bucket_receptors_download(df_bucket: pd.DataFrame) -> None:
+    """ZIP of every receptor PDB currently in the docking bucket.
+
+    Each bucket row carries ``source_job_id`` + ``File name`` →
+    ``results/<job>/pdbs/<file>``. Pack them with a metadata.csv.
+    """
+    if df_bucket.empty or "File name" not in df_bucket.columns:
+        return
+    from downloads import MIME_ZIP, build_pocket_zip
+
+    pdb_sources: list[tuple] = []
+    metadata_rows: list[dict] = []
+    for _, row in df_bucket.iterrows():
+        src = _resolve_receptor_pdb_path(
+            row.get("File name", ""), row.get("source_job_id", "")
+        )
+        if src is None:
+            continue
+        pdb_sources.append((src, src.name))
+        metadata_rows.append({
+            "filename": src.name,
+            "cluster": row.get("cluster", ""),
+            "Frame": row.get("Frame", ""),
+            "pocket_index": row.get("pocket_index", ""),
+            "probability": row.get("probability", ""),
+            "residues": row.get("residues", ""),
+            "source_job_id": row.get("source_job_id", ""),
+        })
+    if not pdb_sources:
+        st.button(
+            "↓ Download receptors",
+            disabled=True,
+            use_container_width=True,
+            help="Bucket source PDBs aren't reachable on disk.",
+        )
+        return
+    zip_bytes, omitted = build_pocket_zip(
+        pdb_sources, metadata_rows, cap_bytes=Config.MAX_DOWNLOAD_ZIP_SIZE,
+    )
+    st.download_button(
+        label=f"↓ Download {len(pdb_sources)} receptors (ZIP)",
+        data=zip_bytes,
+        file_name="docking_receptors.zip",
+        mime=MIME_ZIP,
+        use_container_width=True,
+        key="docking_bucket_receptors_zip",
+    )
+    if omitted:
+        st.caption(
+            f"⚠ {len(omitted)} file(s) omitted due to the "
+            f"{Config.MAX_DOWNLOAD_ZIP_SIZE // (1024**2)} MB ZIP cap."
+        )
+
+
+def _render_receptors_zip_download(
+    *,
+    receptors_df: pd.DataFrame,
+    session,
+    safe_short: str,
+    button_label: str,
+    file_name: str,
+    key: str,
+) -> None:
+    """Receptors-only ZIP for the docking results Downloads tab.
+
+    Receptors are referenced by basename (e.g. ``trajectory_..._fit_84.pdb``);
+    resolve each to the find_pockets job's pdbs/ dir.
+    """
+    src_job = latest_job_of_kind(session.id, ("find_pockets",))
+    pdb_source_job_id = (src_job or {}).get("legacy_id") or ""
+    if not pdb_source_job_id:
+        return
+    from downloads import MIME_ZIP, build_pocket_zip
+
+    pdb_sources: list[tuple] = []
+    metadata_rows: list[dict] = []
+    for receptor_name in receptors_df["receptor"]:
+        src = _resolve_receptor_pdb_path(receptor_name, pdb_source_job_id)
+        if src is None:
+            continue
+        pdb_sources.append((src, src.name))
+        metadata_rows.append({
+            "filename": src.name, "receptor": receptor_name,
+        })
+    if not pdb_sources:
+        return
+    zip_bytes, omitted = build_pocket_zip(
+        pdb_sources, metadata_rows, cap_bytes=Config.MAX_DOWNLOAD_ZIP_SIZE,
+    )
+    st.download_button(
+        label=button_label,
+        data=zip_bytes,
+        file_name=file_name,
+        mime=MIME_ZIP,
+        use_container_width=True,
+        key=key,
+    )
+
+
+def _render_complex_download_button(
+    *,
+    pose: dict,
+    ligand_name: str,
+    receptor_label: str,
+    receptor_frame_filename: str,
+    pdb_source_job_id: str,
+    safe_short: str,
+) -> None:
+    """Per-complex download: receptor PDB + best-pose SDF.
+
+    The pose dict has ``output_sdf`` (path to the multi-model SDF
+    smina wrote) and ``mode`` (the row's pose rank, 1 = best). We
+    bundle only the best-pose block; users who want every pose use
+    the existing 'Download all results (ZIP)' in the Downloads tab.
+    """
+    sdf_path_str = pose.get("output_sdf") or ""
+    sdf_path = Path(sdf_path_str) if sdf_path_str else None
+    if not sdf_path or not sdf_path.exists():
+        return
+    receptor_path = _resolve_receptor_pdb_path(
+        receptor_frame_filename, pdb_source_job_id
+    )
+    if receptor_path is None:
+        return
+
+    try:
+        sdf_text = sdf_path.read_text()
+    except OSError:
+        return
+    mode = int(pose.get("mode") or 1)
+    best_sdf = _extract_sdf_mode(sdf_text, mode)
+    affinity = pose.get("affinity (kcal/mol)") or pose.get("affinity")
+
+    from downloads import MIME_ZIP, build_complex_zip
+
+    receptor_arc = f"{safe_short}_{receptor_label}.pdb"
+    ligand_arc = f"{safe_short}_{ligand_name}_pose.sdf"
+    zip_bytes = build_complex_zip(
+        receptor_pdb=receptor_path,
+        ligand_sdf_bytes=best_sdf.encode("utf-8"),
+        receptor_arcname=receptor_arc,
+        ligand_arcname=ligand_arc,
+        extra_metadata={
+            "ligand": ligand_name,
+            "receptor": receptor_label,
+            "mode": mode,
+            "affinity_kcal_per_mol": affinity if affinity is not None else "",
+        },
+    )
+    st.download_button(
+        label=f"↓ Download complex ({ligand_name} × {receptor_label})",
+        data=zip_bytes,
+        file_name=f"{safe_short}_{ligand_name}_x_{receptor_label}.zip",
+        mime=MIME_ZIP,
+        use_container_width=True,
+        key=f"docking_complex_dl_{safe_short}_{ligand_name}_{receptor_label}",
+    )
+
+
+def _extract_sdf_mode(sdf_text: str, mode: int) -> str:
+    """Extract a single pose block from a multi-model SDF.
+
+    SDF blocks are delimited by ``$$$$\\n``; smina writes them in
+    affinity order (mode 1 = best). Falls back to the full SDF if
+    the requested mode is out of range.
+    """
+    parts = sdf_text.split("$$$$\n")
+    blocks = [p for p in parts if p.strip()]
+    if 1 <= mode <= len(blocks):
+        return blocks[mode - 1] + "$$$$\n"
+    return sdf_text
 
 
 def _pocket_label(rec: dict) -> str:
@@ -499,10 +836,14 @@ def _render_docking_dashboard(
     (``analysis_app._viewer_fragment``) — this function publishes the
     ordered receptor list into session_state for it to consume.
     """
-    from panels._shared import frame_index_for_filename
+    from panels._shared import (
+        frame_index_for_filename,
+        viewer_target_for_filename,
+    )
+    from db.sessions import safe_bidi_short
     from viewer_pipeline import frame_number_from_filename
 
-    safe_short = session.short_code.replace("__", "_")
+    safe_short = safe_bidi_short(session.short_code)
     aff_col = "affinity (kcal/mol)"
 
     pockets = _build_receptor_columns(bucket_records)
@@ -533,25 +874,37 @@ def _render_docking_dashboard(
     # ``pdbs/`` dir that frame_index_for_filename globs. Authoritative
     # for every receptor, including the bucket-less fallback path where
     # the per-rec source_job_id is absent.
-    src_job = latest_job_of_kind(session.id, ("find_pockets", "pipeline"))
+    src_job = latest_job_of_kind(session.id, ("find_pockets",))
     pdb_source_job_id = (src_job or {}).get("legacy_id") or ""
 
     # Publish the receptor list for the viewer fragment's slider — even
-    # before any scores exist, so the slider appears immediately.
+    # before any scores exist, so the slider appears immediately. Each
+    # receptor carries both ``frame_filename`` (the canonical logical
+    # name the viewer fragment looks up via the stride manifest) and
+    # ``frame_model_index`` (the dense pre-stride index, kept for
+    # graceful legacy fallback when a manifest is missing).
     recv_key = f"docking_receptors_{safe_short}"
     had_receptors = recv_key in st.session_state
     if pockets:
-        st.session_state[recv_key] = [
-            {
-                "label": p["label"],
-                "receptor": p["receptor"],
-                "frame_model_index": frame_index_for_filename(
-                    pdb_source_job_id,
-                    str(p["rec"].get("File name", "")) or p["receptor"],
-                ),
-            }
-            for p in pockets
-        ]
+        recv_entries = []
+        for p in pockets:
+            raw_name = str(p["rec"].get("File name", "")) or p["receptor"]
+            norm_name = _normalise_pdb_filename(raw_name) if raw_name else None
+            target = (
+                viewer_target_for_filename(pdb_source_job_id, norm_name)
+                if norm_name else None
+            )
+            recv_entries.append(
+                {
+                    "label": p["label"],
+                    "receptor": p["receptor"],
+                    "frame_filename": target.filename if target else norm_name,
+                    "frame_model_index": frame_index_for_filename(
+                        pdb_source_job_id, raw_name
+                    ),
+                }
+            )
+        st.session_state[recv_key] = recv_entries
 
     if not have_df or not pockets:
         st.info(
@@ -564,36 +917,72 @@ def _render_docking_dashboard(
         return
 
     pocket_labels = [p["label"] for p in pockets]
-
-    # Best pose per (ligand, receptor).
-    grp = df.loc[df.groupby(["ligand", "receptor"])[aff_col].idxmin()]
-    best: dict[tuple[str, str], float] = {}
-    for _, row in grp.iterrows():
-        best[(str(row["ligand"]), str(row["receptor"]))] = float(row[aff_col])
     ligands = sorted(df["ligand"].astype(str).unique())
 
-    # Wide grid: rows = ligands, columns = receptor labels.
-    grid = pd.DataFrame(index=ligands, columns=pocket_labels, dtype="float64")
-    for lig in ligands:
-        for p in pockets:
-            grid.loc[lig, p["label"]] = best.get((lig, p["receptor"]), float("nan"))
+    # Best pose per (ligand, receptor). `docking_aggregation.best_per_pair`
+    # replaces the old inline groupby+idxmin+pivot — same wide-grid shape,
+    # named helper. The CSV's `receptor` column holds PDB basenames; the
+    # panel surfaces a friendlier label (e.g. "F2150") for each, so we
+    # rename basename → label before reindexing.
+    from docking_aggregation import aggregate_ensemble, best_per_pair
 
-    # Rank rows by mean affinity across scored receptors — most
-    # negative average on top.
-    grid["__avg__"] = grid.mean(axis=1, skipna=True)
-    grid = grid.sort_values("__avg__", ascending=True, na_position="last")
-    ranked_ligands = list(grid.index)
-    grid = grid.drop(columns="__avg__")
+    receptor_to_label = {p["receptor"]: p["label"] for p in pockets}
+    raw_grid = best_per_pair(df, aff_col=aff_col)
+    known_cols = [c for c in raw_grid.columns if c in receptor_to_label]
+    grid = (
+        raw_grid[known_cols]
+        .rename(columns=receptor_to_label)
+        .reindex(index=ligands, columns=pocket_labels)
+        .astype("float64")
+    )
+
+    # Per-ligand ensemble-aggregation columns. See docking_aggregation
+    # for the four methods + their literature references.
+    aggs = aggregate_ensemble(grid)
+
+    # Sort metric — the user picks; Mean stays the default. Mean / Median
+    # / Best collapse per-receptor best-pose affinities (kcal/mol);
+    # lower = better → ascending sort. ECR is rank-based unit-free,
+    # higher = better → descending.
+    _metric_key = f"docking_rank_metric_{safe_short}"
+    _metric_options = ["Mean", "Median", "Best", "ECR"]
+    _metric_to_col = {"Mean": "mean", "Median": "median",
+                      "Best": "best", "ECR": "ecr"}
+    st.session_state.setdefault(_metric_key, "Mean")
+    chosen_metric = st.segmented_control(
+        "Rank ligands by",
+        options=_metric_options,
+        default=st.session_state[_metric_key],
+        key=_metric_key,
+        help=(
+            "Mean / Median / Best collapse per-receptor best-pose "
+            "affinities (kcal/mol — lower is better). ECR is the "
+            "Exponential Consensus Ranking score (Palacio-Rodríguez "
+            "et al., Sci Rep 2019) — unit-free, rank-based, higher "
+            "is better. Median and ECR are robust when one receptor "
+            "in the ensemble mis-scores."
+        ),
+    ) or "Mean"
+
+    sort_col = _metric_to_col[chosen_metric]
+    ascending = sort_col != "ecr"
+    aggs = aggs.sort_values(sort_col, ascending=ascending, na_position="last")
+    ranked_ligands = list(aggs.index)
+    grid = grid.reindex(index=ranked_ligands)
 
     # Active receptor column — the index the viewer fragment's slider
     # last set. Clamp in case the bucket changed under us.
     recv_idx_key = f"docking_active_receptor_idx_{safe_short}"
     active_idx = max(0, min(int(st.session_state.get(recv_idx_key, 0)), len(pockets) - 1))
     active_label = pocket_labels[active_idx]
+    active_agg_label = chosen_metric  # the displayed column name
 
     def _highlight_active(col):
-        hit = col.name == active_label
-        return ["background-color: #d4ff00" if hit else "" for _ in col]
+        if col.name == active_label:
+            return ["background-color: #d4ff00" for _ in col]  # lime
+        if col.name == active_agg_label:
+            return ["background-color: #fff7c2" for _ in col]  # pale yellow
+        return ["" for _ in col]
 
     # B11.21: show real molecule names (the `ligand_name` column) as the
     # grid row labels. `ranked_ligands` / `grid.index` stay as the PDBQT
@@ -606,8 +995,26 @@ def _render_docking_dashboard(
             for _, r in df[["ligand", "ligand_name"]].drop_duplicates("ligand").iterrows()
             if str(r["ligand_name"]).strip()
         }
-    display_grid = grid.rename(index=lambda s: name_map.get(s, s))
-    styled = display_grid.style.apply(_highlight_active, axis=0).format("{:.2f}", na_rep="—")
+
+    # Stitch the per-receptor grid and the four agg columns into one
+    # displayed DataFrame. Agg columns get the human-friendly labels
+    # the segmented control surfaces.
+    display_aggs = aggs.rename(columns={
+        "mean": "Mean", "median": "Median", "best": "Best", "ecr": "ECR",
+    })
+    display_grid = pd.concat([grid, display_aggs], axis=1).rename(
+        index=lambda s: name_map.get(s, s)
+    )
+
+    # Per-column format: receptors + Mean/Median/Best are kcal/mol (2 dp);
+    # ECR is a unit-free index (3 dp gives useful resolution at typical
+    # σ = N/10 values).
+    format_map: dict[str, str] = {col: "{:.2f}" for col in pocket_labels}
+    format_map.update({"Mean": "{:.2f}", "Median": "{:.2f}",
+                       "Best": "{:.2f}", "ECR": "{:.3f}"})
+    styled = display_grid.style.apply(_highlight_active, axis=0).format(
+        format_map, na_rep="—"
+    )
     grid_sel = st.dataframe(
         styled,
         use_container_width=True,
@@ -621,7 +1028,7 @@ def _render_docking_dashboard(
         else []
     )
 
-    n_done = len(best)
+    n_done = int(grid.notna().sum().sum())
     n_total = len(ligands) * len(pockets)
     st.caption(f"{status_msg} · {n_done}/{n_total} ligand-receptor pairs scored")
 
@@ -669,6 +1076,20 @@ def _render_docking_dashboard(
                 focus={"type": "ligand", "target": None},
             )
 
+        # Inline per-complex download: receptor PDB + the best-pose SDF
+        # for the (selected_ligand × active_receptor) pair. Sits right
+        # below the score grid so users can grab the exact complex they
+        # just selected.
+        _render_complex_download_button(
+            pose=pose,
+            ligand_name=selected_ligand,
+            receptor_label=active_label,
+            receptor_frame_filename=active_pocket["rec"].get("File name")
+                or active_pocket["receptor"],
+            pdb_source_job_id=pdb_source_job_id,
+            safe_short=safe_short,
+        )
+
     if changed or not had_receptors:
         st.session_state[last_key] = fingerprint
         st.rerun()  # app scope — propagate to the viewer fragment
@@ -711,10 +1132,14 @@ def _docking_running_fragment(session, is_editor: bool) -> None:
     if state == "PENDING":
         st.info("Queued — waiting for a worker to pick this up.")
         st.progress(0)
-        from panels._shared import queue_depth_ahead
-        ahead = queue_depth_ahead()
-        if ahead is not None and ahead > 1:
-            st.caption(f"~{ahead - 1} job(s) ahead of this one in the queue.")
+        # C5: docking jobs go to the docking pool — surface its depth.
+        from panels._shared import queue_depth_per_pool
+        per_pool = queue_depth_per_pool()
+        if per_pool is not None and per_pool.get("docking", 0) > 1:
+            st.caption(
+                f"~{per_pool['docking'] - 1} job(s) ahead of this one "
+                f"in the **docking** pool."
+            )
     else:
         # B11.21: real ETA from the pairs-done fraction (docking has a
         # genuine progress fraction, unlike the find_pockets log-ramp).
@@ -756,7 +1181,8 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
         st.error(f"Invalid job ID for results: {e}")
         return
 
-    safe_short = session.short_code.replace("__", "_")
+    from db.sessions import safe_bidi_short
+    safe_short = safe_bidi_short(session.short_code)
     info = latest_job.get("result_info") or {}
     results_file = info.get("docking_results_file") if isinstance(info, dict) else None
 
@@ -881,9 +1307,9 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
-            df_best = df_results.loc[
-                df_results.groupby(["ligand", "receptor"])["affinity (kcal/mol)"].idxmin()
-            ]
+            from docking_aggregation import best_poses_per_pair
+
+            df_best = best_poses_per_pair(df_results)
             st.download_button(
                 "Best-poses CSV",
                 data=df_best.to_csv(index=False),
@@ -911,8 +1337,58 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
                         f"{len(omitted)} large pose file(s) omitted to keep "
                         f"the archive under ~{cap_mb} MB."
                     )
+
+            # Receptors-only ZIP (no ligand poses) for users who want
+            # just the structural targets from this run. Sourced from
+            # the staged-bucket CSV if present, otherwise the docking
+            # results' unique receptor list.
+            if "receptor" in df_results.columns:
+                receptors_df = pd.DataFrame({
+                    "receptor": df_results["receptor"].astype(str).unique()
+                })
+                from db.sessions import safe_bidi_short
+
+                _render_receptors_zip_download(
+                    receptors_df=receptors_df,
+                    session=session,
+                    safe_short=safe_bidi_short(session.short_code),
+                    button_label="Receptors only (ZIP)",
+                    file_name=f"docking_receptors_{results_job_id}.zip",
+                    key=f"docking_results_receptors_zip_{results_job_id}",
+                )
         except Exception as e:  # noqa: BLE001
             st.caption(f"Could not prepare downloads: {e}")
+
+
+def _render_failed(latest_job: dict, is_editor: bool, session) -> None:
+    """Structured failure panel for a FAILED docking job (mirrors cluster.py)."""
+    from failure_view import render_task_failure
+
+    job_id = latest_job.get("legacy_id") or ""
+    err = latest_job.get("error") if isinstance(latest_job.get("error"), dict) else {}
+    task_info = {
+        "exc_type": err.get("exc_type", "Exception"),
+        "exc_message": err.get("exc_message") or latest_job.get("step") or "",
+        "stage": err.get("stage", "docking"),
+        "status": latest_job.get("step") or "Docking job failed.",
+    }
+    render_task_failure(task_info, status_json=None, job_id=job_id)
+
+    # Re-run shortcut so the user can fix-and-retry in one click.
+    # T4 makes the re-run pick up from any partial docking_results.csv.
+    if st.button(
+        "Re-run docking (resumes from partial results)",
+        type="primary",
+        use_container_width=True,
+        disabled=not is_editor,
+        key="docking_rerun_from_failure",
+    ):
+        for k in ("docking_task_id", "docking_job_id", "docking_status",
+                  "docking_view_job_id", "docking_running_bucket",
+                  "docking_running_results_dir"):
+            st.session_state.pop(k, None)
+        st.session_state["docking_force_settings"] = True
+        st.rerun()
 
 
 def render(session, is_editor: bool) -> None:
@@ -935,6 +1411,21 @@ def render(session, is_editor: bool) -> None:
     if job is None:
         job = latest_job_of_kind(session.id, _RESULTS_KINDS)
     if job is not None:
+        # T1: re-attach to a still-running task across browser-close.
+        # Without this, the panel sees a stale 'running' Job row and falls
+        # into _render_results which reads result_info and renders partial
+        # progress as if it were final.
+        outcome = _reattach_if_running(job)
+        if outcome == "reattached":
+            _docking_running_fragment(session, is_editor)
+            return
+        if outcome == "lost":
+            # _reattach_if_running already mutated the Job to status=failed;
+            # re-fetch so the latest dict reflects that.
+            job = job_by_legacy_id(session.id, job["legacy_id"]) or job
+        if str(job.get("status", "")).lower() in ("failed", "failure"):
+            _render_failed(job, is_editor, session)
+            return
         _render_results(job, is_editor, session)
         return
 

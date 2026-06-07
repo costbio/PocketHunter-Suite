@@ -2,8 +2,14 @@ services:
   redis:
     image: redis:7-alpine
     container_name: pockethunter-redis
+    # Host port preserved for local development (DBeaver / redis-cli).
+    # Production deployment commits will drop this — Redis must not be
+    # reachable from the public internet (see docs/deployment.md, C6).
     ports:
       - "6380:6379"
+    networks:
+      - default
+      - pockethunter_internal
     volumes:
       - redis_data:/data
     healthcheck:
@@ -18,12 +24,26 @@ services:
     container_name: pockethunter-postgres
     environment:
       - POSTGRES_USER=pockethunter
-      - POSTGRES_PASSWORD=pockethunter
+      # Required — set in .env (or shell env). The ${VAR:?…} form makes
+      # `docker compose up` fail loudly when it's missing, instead of
+      # silently provisioning a database with a known-public password.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
       - POSTGRES_DB=pockethunter
+    # Host port preserved for local development (see redis note above).
     ports:
       - "5433:5432"
+    networks:
+      - default
+      - pockethunter_internal
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Bind-mount: the data lives at ${POSTGRES_DATA_DIR} on the host
+      # (defaults to ./pgdata next to the compose file). Survives
+      # `docker compose down` without -v; gitignored. Wipe with
+      # `rm -rf pgdata/` when you want a fresh DB instead of fighting
+      # `docker volume rm`. Do NOT pre-create the directory — Postgres'
+      # entrypoint runs initdb + chowns it to UID 70 on first boot;
+      # a pre-existing dir owned by the host user blocks that.
+      - ${POSTGRES_DATA_DIR:-./pgdata}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pockethunter -d pockethunter"]
       interval: 10s
@@ -31,74 +51,31 @@ services:
       retries: 5
     restart: unless-stopped
 
-  celery-worker:
-    build:
-      context: .
-      network: host
-    container_name: pockethunter-celery
-    command: celery -A celery_app worker -Q default,celery --concurrency=${WORKER_CONCURRENCY:-8} --loglevel=info
-    working_dir: /app
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
-      - BASE_URL=http://localhost:8511
-      - PYTHONPATH=/app
-      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
-      - DOCKING_CONCURRENCY=${DOCKING_CONCURRENCY:-4}
-      - P2RANK_THREADS=${P2RANK_THREADS:-4}
-      - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
-      - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
-      - MAX_DOWNLOAD_ZIP_SIZE=${MAX_DOWNLOAD_ZIP_SIZE:-536870912}
-    volumes:
-      - .:/app
-      - ./uploads:/app/uploads
-      - ./results:/app/results
-      - ./logs:/app/logs
-    restart: unless-stopped
-
-  celery-docking-worker:
-    build:
-      context: .
-      network: host
-    container_name: pockethunter-celery-docking
-    command: celery -A celery_app worker -Q docking --concurrency=${DOCKING_CONCURRENCY:-4} --loglevel=info
-    working_dir: /app
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
-      - BASE_URL=http://localhost:8511
-      - PYTHONPATH=/app
-      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-8}
-      - DOCKING_CONCURRENCY=${DOCKING_CONCURRENCY:-4}
-      - P2RANK_THREADS=${P2RANK_THREADS:-4}
-      - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
-      - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
-      - MAX_DOWNLOAD_ZIP_SIZE=${MAX_DOWNLOAD_ZIP_SIZE:-536870912}
-    volumes:
-      - .:/app
-      - ./uploads:/app/uploads
-      - ./results:/app/results
-      - ./logs:/app/logs
-    restart: unless-stopped
+  # ── Phase C C3: legacy celery-worker + celery-docking-worker REMOVED.
+  # The orchestrator service spawns hardened worker containers for both
+  # pools (fast / docking). See orchestrator/docker_sdk.py + the
+  # USE_ORCHESTRATOR knob below. To roll back, `git revert` the C3
+  # commit and the two services come back.
 
   celery-beat:
+    # Shared worker image — same tag the orchestrator pulls from when
+    # spawning fast/docking pool members (see WORKER_IMAGE_TAG below).
+    # Building this service produces the canonical worker image.
+    image: pockethunter-worker:latest
     build:
       context: .
+      dockerfile: worker.Dockerfile
       network: host
     container_name: pockethunter-beat
-    command: celery -A celery_app beat --loglevel=info
+    # --schedule path moved off /app (RO-ish, root-owned legacy files)
+    # to /app/logs (RW, UID-1000-owned per the C3 chown). Without this
+    # beat hits PermissionError: 'celerybeat-schedule.dat' on every
+    # tick because the legacy file at the repo root was created when
+    # beat ran as root.
+    command: celery -A celery_app beat --loglevel=info --schedule=/app/logs/celerybeat-schedule
+    networks:
+      - default
+      - pockethunter_internal
     depends_on:
       redis:
         condition: service_healthy
@@ -107,7 +84,7 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
+      - DATABASE_URL=postgresql+psycopg://pockethunter:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/pockethunter
       - BASE_URL=http://localhost:8511
     volumes:
       - .:/app
@@ -116,11 +93,15 @@ services:
   streamlit:
     build:
       context: .
+      dockerfile: streamlit.Dockerfile
       network: host
     container_name: pockethunter-streamlit
     command: streamlit run main.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8511:8501"
+    networks:
+      - default
+      - pockethunter_internal
     depends_on:
       redis:
         condition: service_healthy
@@ -129,7 +110,7 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DATABASE_URL=postgresql+psycopg://pockethunter:pockethunter@postgres:5432/pockethunter
+      - DATABASE_URL=postgresql+psycopg://pockethunter:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/pockethunter
       - BASE_URL=http://localhost:8511
       - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
       - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
@@ -147,6 +128,107 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ── Phase C C2: orchestrator + socket proxy ─────────────────────────
+  # The orchestrator manages a bounded pool of hardened worker containers;
+  # it never touches /var/run/docker.sock directly. All Docker API calls
+  # go through the tecnativa socket proxy, which allow-lists endpoints.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: pockethunter-docker-proxy
+    environment:
+      # GET endpoints the orchestrator needs.
+      - CONTAINERS=1
+      - NETWORKS=1
+      - IMAGES=1
+      - INFO=1
+      - PING=1
+      # POST switch — needed for container create/start/stop/remove.
+      - POST=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker_proxy_net
+    # /_ping passes through to the Docker daemon. If the socket bind-
+    # mount failed (WSL2 quirk: see docs/deployment.md §1) the proxy
+    # process is alive but /_ping returns a transport error → the
+    # orchestrator's `service_healthy` dependency below correctly
+    # blocks instead of letting it restart-loop against nothing.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2375/_ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator.Dockerfile
+      network: host
+    container_name: pockethunter-orchestrator
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      docker-socket-proxy:
+        # service_healthy (not service_started): if the proxy died
+        # mid-boot (see WSL2 caveat in docs/deployment.md §1) the
+        # orchestrator stays in `Created` instead of restart-looping
+        # against a name it can't resolve.
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://pockethunter:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/pockethunter
+      - BASE_URL=http://localhost:8511
+      - PYTHONPATH=/app
+      # C3 cut-over: orchestrator owns the worker pools by default. Set
+      # USE_ORCHESTRATOR=false in .env only to disable workers entirely.
+      - USE_ORCHESTRATOR=${USE_ORCHESTRATOR:-true}
+      - ORCHESTRATOR_BACKEND=${ORCHESTRATOR_BACKEND:-docker_sdk}
+      - DOCKER_PROXY_URL=tcp://docker-socket-proxy:2375
+      - ORCHESTRATOR_HTTP_PORT=${ORCHESTRATOR_HTTP_PORT:-9000}
+      - ORCHESTRATOR_TICK_SECONDS=${ORCHESTRATOR_TICK_SECONDS:-30}
+      - WORKER_NETWORK_NAME=pockethunter_internal
+      - WORKER_IMAGE_TAG=${WORKER_IMAGE_TAG:-pockethunter-worker:latest}
+      - FAST_POOL_SIZE=${FAST_POOL_SIZE:-6}
+      - DOCKING_POOL_SIZE=${DOCKING_POOL_SIZE:-3}
+      - WORKER_CPU_LIMIT=${WORKER_CPU_LIMIT:-6}
+      - WORKER_MEMORY_LIMIT=${WORKER_MEMORY_LIMIT:-12g}
+      - WORKER_JOBS_BEFORE_RECYCLE=${WORKER_JOBS_BEFORE_RECYCLE:-10}
+      # Host-side paths so the Docker daemon resolves bind-mount sources
+      # correctly when the orchestrator (itself a container) calls run().
+      - HOST_REPO_PATH=${PWD}
+      - HOST_UPLOADS_PATH=${PWD}/uploads
+      - HOST_RESULTS_PATH=${PWD}/results
+      - HOST_LOGS_PATH=${PWD}/logs
+    ports:
+      # Exposed on the host as 9001 for ad-hoc curl/inspection.
+      - "9001:9000"
+    volumes:
+      # Bind-mount the repo so code edits hot-reload (mirrors the
+      # streamlit / celery-worker dev workflow).
+      - .:/app:ro
+    networks:
+      - pockethunter_internal
+      - docker_proxy_net
+    restart: unless-stopped
+
+networks:
+  default:
+    name: pockethunter-suite_default
+  # Workers spawned by the orchestrator attach to this network only.
+  # `internal: true` blocks outbound internet; DNS resolution and
+  # intra-network traffic still work (workers reach redis + postgres).
+  pockethunter_internal:
+    name: pockethunter_internal
+    internal: true
+  # The socket-proxy network is *not* shared with workers — they cannot
+  # reach the Docker API even if they wanted to.
+  docker_proxy_net:
+    name: pockethunter_docker_proxy
+
 volumes:
   redis_data:
-  pgdata:

@@ -1,7 +1,7 @@
 """Helpers for tracking per-receptor/ligand docking pair failures.
 
-``run_docking_task`` and ``run_pockethunter_pipeline`` loop over receptor ×
-ligand pairs and call smina for each. When a pair fails (segfault, OOM,
+``run_docking_task`` loops over receptor × ligand pairs and calls smina
+for each. When a pair fails (segfault, OOM,
 malformed PDBQT, smina returning unparseable output), the task would
 otherwise log a warning and silently omit the pair from the results.
 This module is the bookkeeping layer: ``build_pair_failure_record``

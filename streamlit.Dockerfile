@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     libxrender1 \
     libxext6 \
+    libmagic1 \
     default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 

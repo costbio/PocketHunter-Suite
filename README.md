@@ -1,5 +1,7 @@
 # PocketHunter Suite
 
+![CI](https://github.com/osercinoglu/pockethunter-suite/actions/workflows/ci.yml/badge.svg)
+
 A web-based interface for molecular dynamics pocket detection, clustering, and docking analysis. Built with Streamlit for an interactive experience with real-time task monitoring and 3D visualization.
 
 ## Features

@@ -1,0 +1,23 @@
+# Compose *override* file used for integration tests and CI.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+#
+# Same services as production, much smaller pool sizes so a CI runner
+# with 4 cores / 8 GB can stand up the full stack and exercise the
+# orchestrator end-to-end. Nothing else changes — the worker image,
+# hardening flags, networks, and socket-proxy allowlist are identical
+# to the production compose.
+
+services:
+  orchestrator:
+    environment:
+      # Just enough workers to prove fast + docking routing works.
+      - FAST_POOL_SIZE=2
+      - DOCKING_POOL_SIZE=1
+      # Smaller caps so the test runner doesn't get squeezed.
+      - WORKER_CPU_LIMIT=2
+      - WORKER_MEMORY_LIMIT=2g
+      # Faster reconcile to keep wall-clock test time low.
+      - ORCHESTRATOR_TICK_SECONDS=5
+      # Recycle after fewer jobs so the recycle path is exercised in CI.
+      - WORKER_JOBS_BEFORE_RECYCLE=3
