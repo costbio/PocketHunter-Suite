@@ -1,0 +1,34 @@
+# docker-compose.production.yml — overlay for the public single-box deployment.
+#
+# Use as:
+#   docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+#
+# This overlay closes the host-port surface that the base compose keeps open
+# for local-development convenience (psql / redis-cli from the host). On a
+# real public deploy:
+#
+#   - Redis (6380) and Postgres (5433) must NOT be reachable from the
+#     public internet — they're internal-only on pockethunter_internal,
+#     reachable to the suite via the bridge network.
+#   - The orchestrator's /healthz + /pool/status API stays internal-only
+#     too — only the host-local reverse proxy should know how to reach it.
+#   - Streamlit binds to 127.0.0.1 only. The TLS-terminating reverse proxy
+#     on the host (Caddy / nginx) is the only external entry point.
+#
+# `!reset` clears a value to empty; `!override` replaces an inherited
+# sequence wholesale instead of appending to it. Both are documented
+# compose-spec extensions (see docs.docker.com/compose/multiple-compose-files
+# → "Replacing / removing values").
+services:
+  redis:
+    ports: !reset []
+
+  postgres:
+    ports: !reset []
+
+  orchestrator:
+    ports: !reset []
+
+  streamlit:
+    ports: !override
+      - "127.0.0.1:8511:8501"
