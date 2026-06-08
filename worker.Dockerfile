@@ -32,7 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # B11.15 conda stack: smina + openbabel + prody with matching ABIs.
-RUN curl -L https://micro.mamba.pm/api/micromamba/linux-64/latest \
+RUN curl -L --retry 5 --retry-delay 3 --max-time 120 \
+        https://micro.mamba.pm/api/micromamba/linux-64/latest \
     | tar -xj -C /usr/local bin/micromamba
 
 ENV MAMBA_ROOT_PREFIX=/opt/conda

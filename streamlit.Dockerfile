@@ -21,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # approach which created ABI mismatches between smina's bundled
 # openbabel and the pip-installed ``openbabel-wheel``. With everything
 # from one channel, smina / libopenbabel / pybel all agree on one ABI.
-RUN curl -L https://micro.mamba.pm/api/micromamba/linux-64/latest \
+RUN curl -L --retry 5 --retry-delay 3 --max-time 120 \
+        https://micro.mamba.pm/api/micromamba/linux-64/latest \
     | tar -xj -C /usr/local bin/micromamba
 
 ENV MAMBA_ROOT_PREFIX=/opt/conda
@@ -58,12 +59,26 @@ RUN cd /app/PocketHunter && bash first_setup.sh
 RUN apt-get purge -y gcc g++ make python3-dev \
     && apt-get autoremove -y
 
-# Runtime directories
-RUN mkdir -p uploads results logs
+# Runtime directories. The bind-mounted uploads/results/logs in
+# docker-compose.yml supersede these at runtime; they exist here so
+# the image is self-contained when run standalone (e.g. ad-hoc tests).
+RUN mkdir -p uploads results logs \
+    && chown -R 1000:1000 /app/uploads /app/results /app/logs
+
+# Non-root runtime user. The worker and orchestrator images both already
+# drop privilege; streamlit is the most-exposed surface (reverse proxy
+# terminates onto this port) — so it needs the same treatment.
+# UID 1000 matches the host bind-mount owner (see docs/deployment.md §1).
+RUN groupadd -g 1000 streamlituser \
+    && useradd -u 1000 -g streamlituser -M -s /usr/sbin/nologin streamlituser
+USER 1000:1000
 
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
+# Entrypoint runs `alembic upgrade head` against $DATABASE_URL on every
+# boot, then execs the CMD. Idempotent — no-op once schema is current.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["streamlit", "run", "main.py", "--server.port=8501", "--server.address=0.0.0.0"]
