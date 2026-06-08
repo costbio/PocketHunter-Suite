@@ -1,3 +1,4 @@
+# Python build/byte-compile noise
 __pycache__/
 *.pyc
 *.pyo
@@ -8,17 +9,43 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# VCS + editor noise
 .git/
 .gitignore
 .vscode/
 .idea/
+
+# Runtime state (mounted as volumes / created at runtime, never source)
+uploads
 uploads/
+results
 results/
+logs
+logs/
+pgdata
+pgdata/                  # Postgres data dir — owned by UID 70, unreadable by build
+test_output
 test_output/
 *.log
 .env
-*.md
-!README.md
+
+# Streamlit / Celery / smina runtime droppings (gitignored too but kept here
+# as belt-and-braces so they never balloon the build context)
 celery_new.log
 smina_debug.log
 dump.rdb
+*.swp
+*.swo
+
+# Frontend node_modules — 170+ MB of node deps the Docker build doesn't need.
+# The pre-built bundle in static/js/ is what ships into the image.
+frontend/node_modules/
+frontend/dist/
+
+# Manuscript / docs we don't bake into the image. The root README + CLAUDE.md
+# are still copied (the !README.md and !CLAUDE.md re-includes below).
+*.md
+!README.md
+!CLAUDE.md
+docs/manuscript/

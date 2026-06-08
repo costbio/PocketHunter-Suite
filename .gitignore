@@ -1,6 +1,12 @@
 # Ignore a specific directory
 uploads/
-PocketHunter/
+
+# PocketHunter/ ships source-tracked (was previously a dangling submodule
+# gitlink with no .gitmodules — see redesign branch for fix history).
+# Only the bulky p2rank binary tree under tools/ is regenerated at build
+# time by first_setup.sh, so it stays ignored here.
+PocketHunter/tools/
+PocketHunter/__pycache__/
 
 # Ignore a specific file
 .DS_Store
@@ -46,6 +52,12 @@ pgdata/
 pockethunter-suite.log
 pockethunter-suite.log.*
 logs/
+
+# Misc runtime artefacts that have been accidentally committed before
+# (see git history pre-redesign). Catch-alls so future runs can't
+# recommit a stray Streamlit / Celery / smina log or a Redis dump.
+*.log
+*.rdb
 
 # Editor swap files
 *.swp
