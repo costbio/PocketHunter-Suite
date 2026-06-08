@@ -1,8 +1,8 @@
 # PocketHunter Suite
 
-![CI](https://github.com/costbio/pockethunter-suite/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/costbio/PocketHunter-Suite/actions/workflows/ci.yml/badge.svg)
 
-A Streamlit web frontend for the [PocketHunter](https://github.com/costbio/pockethunter-suite/tree/main/PocketHunter) molecular-dynamics pocket-detection pipeline plus
+A Streamlit web frontend for the [PocketHunter](https://github.com/costbio/PocketHunter-Suite/tree/main/PocketHunter) molecular-dynamics pocket-detection pipeline plus
 [SMINA](https://sourceforge.net/projects/smina/) docking, designed for **public deployment serving untrusted users on a single
 64-core / 128 GB box**. Long-running compute runs in hardened, capability-dropped
 worker containers managed by an in-cluster orchestrator with abuse limits and
@@ -16,8 +16,8 @@ per-session disk quotas. The persistent 3D viewer is built on
 ## Quick start (Docker, local dev)
 
 ```bash
-git clone https://github.com/costbio/pockethunter-suite.git
-cd pockethunter-suite
+git clone https://github.com/costbio/PocketHunter-Suite.git
+cd PocketHunter-Suite
 
 # .env is gitignored — every fresh clone needs one. POSTGRES_PASSWORD is
 # required (docker compose refuses to start without it).
