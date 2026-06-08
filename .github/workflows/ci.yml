@@ -9,10 +9,44 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
-    name: pytest (containers)
+  bundle-integrity:
+    name: Mol* bridge bundle up-to-date with frontend/src
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the Mol* bridge from frontend/src
+        run: |
+          cd frontend
+          npm ci
+          npm run build      # writes molstar-bridge.{js,css} into ../static/js/
+
+      - name: Assert committed bundle matches source rebuild
+        run: |
+          # `npm run build` copies the freshly-built bundle over the
+          # committed one. If the diff is empty, the committed bundle
+          # is current. If anything changed, the contributor forgot
+          # to run `npm run build` before pushing.
+          if ! git diff --quiet static/js/molstar-bridge.js static/js/molstar-bridge.css; then
+            echo "::error::Committed Mol* bridge bundle is stale vs frontend/src — rebuild and commit:"
+            echo "    cd frontend && npm install && npm run build"
+            git --no-pager diff --stat static/js/
+            exit 1
+          fi
+          echo "Committed bundle is up-to-date."
+
+  pytest:
+    name: pytest + alembic round-trip + hardening smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       # Required by the compose stack since B1.1 — every `compose up`
       # interpolation fails without it. Test value only; production
@@ -35,16 +69,62 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx-
 
-      - name: Bring up the stack (test sizing)
+      # Build all three images so a Dockerfile syntax break in worker.Dockerfile
+      # or orchestrator.Dockerfile surfaces in CI, not in production. The
+      # streamlit + worker images share a slow chunk (apt + micromamba +
+      # first_setup.sh) so the buildx cache makes the second build cheap.
+      - name: Build all three Dockerfiles
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build streamlit postgres redis
+          docker compose -f docker-compose.yml -f docker-compose.test.yml \
+            build streamlit celery-beat orchestrator
+
+      - name: Bring up the full test stack (orchestrator spawns workers)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
           # Wait for the streamlit container to be up enough to accept exec.
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if docker compose exec -T streamlit python -c "print('alive')" 2>/dev/null; then
               break
             fi
             sleep 2
           done
+
+      - name: Alembic round-trip (upgrade head → downgrade -1 → upgrade head)
+        run: |
+          # The streamlit entrypoint already ran `alembic upgrade head` on
+          # boot — verify the migrations are reversible. A migration that
+          # downgrades cleanly is one whose `op.drop_*` mirrors its
+          # `op.create_*`. This catches the common "I added op.create_table
+          # but never wrote the down path" regression.
+          docker compose exec -T streamlit alembic current
+          docker compose exec -T streamlit alembic downgrade -1
+          docker compose exec -T streamlit alembic upgrade head
+          docker compose exec -T streamlit alembic current
+
+      - name: Wait for orchestrator + at least one worker to be ready
+        run: |
+          # verify_hardening.sh needs a live worker. Poll /pool/status
+          # until the orchestrator says the fast pool has at least one
+          # ready worker (defaults to 60s but the test overlay's faster
+          # reconcile tick of 5s usually has them up in under 20s).
+          for i in $(seq 1 60); do
+            ready=$(curl -fs http://localhost:9001/pool/status 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for w in d['fast']['workers'] if w['state']=='ready'))" 2>/dev/null || echo 0)
+            if [[ "$ready" -ge 1 ]]; then
+              echo "fast pool has $ready ready worker(s)"
+              break
+            fi
+            sleep 3
+          done
+
+      - name: Hardening smoke (./scripts/verify_hardening.sh)
+        run: |
+          # Asserts every per-worker flag — --read-only, cap-drop=ALL,
+          # no-new-privileges:true, UID 1000, /tmp:exec tmpfs, internal-only
+          # network, no public egress. docs/deployment.md calls this the
+          # mandatory pre-launch check; running it in CI guards against
+          # silent regressions of the hardening flags.
+          ./scripts/verify_hardening.sh
 
       - name: Install test deps in the streamlit container
         run: |
@@ -59,3 +139,5 @@ jobs:
         if: failure()
         run: |
           docker compose logs --tail 200
+          echo "===workers==="
+          docker ps -a --filter label=pockethunter.role=worker --format 'table {{.Names}}\t{{.Status}}'

@@ -69,8 +69,13 @@ RUN mkdir -p uploads results logs \
 # drop privilege; streamlit is the most-exposed surface (reverse proxy
 # terminates onto this port) — so it needs the same treatment.
 # UID 1000 matches the host bind-mount owner (see docs/deployment.md §1).
+# HOME=/tmp because `useradd -M` skips creating /home/streamlituser; the
+# few tools that touch $HOME at runtime (pip cache during CI/dev test
+# installs, matplotlib's fontcache) need a writable path. /tmp is the
+# only writable mount once we drop privilege.
 RUN groupadd -g 1000 streamlituser \
     && useradd -u 1000 -g streamlituser -M -s /usr/sbin/nologin streamlituser
+ENV HOME=/tmp
 USER 1000:1000
 
 EXPOSE 8501

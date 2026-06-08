@@ -5,14 +5,36 @@ import pytest
 
 
 class TestFrameCapConfig:
-    def test_default_is_1000(self):
+    def test_default_is_1000(self, monkeypatch):
+        # Isolate from any host .env override — operators commonly tune
+        # MAX_TRAJECTORY_FRAMES upward for their own dataset, and that
+        # tuning shouldn't break the unit test for the canonical default.
+        # Both layers must be bypassed: the .env file (which Pydantic
+        # auto-reads via SettingsConfigDict.env_file) AND any process
+        # env that the test runner inherited.
+        monkeypatch.delenv("MAX_TRAJECTORY_FRAMES", raising=False)
         from settings import Settings
-        s = Settings(DATABASE_URL="sqlite:///:memory:", BASE_URL="http://localhost")
+        s = Settings(
+            _env_file=None,                        # disable .env loading
+            DATABASE_URL="sqlite:///:memory:",
+            BASE_URL="http://localhost",
+        )
         assert s.MAX_TRAJECTORY_FRAMES == 1000
 
-    def test_loaded_via_config_facade(self):
+    def test_loaded_via_config_facade(self, monkeypatch):
+        # Same isolation rationale — Config is just a facade over Settings,
+        # so the same env override would leak through. Config is built
+        # from the module-level `settings` singleton; we can't easily
+        # rebuild that without reimporting, so we instead verify the
+        # facade's facade behaviour: it must mirror whatever the active
+        # Settings() exposes. The default-value contract is covered
+        # by test_default_is_1000 above; here we just assert the wiring.
+        from settings import Settings, settings
         from config import Config
-        assert Config.MAX_TRAJECTORY_FRAMES == 1000
+        assert Config.MAX_TRAJECTORY_FRAMES == settings.MAX_TRAJECTORY_FRAMES, (
+            "Config facade out of sync with Settings singleton — "
+            "config.py probably read the env at a different time"
+        )
 
     def test_positive_int_validator_enforced(self, monkeypatch):
         from pydantic import ValidationError

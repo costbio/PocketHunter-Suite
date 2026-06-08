@@ -214,6 +214,17 @@ services:
     networks:
       - pockethunter_internal
       - docker_proxy_net
+    healthcheck:
+      # /healthz returns 200 when postgres + redis + docker socket-proxy +
+      # both worker pools are healthy; 503 with the failing component
+      # named otherwise (see orchestrator/api.py:92-109). start_period
+      # gives the reconcile loop a beat to spawn the initial pool before
+      # we start counting failures.
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     restart: unless-stopped
 
 networks:
