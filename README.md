@@ -1,205 +1,233 @@
 # PocketHunter Suite
 
-![CI](https://github.com/osercinoglu/pockethunter-suite/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/costbio/pockethunter-suite/actions/workflows/ci.yml/badge.svg)
 
-A web-based interface for molecular dynamics pocket detection, clustering, and docking analysis. Built with Streamlit for an interactive experience with real-time task monitoring and 3D visualization.
+A Streamlit web frontend for the [PocketHunter](https://github.com/costbio/pockethunter-suite/tree/main/PocketHunter) molecular-dynamics pocket-detection pipeline plus
+[SMINA](https://sourceforge.net/projects/smina/) docking, designed for **public deployment serving untrusted users on a single
+64-core / 128 GB box**. Long-running compute runs in hardened, capability-dropped
+worker containers managed by an in-cluster orchestrator with abuse limits and
+per-session disk quotas. The persistent 3D viewer is built on
+[Mol\*](https://molstar.org/).
 
-## Features
+> This README is the **local-development** entry point. For public production
+> deployment (TLS, reverse proxy, sizing, smoke checks, rollback) follow
+> [`docs/deployment.md`](docs/deployment.md) — it is the authoritative guide.
 
-- **Frame Extraction**: Convert MD trajectories (XTC/TRR) to individual PDB snapshots
-- **Pocket Detection**: Identify binding sites across trajectory frames using PocketHunter
-- **Pocket Clustering**: Group similar pockets and select representative conformations
-- **Molecular Docking**: Dock ligands to pocket representatives using SMINA
-- **3D Visualization**: Interactive molecular viewer with pocket highlighting
-- **Task Monitoring**: Real-time progress tracking with status history
-
-## Quick Start with Docker
-
-The recommended way to run PocketHunter Suite is with Docker Compose.
+## Quick start (Docker, local dev)
 
 ```bash
-# Clone the repository
-git clone git@github.com:bogrum/PocketHunter-Suite.git
-cd PocketHunter-Suite
+git clone https://github.com/costbio/pockethunter-suite.git
+cd pockethunter-suite
 
-# Build and start all services
-docker compose up --build
+# .env is gitignored — every fresh clone needs one. POSTGRES_PASSWORD is
+# required (docker compose refuses to start without it).
+cp .env.example .env
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -base64 24)|" .env
+
+# Build + bring up all six services. The streamlit container's entrypoint
+# auto-runs `alembic upgrade head` against Postgres on every boot, so no
+# manual migration step is needed.
+docker compose up --build -d
 ```
 
-The application will be available at `http://localhost:8501`.
+The application is then served at **http://localhost:8511** (the host port is
+8511; the container exposes 8501).
 
-### Services
-
-- **app**: Streamlit web interface (port 8501)
-- **worker**: Celery worker for background task processing
-- **redis**: Message broker for task queue
-
-## Manual Installation
-
-If you prefer to run without Docker:
-
-### Prerequisites
-
-- Python 3.8+
-- Redis server
-- PocketHunter CLI tools
-- SMINA (for docking)
-
-### Setup
+Verify everything came up cleanly:
 
 ```bash
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Install docking dependencies (optional)
-./install_docking_deps.sh
-
-# Start Redis
-redis-server
-
-# Start Celery worker (in separate terminal)
-celery -A celery_app worker --loglevel=info
-
-# Run the application
-streamlit run main.py
+docker compose ps                         # all services healthy
+curl -s http://localhost:9001/healthz     # orchestrator + DB + Redis + pools
 ```
 
-## Workflow
+> **Don't pre-create `pgdata/`.** Postgres' `initdb` chowns the data dir to
+> UID 70 on first boot — a pre-existing dir owned by the host user blocks
+> that, leaving the postgres container in a restart loop.
 
-The pipeline consists of four sequential steps. Each step generates a unique Job ID that links to subsequent steps.
+To tear everything down (keeps data on disk):
 
-### Step 1: Extract Frames
-
-Upload a trajectory file (XTC/TRR) and topology (PDB/GRO) to extract individual frames as PDB files.
-
-**Parameters:**
-- Frame interval (stride)
-- Start/end frames
-
-### Step 2: Detect Pockets
-
-Run PocketHunter on extracted frames to identify binding pockets.
-
-**Input:** Job ID from Step 1 or upload PDB files directly
-
-**Output:** CSV file with pocket predictions including residues, coordinates, and probability scores
-
-### Step 3: Cluster Pockets
-
-Group similar pockets using DBSCAN clustering based on spatial overlap.
-
-**Parameters:**
-- Epsilon (cluster radius)
-- Minimum samples per cluster
-
-**Output:** Representative pockets from each cluster for docking
-
-### Step 4: Molecular Docking
-
-Dock ligands against representative pocket conformations using SMINA.
-
-**Parameters:**
-- Number of poses (1-50)
-- Exhaustiveness (1-20)
-- pH for protonation (4.0-10.0)
-- Box dimensions (X, Y, Z in Angstroms)
-
-**Input:**
-- Job ID from clustering step
-- Ligand files (PDBQT format, single files or ZIP archive)
-
-**Output:**
-- Docking scores and poses in SDF format
-- Interactive results table with filtering
-- 3D visualization of docked poses
+```bash
+docker compose down            # keeps ./pgdata, ./uploads, ./results
+docker compose down -v         # also drops named volumes (redis cache)
+```
 
 ## Architecture
 
 ```
-                    +------------------+
-                    |    Streamlit     |
-                    |   (Frontend)     |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |      Redis       |
-                    |  (Message Queue) |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |  Celery Worker   |
-                    |   (Processing)   |
-                    +------------------+
+                Browser (Mol* viewer + Streamlit UI)
+                              ▲
+                              │ TLS (Caddy / nginx in prod)
+                              │
+                       ┌──────┴───────┐
+                       │  Streamlit   │── reads/writes ──┐
+                       │  (main.py +  │                  │
+                       │  analysis_   │     ┌────────────▼──────────────┐
+                       │  app.py +    │     │ Postgres (sessions, jobs) │
+                       │  panels/)    │     │ Redis    (broker + cache) │
+                       └──────┬───────┘     └────────────▲──────────────┘
+                              │ submits Celery tasks      │
+                              │                           │
+                       ┌──────▼─────────┐                 │
+                       │  Orchestrator  │── HTTP /pool/status, /healthz
+                       │  (Flask +      │
+                       │  Docker SDK)   │── spawns ───────┐
+                       └──────┬─────────┘                 │
+                              │ via docker-socket-proxy   │
+                              │ (allow-listed endpoints)  ▼
+                              │           ┌───────────────────────────┐
+                              │           │  Hardened worker pools    │
+                              │           │  --read-only --cap-drop   │
+                              │           │  =ALL --no-new-privileges │
+                              │           │  --user 1000 --network    │
+                              │           │  =pockethunter_internal   │
+                              │           │  (internal: true — no     │
+                              │           │  public egress)           │
+                              │           │                           │
+                              │           │  fast pool ─ default/celery │
+                              │           │  docking pool ─ docking    │
+                              │           └───────────────────────────┘
+                              ▼
+                       uploads/<job> → results/<job>
 ```
 
-**Data Flow:**
-1. User uploads files via Streamlit interface
-2. Files stored in `uploads/` directory with job-specific paths
-3. Celery worker processes tasks asynchronously
-4. Results saved to `results/` directory
-5. Status tracked via JSON files in `task_status/` directory
+The orchestrator's `WORKER_JOBS_BEFORE_RECYCLE` defence-in-depth recycle policy
+tears down + replaces each worker container after 10 completed jobs. Per-session
+disk quotas, per-pool concurrency caps, per-IP daily session-create caps, and
+optional Cloudflare Turnstile CAPTCHA are all wired through `RATE_LIMIT_ENABLED`.
 
-## File Structure
+See [`CLAUDE.md`](CLAUDE.md) (contributor reference) and
+[`docs/deployment.md`](docs/deployment.md) (production deployment) for depth.
 
+## Services (six)
+
+| Service               | Role                                                            |
+|-----------------------|-----------------------------------------------------------------|
+| `streamlit`           | Web frontend (auto-migrates on boot via `docker-entrypoint.sh`) |
+| `postgres`            | Authoritative store: sessions, jobs                             |
+| `redis`               | Celery broker + result backend                                  |
+| `orchestrator`        | Spawns + recycles hardened worker containers; exposes `/healthz`, `/pool/status` |
+| `docker-socket-proxy` | Tecnativa allow-listed proxy in front of `/var/run/docker.sock` |
+| `celery-beat`         | Scheduler for cleanup + quota-enforcement beat tasks            |
+
+Worker containers (`ph-worker-fast-*` / `ph-worker-docking-*`) are **dynamic** —
+spawned by the orchestrator's reconcile loop, not declared in
+`docker-compose.yml`.
+
+## Repository layout
+
+- **Top level** (`/`) — the Streamlit + Celery suite. This is what you usually edit.
+  - `main.py`, `analysis_app.py`, `landing.py` — Streamlit dispatcher + single-page app + landing screen.
+  - `panels/{find_pockets,cluster,docking,jobs_panel}.py` — per-stage UI panels.
+  - `tasks.py`, `celery_app.py`, `step4_docking.py` — Celery task definitions + docking shell-out.
+  - `orchestrator/` — Flask + Docker-SDK service that manages worker pools.
+  - `db/`, `alembic/` — SQLAlchemy models + migrations.
+  - `components/`, `static/js/molstar-bridge.js` — Mol\* viewer integration.
+  - `frontend/src/` — Mol\* bridge source (Vite); pre-built bundle ships in `static/js/`.
+  - `security.py`, `rate_limiter.py`, `client_ip.py`, `captcha.py` — input validation + abuse limits.
+- **`PocketHunter/`** — vendored CLI tool that the suite shells out to for extract / detect / cluster.
+  Has its own `CLAUDE.md` and `requirements.txt`. Treat as a black-box subprocess; only the CLI
+  surface is part of the contract.
+
+## Environment variables
+
+Defer to [`.env.example`](.env.example) as the authoritative list. The required
+ones (`docker compose up` will refuse without them):
+
+- `POSTGRES_PASSWORD` — Postgres + DATABASE_URL credential. Generate with `openssl rand -base64 24`.
+- `BASE_URL` — public URL the app generates share links from (e.g. `https://app.example.com`).
+
+Public-deployment knobs to tune before flipping the stack live:
+
+- `PER_SESSION_DISK_QUOTA_MB`, `MAX_CONCURRENT_FAST_JOBS`, `MAX_CONCURRENT_DOCKING_JOBS`,
+  `MAX_CONCURRENT_FAST_PER_SESSION`, `MAX_CONCURRENT_DOCKING_PER_SESSION`,
+  `MAX_SESSIONS_PER_IP_PER_DAY` — abuse limits.
+- `TURNSTILE_ENABLED`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` — Cloudflare CAPTCHA
+  (disabled by default for local dev; enable + populate for production).
+- `FAST_POOL_SIZE`, `DOCKING_POOL_SIZE`, `WORKER_CPU_LIMIT`, `WORKER_MEMORY_LIMIT` — orchestrator sizing.
+
+## Frontend (Mol\* bridge)
+
+The Mol\* bridge bundle (`static/js/molstar-bridge.js` + `.css`) ships pre-built in
+git. Contributors who don't edit it don't need Node. To rebuild after editing
+`frontend/src/`:
+
+```bash
+cd frontend
+npm install
+npm run build           # writes the .js + .css into ../static/js/
 ```
-PocketHunter-Suite/
-├── main.py                 # Application entry point
-├── celery_app.py           # Celery configuration
-├── tasks.py                # Background task definitions
-├── session_state.py        # Session state management
-├── extract_frames_app.py   # Step 1: Frame extraction
-├── detect_pockets_app.py   # Step 2: Pocket detection
-├── cluster_pockets_app.py  # Step 3: Pocket clustering
-├── docking_app.py          # Step 4: Molecular docking
-├── task_monitor_app.py     # Task monitoring dashboard
-├── step4_docking.py        # Docking backend functions
-├── uploads/                # User uploaded files
-├── results/                # Processing results
-└── task_status/            # Job status tracking
+
+Commit the rebuilt artefacts alongside your source change. Pinned versions live in
+`frontend/package.json`. The Dockerfile does NOT install Node — `COPY . .` brings
+the pre-built bundle in.
+
+## Testing
+
+```bash
+# Inside the running stack
+docker compose exec streamlit pip install pytest pytest-mock
+docker compose exec streamlit python -m pytest tests/ -q
 ```
 
-## Docking Box Configuration
+For a CI-sized stack (smaller worker pools fit on a laptop / CI runner) use the
+shipped test overlay:
 
-The docking box defines the search space for ligand poses:
-
-- **Center**: Automatically calculated from pocket residues
-- **Size**: Configurable X, Y, Z dimensions (default: 20x20x20 Angstroms)
-
-Larger boxes increase search space but require higher exhaustiveness for accurate results.
-
-## Troubleshooting
-
-**Tasks stuck in "running" state:**
-- Check Celery worker logs for errors
-- Verify Redis connection is active
-- Restart the worker: `docker compose restart worker`
-
-**No pockets detected:**
-- Ensure PDB files contain protein atoms
-- Check that PocketHunter is properly installed in the container
-
-**Docking fails with "No PDBQT files found":**
-- Verify ligand ZIP contains .pdbqt files (not nested in subdirectories)
-- Check file format is valid PDBQT
-
-**Browser shows stale data:**
-- Refresh the page after task completion
-- Check Task Monitor for actual job status
-
-## Environment Variables
-
-Configure via `.env` file or environment:
-
-```
-REDIS_URL=redis://localhost:6379/0
-SMINA_PATH=/usr/local/bin/smina
-POCKETHUNTER_PATH=/opt/pockethunter
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+docker compose exec -T streamlit python -m pytest tests/ -q
 ```
 
-## License
+## Health & operations
 
-This project is open source. See LICENSE file for details.
+```bash
+# Deep liveness (200 / 503): postgres + redis + docker + per-pool occupancy
+curl -s http://localhost:9001/healthz | python3 -m json.tool
+
+# Worker pool snapshot
+curl -s http://localhost:9001/pool/status | python3 -m json.tool
+
+# Hardening smoke: asserts every per-worker flag (--read-only, cap-drop=ALL,
+# no-new-privileges, UID 1000, internal-only network, no public egress)
+./scripts/verify_hardening.sh
+```
+
+`docs/deployment.md` covers TLS reverse proxy, sizing on a 64c / 128 GB box,
+production env overrides, backup, rollback, upgrades, and the
+`docker-compose.production.yml` overlay that locks down the host-port surface.
+
+## Local development (no Docker)
+
+The orchestrator-managed pool design is Docker-native, but the suite itself runs
+fine on a bare host for unit-test / panel-development work:
+
+```bash
+pip install -r requirements.txt
+redis-server --daemonize yes
+# (provision Postgres + run `alembic upgrade head` against it once)
+
+# Queue routing matches celery_app.task_routes — keep these two queue assignments.
+celery -A celery_app worker -Q default,celery --concurrency=8 --loglevel=info
+celery -A celery_app worker -Q docking --concurrency=4 --loglevel=info
+celery -A celery_app beat --loglevel=info
+streamlit run main.py --server.port=8501
+```
+
+You lose the worker hardening, the recycle policy, and the orchestrator HTTP
+API — only run this for development against trusted inputs.
+
+## Production deployment
+
+For public production deployment on a single-box server, follow
+[`docs/deployment.md`](docs/deployment.md) — it is the authoritative guide and
+covers everything this README intentionally omits (TLS via Caddy, locked-down
+host ports via `docker-compose.production.yml`, sizing for 64c / 128 GB,
+hardening smoke checklist, log rotation, backup, rollback).
+
+The hardening flag-by-flag checklist lives in [`docs/security.md`](docs/security.md).
 
 ## Contributing
 
-Contributions welcome. Please open an issue or submit a pull request.
+Issues and pull requests welcome. Please run the test suite before submitting:
+`docker compose exec streamlit python -m pytest tests/ -q`.
+
+Contributor-facing architecture and conventions live in [`CLAUDE.md`](CLAUDE.md).
