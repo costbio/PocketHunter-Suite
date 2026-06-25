@@ -62,8 +62,9 @@ RUN apt-get purge -y gcc g++ make python3-dev \
 # Runtime directories. The bind-mounted uploads/results/logs in
 # docker-compose.yml supersede these at runtime; they exist here so
 # the image is self-contained when run standalone (e.g. ad-hoc tests).
-RUN mkdir -p uploads results logs \
-    && chown -R 1000:1000 /app/uploads /app/results /app/logs
+RUN mkdir -p uploads results logs static \
+    && chown -R 1000:1000 /app/uploads /app/results /app/logs /app/static \
+    && chmod -R 777 /app/static
 
 # Non-root runtime user. The worker and orchestrator images both already
 # drop privilege; streamlit is the most-exposed surface (reverse proxy
