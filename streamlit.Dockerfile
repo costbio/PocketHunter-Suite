@@ -76,6 +76,19 @@ RUN mkdir -p uploads results logs \
 RUN groupadd -g 1000 streamlituser \
     && useradd -u 1000 -g streamlituser -M -s /usr/sbin/nologin streamlituser
 ENV HOME=/tmp
+
+# Patch Streamlit's index.html: replace default favicon with PocketHunter
+# logo + inject early CSS to hide toolbar from first paint. Must run as
+# root before dropping to non-root user.
+RUN ST_DIR="/opt/conda/envs/docking/lib/python3.10/site-packages/streamlit/static" \
+    && ST_INDEX="$ST_DIR/index.html" \
+    && if [ -f "$ST_INDEX" ]; then \
+         sed -i 's|<link rel="shortcut icon" href="./favicon.png" />|<link rel="icon" type="image/svg+xml" href="/app/static/favicon.svg">|' "$ST_INDEX" \
+         && sed -i 's|</head>|<style>header[data-testid="stHeader"]{display:none!important}.stMainBlockContainer,.main .block-container{padding-top:0.6rem!important}.stElementContainer.st-key-recent_sessions_cm{visibility:hidden!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important}</style><script>document.addEventListener("click",function(e){var b=e.target.closest(".bh-copy-btn");if(!b)return;var u=b.getAttribute("data-copy-url");if(!u)return;navigator.clipboard.writeText(u).then(function(){var t=b.innerText;b.innerText="\\u2713 copied";setTimeout(function(){b.innerText=t},1500)})})</script></head>|' "$ST_INDEX" \
+         && cp /app/static/favicon.svg "$ST_DIR/favicon.svg" \
+         && echo "Patched Streamlit index.html (favicon + early CSS)."; \
+       fi
+
 USER 1000:1000
 
 EXPOSE 8501

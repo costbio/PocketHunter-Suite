@@ -85,7 +85,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://pockethunter:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/pockethunter
-      - BASE_URL=http://localhost:8511
+      - BASE_URL=https://pockethunter.bio-cloud.site
     volumes:
       - .:/app
     restart: unless-stopped
@@ -111,7 +111,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://pockethunter:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/pockethunter
-      - BASE_URL=http://localhost:8511
+      - BASE_URL=https://pockethunter.bio-cloud.site
       - DOCKING_EXHAUSTIVENESS=${DOCKING_EXHAUSTIVENESS:-8}
       - DOCKING_MAX_PAIRS=${DOCKING_MAX_PAIRS:-1000}
       - MAX_DOWNLOAD_ZIP_SIZE=${MAX_DOWNLOAD_ZIP_SIZE:-536870912}
@@ -182,7 +182,7 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=postgresql+psycopg://pockethunter:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/pockethunter
-      - BASE_URL=http://localhost:8511
+      - BASE_URL=https://pockethunter.bio-cloud.site
       - PYTHONPATH=/app
       # C3 cut-over: orchestrator owns the worker pools by default. Set
       # USE_ORCHESTRATOR=false in .env only to disable workers entirely.

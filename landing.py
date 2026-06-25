@@ -663,19 +663,26 @@ def render_masthead(resolved: Optional[ResolvedSession] = None) -> None:
         display_name = sess.display_name or f"session {sess.short_code}"
         name_html = html.escape(display_name, quote=True)
         role_icon, role_label = ("✏️", "Editor") if is_editor else ("👁", "Viewer")
-        # No literal newlines — they break Streamlit's markdown HTML-block
-        # parser and would also corrupt the inline onclick="…" attribute.
-        _copy_js = (
-            f'navigator.clipboard.writeText({url_js}).then(()=>{{'
-            'const t=this.innerText;this.innerText="✓ copied";'
-            'setTimeout(()=>{this.innerText=t;},1500);}})'
+        # Copy buttons rendered via st.components.v1.html below the
+        # markdown — onclick is stripped by st.markdown.
+        # Copy buttons use data-copy-url spans (survives markdown
+        # sanitizer). Click handlers are injected via Dockerfile script.
+        _view_url = build_session_url(sess.short_code, edit_secret=None)
+        _copy_btns = (
+            '<span class="bh-copy-btn" data-copy-url="' + html.escape(_view_url, quote=True) + '">view-only link</span>'
         )
+        if is_editor:
+            _edit_url = build_session_url(sess.short_code,
+                                          edit_secret=sess.edit_secret)
+            _copy_btns += (
+                ' <span class="bh-copy-btn" data-copy-url="' + html.escape(_edit_url, quote=True) + '">editor link</span>'
+            )
         session_inline_html = (
             '<span class="bh-session-inline">'
             f'<span class="bh-session-name">📁 <strong>{name_html}</strong></span>'
             '<span class="bh-session-url">'
             f'<code class="bh-url">{url_html}</code>'
-            f'<button class="bh-copy" type="button" onclick=\'{_copy_js}\'>copy</button>'
+            f'{_copy_btns}'
             '</span>'
             f'<span class="bh-role">{role_icon} {role_label}</span>'
             '</span>'

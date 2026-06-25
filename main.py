@@ -54,8 +54,7 @@ import recent_sessions
 
 st.set_page_config(
     page_title="PocketHunter Suite",
-    page_icon="🧬",
-    layout="wide",
+        layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={
         'Get Help': 'https://github.com/your-repo/pockethunter',
@@ -292,7 +291,7 @@ st.markdown("""
         min-width: 0;
         color: #000;
     }
-    .bh-copy {
+    .bh-copy, .bh-copy-btn {
         font-family: inherit;
         font-size: 0.7rem;
         padding: 2px 8px;
@@ -304,7 +303,7 @@ st.markdown("""
         text-transform: uppercase;
         flex-shrink: 0;
     }
-    .bh-copy:hover { background: #d4ff00; }
+    .bh-copy:hover, .bh-copy-btn:hover { background: #d4ff00; }
     .bh-role { white-space: nowrap; color: #000; flex-shrink: 0; }
 
     /* Bottom nav row — hosts ⌂ New session and future Help / Tutorial
