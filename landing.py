@@ -60,9 +60,9 @@ def _example_data_available() -> bool:
     """Whether the landing-page demo button should render.
 
     True iff ``EXAMPLE_TRAJECTORY_DIR`` is set to a real directory
-    that holds both ``trajectory.xtc`` and ``topology.gro``. Empty
-    string / missing dir / missing files → return False; the button
-    is hidden entirely.
+    that holds ``trajectory.xtc`` and a topology file (``.pdb`` or
+    ``.gro``). Empty string / missing dir / missing files → return
+    False; the button is hidden entirely.
     """
     from pathlib import Path
 
@@ -70,7 +70,9 @@ def _example_data_available() -> bool:
     if not raw:
         return False
     d = Path(raw)
-    return (d / "trajectory.xtc").is_file() and (d / "topology.gro").is_file()
+    has_xtc = (d / "trajectory.xtc").is_file()
+    has_top = (d / "topology.pdb").is_file() or (d / "topology.gro").is_file()
+    return has_xtc and has_top
 
 
 def _create_example_session() -> "object | None":
@@ -99,13 +101,16 @@ def _create_example_session() -> "object | None":
     # dispatch a find_pockets job against it.
     example_dir = Path(Config.EXAMPLE_TRAJECTORY_DIR)
     src_xtc = example_dir / "trajectory.xtc"
-    src_top = example_dir / "topology.gro"
+    # Accept either PDB or GRO topology — the example dir may ship either.
+    src_top = example_dir / "topology.pdb"
+    if not src_top.exists():
+        src_top = example_dir / "topology.gro"
     if not src_xtc.exists() or not src_top.exists():
         st.error(
             f"Example trajectory missing at `{example_dir}`. Set "
             f"`EXAMPLE_TRAJECTORY_DIR` in .env to a directory containing "
-            f"`trajectory.xtc` + `topology.gro`, or unset it to hide the "
-            f"button. Falling back to the blank session."
+            f"`trajectory.xtc` + `topology.pdb` (or `.gro`), or unset "
+            f"it to hide the button. Falling back to the blank session."
         )
         return row
 
@@ -113,7 +118,7 @@ def _create_example_session() -> "object | None":
     upload_dir = Path(Config.UPLOAD_DIR) / job_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     xtc_dst = upload_dir / "trajectory_example_demo.xtc"
-    top_dst = upload_dir / "topology_example_demo.gro"
+    top_dst = upload_dir / f"topology_example_demo{src_top.suffix}"
     try:
         shutil.copy2(src_xtc, xtc_dst)
         shutil.copy2(src_top, top_dst)

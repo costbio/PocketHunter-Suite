@@ -64,7 +64,6 @@ logs/
 *.swo
 
 # Example datasets — carried to deployment hosts out-of-band, not in repo.
-examples/
 
 # Manuscript drafts — handled separately from tool source.
 docs/manuscript/
