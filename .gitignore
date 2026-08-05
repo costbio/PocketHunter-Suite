@@ -70,3 +70,6 @@ logs/
 
 # Manuscript drafts — handled separately from tool source.
 docs/manuscript/
+
+# Authoring-only MCP registration; machine-specific absolute paths.
+.mcp.json
