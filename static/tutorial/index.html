@@ -120,6 +120,11 @@ footer {
 <li><a href="#find-pockets">Find pockets</a></li>
 <li><a href="#cluster">Cluster</a></li>
 <li><a href="#dock">Dock</a></li>
+<li><a href="#reading-the-results">Reading the results</a></li>
+<li><a href="#parameter-reference">Parameter reference</a></li>
+<li><a href="#limits-and-quotas">Limits and quotas</a></li>
+<li><a href="#troubleshooting">Troubleshooting</a></li>
+<li><a href="#citing">Citing</a></li>
 </ul>
 </div>
 </nav>
@@ -180,7 +185,9 @@ each pocket appeared in, plus binding scores for the ligands you tried.</p>
 </div>
 <dl class="facts">
   <dt>Worked example</dt>
-  <dd>MEASURED_EXAMPLE</dd>
+  <dd>The bundled trypsin trajectory — 98 frames of a single 263-residue chain, which the default stride of 10 cuts down to 10 structures</dd>
+  <dt>Time to first pockets</dt>
+  <dd>MEASURED_RUNTIME</dd>
   <dt>You end up with</dt>
   <dd>Ranked pockets per frame · cluster representatives · SMINA scores · downloadable poses</dd>
 </dl>
@@ -413,7 +420,493 @@ to no more than 1,000 pairs (<code>DOCKING_MAX_PAIRS=1000</code>) — over that 
 panel refuses the submission up front and tells you how many molecules
 would fit — and a bucket holding more than 20 pockets (<code>MAX_DOCKING_PDBS</code>)
 is trimmed to the 20 with the highest probability, with a warning shown
-while you are still choosing.</p></main>
+while you are still choosing.</p>
+<h2 id="reading-the-results">Reading the results</h2>
+<p>The left-hand column holds one Mol* viewer for the whole session, and
+it does not reset when you switch stages. Whatever you clicked last
+stays on screen: a pocket surface from the pocket table, a cluster
+overpaint from the heatmap, a docked pose from the score grid. The
+viewer does not poll on a timer either — it redraws when you move its
+slider, when you click a row, or when a running job pushes a page
+refresh. An idle tab left open overnight shows you exactly what it
+showed at midnight.</p>
+<p><strong>The number on the frame slider is a third numbering, and it agrees
+with neither of the other two.</strong> The label reads <code>Frame n / N</code>, where
+<code>N</code> counts the models baked into the viewer file and <code>n</code> is your
+position among them. Baking caps out at 200 models
+(<code>MAX_VIEWER_LOADED_FRAMES=200</code>): extract 200 structures or fewer and
+every one of them is in there, so slider position <code>n</code> is the <code>n</code>-th
+extracted structure. Extract more and the viewer takes a second stride
+of its own — <code>ceil(N_extracted / 200)</code>, so 2 for 400 structures, 5 for
+the 1,000-structure ceiling — and the slider then steps over that
+thinned set. Neither reading is the <code>Frame</code> column of <code>pockets.csv</code>,
+and neither is a frame index in your XTC. Scrub to look around; click a
+row when you need a specific pocket.</p>
+<p>Clicking always wins over scrubbing, which is the point. A pocket row,
+a cluster representative or a docking receptor carries the filename of
+the structure it came from, so selecting it loads that exact structure
+even when the viewer stride skipped it. You will know when that
+happens: the slider disappears, a caption reads <em>Showing Frame X of Y —
+single-frame mode</em>, and an <strong>↩ Overview</strong> button takes you back to the
+scrub view. Under the viewer sits <strong>↓ Download view (PDB)</strong>, which
+hands you the single frame currently rendered — the same button turns
+into <strong>↓ Download view (complex)</strong> and ships a ZIP of receptor plus
+pose whenever a docked ligand is on screen. On the Dock stage the
+bottom slider stops walking frames altogether and walks receptors
+instead, moving the grid's highlighted column with it.</p>
+<p>Everything else leaves by a download button. Each one is built on
+demand from what the job wrote to disk, so a session whose files were
+pruned offers the CSVs it still has and quietly drops the rest.</p>
+<table>
+<thead>
+<tr>
+<th>Download</th>
+<th>Where</th>
+<th>What is in it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pockets.csv</code></td>
+<td>Find pockets → Downloads</td>
+<td>Every detection: <code>File name</code>, <code>Frame</code>, <code>pocket_index</code>, <code>probability</code>, <code>residues</code></td>
+</tr>
+<tr>
+<td>high-confidence subset</td>
+<td>Find pockets → Downloads</td>
+<td>The same columns, rows at <code>probability</code> ≥ 0.7 only</td>
+</tr>
+<tr>
+<td>PDB archive (ZIP)</td>
+<td>Find pockets → Downloads, after <strong>Generate PDB archive</strong></td>
+<td>Every per-frame PDB p2rank ran on</td>
+</tr>
+<tr>
+<td><code>cluster_representatives.csv</code></td>
+<td>Cluster → Downloads</td>
+<td>One row per cluster medoid</td>
+</tr>
+<tr>
+<td>high-quality subset</td>
+<td>Cluster → Downloads</td>
+<td>Representatives at <code>probability</code> ≥ 0.7 only</td>
+</tr>
+<tr>
+<td>Cluster PDBs (ZIP)</td>
+<td>Cluster → Downloads, or beside a selected row</td>
+<td>Source-frame PDB of every member of the chosen cluster, plus a <code>metadata.csv</code> joining filenames to cluster, frame, probability and residues</td>
+</tr>
+<tr>
+<td>Full results CSV</td>
+<td>Dock → Downloads</td>
+<td>Every pose of every ligand-receptor pair</td>
+</tr>
+<tr>
+<td>Best-poses CSV</td>
+<td>Dock → Downloads</td>
+<td>One row per pair — the pose the grid cell shows</td>
+</tr>
+<tr>
+<td>Download all results (ZIP)</td>
+<td>Dock → Downloads</td>
+<td>Per-pose SDFs plus both CSVs</td>
+</tr>
+<tr>
+<td>Receptors only (ZIP)</td>
+<td>Dock → Downloads</td>
+<td>The receptor PDBs with no poses, plus a <code>metadata.csv</code>. The staging bucket has its own <strong>↓ Download N receptors (ZIP)</strong> for the same thing before you run</td>
+</tr>
+<tr>
+<td>↓ Download complex</td>
+<td>Dock, beside a selected grid row</td>
+<td>Receptor PDB, best-pose SDF, and a one-row <code>metadata.csv</code> carrying the affinity</td>
+</tr>
+</tbody>
+</table>
+<p>Archives are assembled in memory against a 512 MB budget
+(<code>MAX_DOWNLOAD_ZIP_SIZE</code>), smallest file first. A ZIP that hits the
+budget is still delivered; a caption below the button counts what was
+left out. Take that as a signal to download per cluster rather than in
+bulk.</p>
+<h2 id="parameter-reference">Parameter reference</h2>
+<p>Two kinds of control live in these panels and they behave very
+differently. Settings-form parameters are read once, when you press the
+stage button, and they define the job — changing one afterwards does
+nothing until you run the stage again. Results-view parameters redraw
+the table you are looking at and touch no job at all. The <strong>Effect</strong>
+column below says which is which. Defaults are what the widget shows on
+its first render; after that it remembers whatever you last set it to
+for the rest of the browser session.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Range</th>
+<th>Default</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Input source</td>
+<td>Find pockets, settings</td>
+<td>From trajectory (XTC + topology) · From PDB ZIP archive</td>
+<td>From trajectory</td>
+<td>Trajectory mode extracts frames first; ZIP mode skips straight to p2rank</td>
+</tr>
+<tr>
+<td>Frame stride</td>
+<td>Find pockets, settings</td>
+<td>Integer, 1 and up, no ceiling on the widget</td>
+<td>10</td>
+<td>Every n-th frame is extracted. Also sets the <code>Frame</code> labels, which come out at stride × extraction position</td>
+</tr>
+<tr>
+<td>Min probability</td>
+<td>Find pockets, results</td>
+<td>0.00 to 1.00, step 0.05</td>
+<td>0.00</td>
+<td>View only — hides rows below the threshold</td>
+</tr>
+<tr>
+<td>Confidence</td>
+<td>Find pockets, results</td>
+<td>High · Medium · Low, any combination</td>
+<td>All three ticked</td>
+<td>View only — hides badge classes</td>
+</tr>
+<tr>
+<td>Source pockets</td>
+<td>Cluster, settings</td>
+<td>Completed pocket runs in this session, newest first</td>
+<td>The newest one</td>
+<td>Which <code>pockets.csv</code> gets clustered</td>
+</tr>
+<tr>
+<td>Min. ligand-binding probability</td>
+<td>Cluster, settings</td>
+<td>0.00 to 1.00, step 0.05</td>
+<td>0.50</td>
+<td>Rows below it are dropped before the residue vectors are built, so it changes the clustering itself</td>
+</tr>
+<tr>
+<td>Method</td>
+<td>Cluster, settings</td>
+<td>dbscan · hierarchical</td>
+<td>dbscan</td>
+<td>DBSCAN can return nothing; hierarchical always returns something</td>
+</tr>
+<tr>
+<td>Hierarchical refinement</td>
+<td>Cluster, settings, DBSCAN only</td>
+<td>On · off</td>
+<td>On</td>
+<td>Sub-clusters within each DBSCAN cluster, which is what makes the K spinners appear later</td>
+</tr>
+<tr>
+<td>K, per parent cluster</td>
+<td>Cluster, Representatives tab</td>
+<td>1 up to the member count, capped at 10</td>
+<td>1</td>
+<td>View only — 1 shows the DBSCAN medoid, higher re-cuts that cluster's dendrogram</td>
+</tr>
+<tr>
+<td>Ligand files</td>
+<td>Dock, settings</td>
+<td><code>.pdbqt</code> · <code>.sdf</code> · <code>.pdb</code> · <code>.zip</code>, several at once</td>
+<td>—</td>
+<td>SDF and PDB are split into one PDBQT per molecule</td>
+</tr>
+<tr>
+<td>Generate 3D coordinates</td>
+<td>Dock, settings</td>
+<td>On · off</td>
+<td>Off</td>
+<td>Runs OpenBabel <code>--gen3d</code> during prep. Costs minutes; only 2D input needs it</td>
+</tr>
+<tr>
+<td>Scoring function</td>
+<td>Dock, smina parameters</td>
+<td>vinardo · vina · ad4_scoring · dkoes_scoring</td>
+<td>vinardo</td>
+<td>smina's <code>--scoring</code></td>
+</tr>
+<tr>
+<td>Number of poses</td>
+<td>Dock, smina parameters</td>
+<td>1 to 50</td>
+<td>10</td>
+<td>smina's <code>--num_modes</code> — how many modes are kept per pair</td>
+</tr>
+<tr>
+<td>pH (protonation)</td>
+<td>Dock, smina parameters</td>
+<td>4.0 to 10.0, step 0.1</td>
+<td>7.4</td>
+<td>The pH OpenBabel protonates the receptor at before writing PDBQT</td>
+</tr>
+<tr>
+<td>Rank ligands by</td>
+<td>Dock, results</td>
+<td>Mean · Median · Best · ECR</td>
+<td>Mean</td>
+<td>View only — reorders the grid rows</td>
+</tr>
+</tbody>
+</table>
+<p>Four things you might expect to tune are fixed on the server and have
+no widget. p2rank runs on four threads (<code>P2RANK_THREADS=4</code>). smina runs
+at exhaustiveness 8 (<code>DOCKING_EXHAUSTIVENESS=8</code>). The docking box is
+derived per pocket from its lining residues, padded 2 Å and clamped to
+between 10 Å and 25 Å per edge. And DBSCAN's <code>eps</code> and <code>min_samples</code>
+are swept rather than set — see the caveat in the Cluster section
+before you read much into the pair that wins.</p>
+<h2 id="limits-and-quotas">Limits and quotas</h2>
+<p>This is a shared box, and the caps below are what keeps one enthusiastic
+user from taking it over. Every value here was read from the running
+deployment, and every one of them is enforced somewhere in the code
+path, not merely declared in a config file.</p>
+<table>
+<thead>
+<tr>
+<th>Limit</th>
+<th>Value</th>
+<th>Where it bites</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Upload size, per file</td>
+<td>200 MB in the browser, 500 MB server-side</td>
+<td>The browser's limit is the one you will meet</td>
+</tr>
+<tr>
+<td>ZIP archives</td>
+<td>100:1 compression ratio, 1 GB uncompressed</td>
+<td>Checked before anything is unpacked</td>
+</tr>
+<tr>
+<td>Disk per session</td>
+<td>5,000 MB</td>
+<td>An upload that would cross it is refused. An hourly sweep prunes a session's oldest jobs until it fits</td>
+</tr>
+<tr>
+<td>Uploads</td>
+<td>10 per minute</td>
+<td>Per browser session</td>
+</tr>
+<tr>
+<td>Stage submissions</td>
+<td>5 per minute</td>
+<td>Per browser session</td>
+</tr>
+<tr>
+<td>Fast jobs at once</td>
+<td>2 per session, 60 across the service</td>
+<td>Find pockets and Cluster share this pool</td>
+</tr>
+<tr>
+<td>Docking jobs at once</td>
+<td>1 per session, 30 across the service</td>
+<td>Docking has its own pool, so a docking queue never starves pocket finding</td>
+</tr>
+<tr>
+<td>New sessions per IP</td>
+<td>20 per day</td>
+<td>Only sessions that actually dispatched a job are counted</td>
+</tr>
+<tr>
+<td>Extracted frames</td>
+<td>1,000</td>
+<td>Find pockets stops before detection and names a stride to retry with</td>
+</tr>
+<tr>
+<td>Docking pairs</td>
+<td>1,000 molecules × pockets</td>
+<td>Refused up front, with the molecule count that would fit</td>
+</tr>
+<tr>
+<td>Pockets per docking run</td>
+<td>20</td>
+<td>A larger bucket is trimmed to the 20 highest probabilities</td>
+</tr>
+<tr>
+<td>Models in the viewer</td>
+<td>200</td>
+<td>Above it the viewer strides; the rest load on demand</td>
+</tr>
+<tr>
+<td>Download archives</td>
+<td>512 MB</td>
+<td>Files past the budget are omitted and counted in a caption</td>
+</tr>
+<tr>
+<td>Frame extraction</td>
+<td>30 minutes</td>
+<td>Subprocess timeout</td>
+</tr>
+<tr>
+<td>Pocket detection</td>
+<td>1 hour</td>
+<td>Subprocess timeout</td>
+</tr>
+<tr>
+<td>Clustering</td>
+<td>30 minutes</td>
+<td>Subprocess timeout</td>
+</tr>
+<tr>
+<td>Docking</td>
+<td>2 hours</td>
+<td>Celery soft limit, with a hard kill 5 minutes later</td>
+</tr>
+</tbody>
+</table>
+<p>Two of those caps fail open by design. The per-session disk check and
+the per-IP session cap both need the database to answer, and when it
+cannot they let the request through rather than block the landing page.
+Do not read a successful upload as proof you were under quota.</p>
+<p>Workers are cattle. Each one retires after ten completed tasks and is
+replaced by a fresh container, which is why a long queue quietly changes
+hands mid-run. Retirement is a warm shutdown with a two-hour drain
+window, so an in-flight job finishes on the worker that started it; a
+job that outlives even that gets requeued and picks up from the partial
+CSV. None of this is visible from the browser, and none of it needs to
+be — it is simply why nothing here should be treated as an interactive
+session.</p>
+<p>There is no CAPTCHA. The code for one is wired in and can be switched
+on, but <code>TURNSTILE_ENABLED</code> is <code>false</code> on this deployment, so <strong>Start
+new analysis</strong> is one click and nothing more.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p>A failed job renders the same card whatever went wrong: a red headline,
+a blue suggestion, a <strong>Show full error details</strong> expander with the raw
+exception text, and — when the job wrote one — a <strong>Download error log</strong>
+button. Editors also get a <strong>Retry</strong>. The headline comes from a
+classifier that sorts the exception into one of six buckets, and
+knowing which bucket you landed in tells you where to look next.</p>
+<table>
+<thead>
+<tr>
+<th>Headline</th>
+<th>Usually means</th>
+<th>Worth trying</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Input validation failed</td>
+<td>The task rejected its inputs before doing any work</td>
+<td>Re-check the files and parameters in the form above the card</td>
+</tr>
+<tr>
+<td>Task timed out</td>
+<td>The stage outran its budget</td>
+<td>A larger stride, or running stages one at a time so each gets its own budget</td>
+</tr>
+<tr>
+<td>Subprocess crashed (out of memory)</td>
+<td>A tool was killed by the OOM reaper</td>
+<td>Fewer frames. Trajectory length is the usual cause</td>
+</tr>
+<tr>
+<td>Subprocess segfaulted</td>
+<td>Malformed input, typically a corrupt PDB or PDBQT</td>
+<td>Inspect the error log; re-upload the offending file</td>
+</tr>
+<tr>
+<td>Subprocess failed</td>
+<td>An external tool exited non-zero</td>
+<td>The error log carries the full stderr</td>
+</tr>
+<tr>
+<td>Required tool or file not found</td>
+<td>smina or p2rank is missing, or an input file vanished</td>
+<td>This one is ours, not yours — report it</td>
+</tr>
+<tr>
+<td>Task failed</td>
+<td>Nothing matched</td>
+<td>Send the error log with a bug report</td>
+</tr>
+</tbody>
+</table>
+<p>Docking fails in halves more often than it fails outright. When some
+receptor-ligand pairs work and others do not, the run still completes
+and the results are still shown, with a warning above them reading <em>N
+of M docking pairs failed</em> and an expander naming each pair with its
+exception. A separate log is downloadable. Read the grid as covering
+the successful pairs only — a blank cell is a pair that did not run,
+not a ligand that scored badly. A second, distinct callout appears when
+OpenBabel converts fewer molecules than you uploaded, and it reports
+per source file how many of how many made it through. Malformed records
+in an SDF are the usual reason.</p>
+<p>The viewer has its own failure modes, all of them separate from the job
+succeeding. <em>Viewer file skipped</em> means the per-frame PDBs added up past
+the 1 GB estimate, so no trajectory was baked — the pocket tables are
+fine, and a higher stride fixes it. <em>Mol* couldn't load this
+trajectory</em> is the browser giving up rather than the server: too many
+frames to parse, corrupt atom records, or a lost WebGL context. <em>Viewer
+trajectory no longer available on disk</em> means the artefacts were pruned
+under one of the cleanup timers, and re-running Find pockets brings
+them back.</p>
+<p>Refusals are not failures, and they read differently. <em>You already have
+1/1 docking job(s) running in this session</em> and <em>The docking pool is
+busy</em> are the two concurrency caps talking; both clear on their own.
+<em>Daily new-session limit reached for this IP</em> means today's twenty are
+gone — an existing session URL still works fine. <em>Rate limit exceeded</em>
+carries the seconds to wait. And <em>Session disk quota exceeded</em> prints
+what you have used against the 5,000 MB cap, which usually means it is
+time to download what matters and start clean.</p>
+<p>While a stage is running, a <strong>Live log</strong> expander opens below the
+columns and tails the last 50 lines the subprocess wrote. It is the
+only place p2rank's own output is visible, and it is where to look when
+detection finishes with no pockets: a clean run leaves a normal p2rank
+report, a crash leaves a stack trace, and the two need very different
+responses from you.</p>
+<h2 id="citing">Citing</h2>
+<p>If this service contributed to something you publish, the work it did
+was mostly done by other people's tools. Cite them.</p>
+<ul>
+<li><strong>PocketHunter</strong> and <strong>PocketHunter Suite</strong> —
+  <code>github.com/costbio/PocketHunter</code> and
+  <code>github.com/costbio/PocketHunter-Suite</code>. The suite is the web service
+  you are using; PocketHunter is the pipeline underneath it.</li>
+<li><strong>p2rank 2.5</strong>, which finds the pockets. Krivak R, Hoksza D.
+  <em>P2Rank: machine learning based tool for rapid and accurate
+  prediction of ligand binding sites from protein structure.</em> Journal
+  of Cheminformatics, 2018. <code>doi:10.1186/s13321-018-0285-8</code></li>
+<li><strong>SMINA</strong>, which does the docking — build <code>2020.12.10</code>, itself a fork
+  of AutoDock Vina 1.1.2. Koes DR, Baumgartner MP, Camacho CJ.
+  <em>Lessons Learned in Empirical Scoring with smina from the CSAR 2011
+  Benchmarking Exercise.</em> Journal of Chemical Information and Modeling
+  53(8):1893–1904, 2013. <code>doi:10.1021/ci300604z</code></li>
+<li><strong>Vinardo</strong>, the default scoring function, if you left it at the
+  default. Quiroga R, Villarreal MA. <em>Vinardo: A Scoring Function Based
+  on Autodock Vina Improves Scoring, Docking, and Virtual Screening.</em>
+  PLOS ONE 11(5):e0155183, 2016. <code>doi:10.1371/journal.pone.0155183</code></li>
+<li><strong>Mol* 4.7.0</strong>, the viewer. Sehnal D, Bittrich S, Deshpande M,
+  Svobodová R, Berka K, Bazgier V, Velankar S, Burley SK, Koča J,
+  Rose AS. <em>Mol* Viewer: modern web app for 3D visualization and
+  analysis of large biomolecular structures.</em> Nucleic Acids Research
+  49(W1):W431–W437, 2021. <code>doi:10.1093/nar/gkab314</code></li>
+<li>The <strong>ranking metric</strong> you quote, if you quote one. ECR comes from
+  Palacio-Rodríguez et al., Scientific Reports 2019
+  (<code>doi:10.1038/s41598-019-41594-3</code>); Best is the Relaxed Complex
+  Scheme observable of Lin, Perryman, Schames and McCammon, JACS 2002
+  (<code>doi:10.1021/ja0260162</code>); Mean follows Paulsen and Anderson, Journal
+  of Chemical Information and Modeling 2009
+  (<code>doi:10.1021/ci9003078</code>).</li>
+</ul>
+<p><strong>On reuse, a caveat.</strong> Neither <code>costbio/PocketHunter</code> nor
+<code>costbio/PocketHunter-Suite</code> carries a LICENSE file. No licence means
+no licence granted, so default copyright applies and you should not
+assume permission to copy, modify, redistribute or self-host either
+codebase. Using the hosted service and publishing what you learn from
+it is a different matter and is what the service is for. If you want to
+run your own instance or build on the code, ask the authors first —
+p2rank ships MIT and SMINA has its own terms, but the PocketHunter
+repositories currently say nothing at all.</p></main>
 </div>
 <footer>Built 2026-08-05 · <a href="/">Back to the app</a></footer>
 </body>
