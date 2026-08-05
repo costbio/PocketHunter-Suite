@@ -331,6 +331,19 @@ would fit — and a bucket holding more than 20 pockets (`MAX_DOCKING_PDBS`)
 is trimmed to the 20 with the highest probability, with a warning shown
 while you are still choosing.
 
+One failure is worth naming here because its card misreads. If **every**
+receptor-ligand pair fails, the task has nothing to write and stops with
+a `ValueError`, which the error classifier files under validation — so
+the red headline says *Input validation failed* and the advice under it
+claims the task rejected your inputs before doing any work. It did no
+such thing. smina ran every pair and every one came back empty. Open
+**Show full error details** and the real message is there:
+`No docking results generated`. Read it as a docking failure and check
+the two things that cause it — ligands that did not convert cleanly, and
+pockets too small for smina to place anything inside. When only some
+pairs fail you get a partial-results warning instead, and the results
+you did get; that case is under Troubleshooting.
+
 ## Reading the results
 
 The left-hand column holds one Mol\* viewer for the whole session, and
@@ -464,11 +477,13 @@ Do not read a successful upload as proof you were under quota.
 Workers are cattle. Each one retires after ten completed tasks and is
 replaced by a fresh container, which is why a long queue quietly changes
 hands mid-run. Retirement is a warm shutdown with a two-hour drain
-window, so an in-flight job finishes on the worker that started it; a
-job that outlives even that gets requeued and picks up from the partial
-CSV. None of this is visible from the browser, and none of it needs to
-be — it is simply why nothing here should be treated as an interactive
-session.
+window, so an in-flight job finishes on the worker that started it. A
+docking job that outlives even that gets requeued and picks up from its
+partial CSV, pair by pair. The other stages have no partial artefact to
+resume from and start over — a requeued detection job goes back to the
+first frame. None of this is visible from the browser, and none of it
+needs to be; it is simply why nothing here should be treated as an
+interactive session.
 
 There is no CAPTCHA. The code for one is wired in and can be switched
 on, but `TURNSTILE_ENABLED` is `false` on this deployment, so **Start
@@ -479,13 +494,27 @@ new analysis** is one click and nothing more.
 A failed job renders the same card whatever went wrong: a red headline,
 a blue suggestion, a **Show full error details** expander with the raw
 exception text, and — when the job wrote one — a **Download error log**
-button. Editors also get a **Retry**. The headline comes from a
-classifier that sorts the exception into one of six buckets, and
-knowing which bucket you landed in tells you where to look next.
+button. That is the whole card. The way back is a button underneath it,
+and its label depends on where you are standing: **Re-run with new
+settings** on a stage you just watched fail, **Re-cluster (clear and
+choose new settings)** or **Re-run docking (resumes from partial
+results)** when you come back to a failed run later. None of the three
+resubmits anything on its own. Each clears the panel's state and drops
+you back on the settings form with your inputs still there, so you fix
+what you want to fix and press the stage button yourself. Open a failed
+job from the **Jobs** expander instead and you get the card with no
+button at all — go to the stage's own panel for that.
+
+The headlines below come from a classifier that reads the exception
+type, and they are not one per category — the three subprocess lines all
+share a single bucket. Two headlines are missing on purpose. *Pocket
+detection produced no pockets* and *Clustering produced no clusters*
+fire when a stage finishes cleanly and finds nothing, and both are dealt
+with in their own sections above, where the advice can be specific.
 
 | Headline | Usually means | Worth trying |
 | --- | --- | --- |
-| Input validation failed | The task rejected its inputs before doing any work | Re-check the files and parameters in the form above the card |
+| Input validation failed | Usually what it says. On a docking job it can also mean every pair failed — see the Dock section | Re-check the files and parameters, and read the full error text before trusting the headline |
 | Task timed out | The stage outran its budget | A larger stride, or running stages one at a time so each gets its own budget |
 | Subprocess crashed (out of memory) | A tool was killed by the OOM reaper | Fewer frames. Trajectory length is the usual cause |
 | Subprocess segfaulted | Malformed input, typically a corrupt PDB or PDBQT | Inspect the error log; re-upload the offending file |
