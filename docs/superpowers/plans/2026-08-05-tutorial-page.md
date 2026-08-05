@@ -19,7 +19,7 @@
 - **Do not claim optimal clustering parameters.** In the deployed `PocketHunter/pockethunter.py`, DBSCAN fits on `df[cols_2cluster]` with `metric='hamming'` (line 333) while the selecting silhouette score is computed on the whole dataframe with default euclidean (line 339).
 - **Neither repository has a LICENSE file.** The Citing section states this rather than implying terms.
 - **Docking scores may be explained without qualification.** The `GetPartialCharge()` loop in `step4_docking.py` is a valid Open Babel idiom; charges verified present in the written PDBQT.
-- **Prose gate:** no paragraph above 0.5 on lmscan, no section returning an "AI-generated" verdict.
+- **Prose gate:** no paragraph above 0.5 on lmscan, no section returning an "AI-generated" verdict. Run lmscan as a **CLI** from `~/.venvs/ph-tutorial/bin/lmscan`, never over MCP — see Task 3's decision note.
 - **Tutorial URL (relative, no env coupling):** `/app/static/tutorial/index.html`
 - **Theme values, copied from `.streamlit/config.toml`:** background `#ffffff`, text `#000000`, secondary background `#f4f4f4`, accent `#d4ff00`, borders `2px solid #000000`, radius `0`, font `JetBrains Mono`, no shadows.
 
@@ -596,7 +596,16 @@ git commit -m "feat: figure-1 intro block with clickable pipeline schematic"
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: MCP tools `scan_text`, `scan_file`, `scan_mixed_text` (lmscan), `check_dechecker`, and the zerogpt checker, used as the prose gate in Tasks 4–6.
+- Produces: the `lmscan` CLI at `~/.venvs/ph-tutorial/bin/lmscan`, invoked over Bash as the prose gate in Tasks 4–6; plus an uncommitted `.mcp.json` for the deferred web-detector spot-check in Task 6.
+
+**Decision, resolved before execution:** the prose loop calls lmscan as a
+**CLI**, not through MCP. MCP servers registered mid-session are not visible
+to this session or to any subagent it dispatches, so an MCP-based loop cannot
+run inside this plan without a session restart. `lmscan-mcp` is a thin wrapper
+over the `lmscan` package, which is a command-line tool, so the CLI gives the
+same detector with no restart and no session coupling. `dechecker` and
+`zerogpt` have no CLI equivalent — they stay MCP-only and are deferred to
+Task 6's final spot-check, which is where the maintainer is involved anyway.
 
 - [ ] **Step 1: Create the authoring venv outside the repository**
 
@@ -605,22 +614,35 @@ The repository must not gain a venv; these tools are authoring aids, not project
 ```bash
 python3 -m venv ~/.venvs/ph-tutorial
 ~/.venvs/ph-tutorial/bin/pip install --quiet --upgrade pip
-~/.venvs/ph-tutorial/bin/pip install --quiet lmscan-mcp dechecker-mcp zerogpt-mcp
+~/.venvs/ph-tutorial/bin/pip install --quiet lmscan lmscan-mcp dechecker-mcp zerogpt-mcp playwright
 ~/.venvs/ph-tutorial/bin/playwright install chromium
 ```
 
-- [ ] **Step 2: Verify each server starts**
+- [ ] **Step 2: Discover the lmscan CLI interface**
+
+Do not guess flags. Run:
 
 ```bash
-~/.venvs/ph-tutorial/bin/lmscan-mcp --help
-~/.venvs/ph-tutorial/bin/dechecker-mcp --help
-~/.venvs/ph-tutorial/bin/zerogpt-mcp --help
+~/.venvs/ph-tutorial/bin/lmscan --help
 ```
-Expected: each exits without a traceback. If a package fails to install from PyPI, fall back to a source install: `~/.venvs/ph-tutorial/bin/pip install git+https://github.com/bogrum/<name>`.
 
-- [ ] **Step 3: Register the servers for this project only**
+Record in the report the exact invocation that produces a per-paragraph
+breakdown of a file, since Tasks 4–6 depend on it. If no per-paragraph mode
+exists, record the whole-text invocation and note that paragraphs must be
+scanned individually.
 
-Create `.mcp.json` at the repository root. Project scope keeps the maintainer's global configuration untouched:
+- [ ] **Step 3: Verify the CLI answers on real text**
+
+```bash
+~/.venvs/ph-tutorial/bin/lmscan <the invocation discovered in Step 2, on README.md>
+```
+Expected: a score and verdict. lmscan is offline, so this must work with no network access.
+
+If lmscan fails, **stop and report BLOCKED** — it carries the prose loop. If a package fails to install from PyPI, fall back to a source install: `~/.venvs/ph-tutorial/bin/pip install git+https://github.com/bogrum/<name>`.
+
+- [ ] **Step 4: Write .mcp.json but keep it out of the repository**
+
+Task 6's final spot-check uses the two scraper servers over MCP. Create `.mcp.json` at the repository root for that later use:
 
 ```json
 {
@@ -638,18 +660,25 @@ Create `.mcp.json` at the repository root. Project scope keeps the maintainer's 
 }
 ```
 
-- [ ] **Step 4: Confirm lmscan answers**
+This file hardcodes absolute paths under `/home/emre`, so it is useless to
+anyone else and must not be committed to a shared repository. Add to
+`.gitignore`:
 
-Restart the session so the servers load, then run `scan_text` on two paragraphs of the existing `README.md`. Expected: a score and verdict come back. lmscan is offline, so this must work without network.
-
-If `dechecker` or `zerogpt` fail here, continue anyway — they scrape live websites and are only the final spot-check. Record the failure and rely on lmscan. If **lmscan** fails, stop and report: it carries the loop.
+```
+# Authoring-only MCP registration; machine-specific absolute paths.
+.mcp.json
+```
 
 - [ ] **Step 5: Commit**
 
+Only the gitignore entry is committed; `.mcp.json` and the venv are not.
+
 ```bash
-git add .mcp.json
-git commit -m "chore: register AI-detection MCP servers for tutorial authoring"
+git add .gitignore
+git commit -m "chore: ignore machine-local MCP registration for tutorial authoring"
+git status --porcelain .mcp.json
 ```
+Expected: the `git status` output is empty — confirming `.mcp.json` is ignored.
 
 ---
 
@@ -687,7 +716,13 @@ Every number in these sections must come from Step 1's output.
 
 - [ ] **Step 3: Run the prose gate**
 
-Run `scan_mixed_text` (lmscan MCP) on the three sections. Rewrite any paragraph scoring above 0.5 — the reliable fix is replacing generic phrasing with the specific fact it is standing in for, not reaching for synonyms. Rescan until clean.
+Write the three sections to a scratch file and scan them with the lmscan CLI, using the invocation Task 3 recorded in its report:
+
+```bash
+~/.venvs/ph-tutorial/bin/lmscan <per-paragraph invocation> /tmp/tutorial-sections.md
+```
+
+Rewrite any paragraph scoring above 0.5. The reliable fix is replacing generic phrasing with the specific fact it is standing in for — a real path, a real range, a real number — not reaching for synonyms. Rescan until clean, and record the final scores in the report.
 
 - [ ] **Step 4: Build and check**
 
@@ -734,7 +769,7 @@ Known values to confirm rather than assume: `Min probability` slider `0.0`–`1.
 
 - [ ] **Step 3: Run the prose gate**
 
-`scan_mixed_text` on all three sections; rewrite anything above 0.5; rescan.
+Same lmscan CLI invocation as Task 4 Step 3, on these three sections. Rewrite anything above 0.5; rescan; record final scores in the report.
 
 - [ ] **Step 4: Verify the schematic still resolves**
 
@@ -780,11 +815,13 @@ ssh pockethunter 'cd ~/PocketHunter-Suite && grep -rn "p2rank\|smina\|SMINA" REA
 
 Replace `MEASURED_EXAMPLE` in the Task 2 facts block with the real figures — dataset, frame count, and observed wall-clock time — measured during Task 7's capture run. If Task 7's capture is deferred to the maintainer, measure frame count locally from `examples/trypsin/trajectory.xtc` and state the runtime as observed on the shared service rather than inventing a figure.
 
-- [ ] **Step 4: Run the prose gate, including the web checkers**
+- [ ] **Step 4: Run the prose gate over the whole document**
 
-`scan_mixed_text` across the whole document; rewrite anything above 0.5.
+Same lmscan CLI invocation as Task 4 Step 3, but on the complete `docs/tutorial/tutorial.md`. Rewrite anything above 0.5; rescan; record final scores in the report.
 
-Then the final spot-check: run `check_dechecker` and the zerogpt checker on two or three representative sections — one narrative (Welcome), one procedural (Dock), one reference-style (Limits). Both tools cap at roughly 1000 characters, so submit an excerpt per section. Expected: no section returns an "AI-generated" verdict. Recall that lmscan's own documentation puts false positives on technical writing at 5–15 %, so a nonzero score is not itself a failure; a verdict is.
+The `dechecker` and `zerogpt` spot-check is **deferred out of this task** — those two are MCP-only and cannot run inside a subagent here (see Task 3's decision note). Instead, write the three excerpts the spot-check will use to `/tmp/claude-1000/-home-emre/4c125948-f03b-4908-8290-e9b053b8bb0c/scratchpad/spotcheck-excerpts.md` — outside the repository, so nothing scratch can be committed by accident. Roughly 900 characters each: one narrative (Welcome), one procedural (Dock), one reference-style (Limits). Report the path.
+
+Recall that lmscan's own documentation puts false positives on technical writing at 5–15 %, so a nonzero score is not itself a failure; a verdict is.
 
 - [ ] **Step 5: Build and check**
 
