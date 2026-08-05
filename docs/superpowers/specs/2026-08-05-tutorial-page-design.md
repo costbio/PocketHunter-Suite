@@ -121,7 +121,8 @@ Written in English.
 4. **Step 1 · Find pockets** — p2rank, the `Min probability` slider
    (0.0–1.0, step 0.05), confidence filtering, reading the pocket table.
 5. **Step 2 · Cluster** — method selection, hierarchy depth, choosing
-   representatives.
+   representatives. Describes parameter selection as it behaves and asks the
+   reader to verify clusters visually; see "Accuracy constraints".
 6. **Step 3 · Dock** — ligand upload, `Number of poses` (1–50), `pH` (4.0–10.0,
    default 7.4), exhaustiveness, what SMINA is scoring.
 7. **Reading the results** — the Mol\* viewer, frame slider, downloads.
@@ -130,7 +131,8 @@ Written in English.
 9. **Limits and quotas** — per-session disk quota, per-pool concurrency, per-IP
    session creation caps, CAPTCHA.
 10. **Troubleshooting / FAQ** — the failure modes the app actually surfaces.
-11. **Citing** — PocketHunter, SMINA, p2rank, Mol\*.
+11. **Citing** — PocketHunter, SMINA, p2rank, Mol\*, and the licensing status
+    of the two repositories as it currently stands.
 
 ### Source grounding
 
@@ -149,6 +151,42 @@ Supplemented by `costbio/PocketHunter` (the detection algorithm) and
 `costbio/PocketHunter-Suite` (README, `docs/deployment.md`, `CLAUDE.md`).
 
 A claim that cannot be traced to one of those sources does not go in the page.
+
+### Accuracy constraints from the deployed code
+
+Reading the deployed code turned up four facts that constrain what the page may
+claim. They are recorded here so the constraints survive the authoring session.
+
+**Only `main` of `costbio/PocketHunter` is deployed.** The bundled core on the
+host sits at `7287d23` on `main`. The seventeen commits on
+`feature/discrimination` — pharmacophore scoring Layer 1 and Layer 2, the
+`discriminate` CLI subcommand, the rdkit and prody dependencies — are pushed but
+unmerged, and therefore not running in production. None of that functionality is
+described in the page.
+
+**Docking scores are sound and may be explained normally.** `step4_docking.py`
+calls `atom.OBAtom.GetPartialCharge()` in a loop and discards the return value,
+which reads like a bug that would zero the electrostatic term. It is not: in
+Open Babel that call triggers charge perception for the whole molecule.
+Verified empirically by converting aspirin through the same code path — all 14
+atoms carry nonzero Gasteiger charges summing to approximately zero. Step 3 can
+therefore explain how to read SMINA scores without qualification.
+
+**DBSCAN parameter selection is scored incorrectly.** In `pockethunter.py`,
+clustering fits on `df[cols_2cluster]` with `metric='hamming'` (line 333) while
+the silhouette score that selects `eps` and `min_samples` is computed on the
+entire dataframe with the default euclidean metric (line 339). Both the data and
+the metric disagree with the clustering. The page must not claim the system
+finds optimal parameters. Step 2 describes what the selection actually does and
+directs the reader to confirm the resulting clusters visually.
+
+**Neither repository carries a LICENSE file**, although the README refers to
+one. The Citing section states the licensing situation as it is rather than
+implying terms that do not exist.
+
+Clustering operates on residue-presence vectors, so it groups pockets by residue
+composition rather than by geometry. Step 2 says so plainly; a reader who
+expects spatial proximity clustering would otherwise misread the output.
 
 ## Prose quality gate
 
@@ -258,6 +296,11 @@ of work and this change is designed not to depend on it.
   carries the loop.
 - **Production side effects from capture.** Bounded by using the small trypsin
   dataset.
+- **Documenting undeployed functionality.** The most likely way this page
+  becomes wrong is by describing the pharmacophore work on
+  `feature/discrimination`, which is real, is pushed, and is not running.
+  Mitigated by grounding every claim in the deployed host rather than in a
+  local checkout, and by naming the constraint explicitly above.
 
 ## Future work
 
