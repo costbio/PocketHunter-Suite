@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tutorial — PocketHunter Suite</title>
 <link rel="icon" href="/app/static/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
 <style>
 :root {
   --bg: #ffffff;
@@ -73,6 +76,25 @@ a:hover { background: var(--accent); }
   border: var(--border); border-left-width: 8px; background: var(--bg2);
 }
 
+.schematic { width: 100%; height: auto; margin: 24px 0; border: var(--border); background: var(--bg2); }
+.schematic .stage rect { fill: var(--bg); stroke: var(--fg); stroke-width: 2; }
+.schematic .stage:hover rect { fill: var(--accent); }
+.schematic text { font-family: var(--mono); font-size: 11px; fill: var(--fg); }
+.schematic .stage-title { font-weight: 700; font-size: 12px; }
+.schematic .arrow { stroke: var(--fg); stroke-width: 2; fill: none; }
+
+.scope { border: var(--border); margin: 24px 0; }
+.scope h3 {
+  margin: 0; padding: 8px 14px; font-size: 13px; letter-spacing: 1px;
+  background: var(--fg); color: var(--bg);
+}
+.scope h3.negative { background: var(--bg2); color: var(--fg); border-top: var(--border); }
+.scope ul { margin: 0; padding: 12px 14px 14px 32px; }
+.scope li { margin: 4px 0; }
+.facts { border: var(--border); background: var(--bg2); padding: 12px 14px; margin: 24px 0; }
+.facts dt { font-weight: 700; }
+.facts dd { margin: 0 0 8px 0; }
+
 footer {
   border-top: var(--border); padding: 16px 18px;
   color: var(--muted); font-size: 0.85rem; text-align: center;
@@ -92,14 +114,76 @@ footer {
 <div class="layout">
   <nav class="toc" aria-label="Table of contents"><div class="toc">
 <ul>
-<li><a href="#welcome">Welcome</a></li>
+<li><a href="#welcome">Welcome</a><ul>
+<li><a href="#for-you-if">FOR YOU IF</a></li>
+<li><a href="#not-for-you-if">NOT FOR YOU IF</a></li>
+</ul>
+</li>
+<li><a href="#upload">Upload your files</a></li>
+<li><a href="#find-pockets">Find pockets</a></li>
+<li><a href="#cluster">Cluster</a></li>
+<li><a href="#dock">Dock</a></li>
 <li><a href="#before-you-start">Before you start</a></li>
 </ul>
 </div>
 </nav>
   <main class="content"><h1 id="pockethunter-suite-tutorial">PocketHunter Suite tutorial</h1>
 <h2 id="welcome">Welcome</h2>
-<p>Placeholder. Replaced in Task 4.</p>
+<p>Find transient, druggable pockets across a molecular-dynamics trajectory —
+then dock ligands against them.</p>
+<p><svg class="schematic" viewBox="0 0 620 120" role="img"
+     aria-label="Pipeline: upload, find pockets, cluster, dock">
+  <a class="stage" href="#upload">
+    <rect x="10" y="24" width="130" height="72"/>
+    <text class="stage-title" x="24" y="50">UPLOAD</text>
+    <text x="24" y="68">topology.pdb</text>
+    <text x="24" y="84">trajectory.xtc</text>
+  </a>
+  <path class="arrow" d="M148 60 h20 m-6 -5 l6 5 l-6 5"/>
+  <a class="stage" href="#find-pockets">
+    <rect x="175" y="24" width="130" height="72"/>
+    <text class="stage-title" x="189" y="50">FIND POCKETS</text>
+    <text x="189" y="68">p2rank, per frame</text>
+  </a>
+  <path class="arrow" d="M313 60 h20 m-6 -5 l6 5 l-6 5"/>
+  <a class="stage" href="#cluster">
+    <rect x="340" y="24" width="130" height="72"/>
+    <text class="stage-title" x="354" y="50">CLUSTER</text>
+    <text x="354" y="68">group by residues</text>
+  </a>
+  <path class="arrow" d="M478 60 h20 m-6 -5 l6 5 l-6 5"/>
+  <a class="stage" href="#dock">
+    <rect x="505" y="24" width="105" height="72"/>
+    <text class="stage-title" x="519" y="50">DOCK</text>
+    <text x="519" y="68">SMINA</text>
+  </a>
+</svg></p>
+<p>Each stage above links to its section.</p>
+<div class="scope">
+<h3 id="for-you-if">FOR YOU IF</h3>
+<ul>
+<li>You have an MD trajectory and want the pockets a single static structure would miss.</li>
+<li>You want those pockets ranked and grouped rather than one hit per frame.</li>
+<li>You want to dock ligands against the pockets you select.</li>
+</ul>
+<h3 class="negative" id="not-for-you-if">NOT FOR YOU IF</h3>
+<ul>
+<li>You have one static structure — run p2rank directly instead.</li>
+<li>You need covalent docking, or docking into a membrane or nucleic-acid site.</li>
+<li>You need a guaranteed turnaround; this is a shared, quota-limited service.</li>
+</ul>
+</div>
+<dl class="facts">
+  <dt>Worked example</dt>
+  <dd>MEASURED_EXAMPLE</dd>
+  <dt>You end up with</dt>
+  <dd>Ranked pockets per frame · cluster representatives · SMINA scores · downloadable poses</dd>
+</dl>
+
+<h2 id="upload">Upload your files</h2>
+<h2 id="find-pockets">Find pockets</h2>
+<h2 id="cluster">Cluster</h2>
+<h2 id="dock">Dock</h2>
 <h2 id="before-you-start">Before you start</h2>
 <p>Placeholder. Replaced in Task 4.</p></main>
 </div>

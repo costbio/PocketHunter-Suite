@@ -30,7 +30,7 @@ TEMPLATE = REPO / "docs" / "tutorial" / "template.html"
 SRC_IMG = REPO / "docs" / "tutorial" / "img"
 OUT_DIR = REPO / "static" / "tutorial"
 
-EXTENSIONS = ["toc", "tables", "fenced_code", "attr_list", "sane_lists"]
+EXTENSIONS = ["toc", "tables", "fenced_code", "attr_list", "sane_lists", "md_in_html"]
 EXTENSION_CONFIGS = {"toc": {"permalink": False, "toc_depth": "2-3"}}
 
 

@@ -78,3 +78,33 @@ class TestShippedPage:
         ids = set(re.findall(r'id="([^"]+)"', html))
         hrefs = re.findall(r'href="#([^"]+)"', html)
         assert [h for h in hrefs if h not in ids] == []
+
+
+class TestIntroBlock:
+    """The schematic doubles as navigation, so its links are load-bearing."""
+
+    def _built(self):
+        built = REPO / "static" / "tutorial" / "index.html"
+        if not built.exists():
+            import pytest
+            pytest.skip("page not built yet")
+        return built.read_text(encoding="utf-8")
+
+    def test_schematic_is_inline_svg(self):
+        html = self._built()
+        assert "<svg" in html
+        assert 'class="schematic"' in html
+
+    def test_every_schematic_stage_links_to_a_real_section(self):
+        html = self._built()
+        svg = html[html.index('class="schematic"'):]
+        svg = svg[:svg.index("</svg>")]
+        targets = re.findall(r'href="#([^"]+)"', svg)
+        assert sorted(targets) == ["cluster", "dock", "find-pockets", "upload"]
+        ids = set(re.findall(r'id="([^"]+)"', html))
+        assert [t for t in targets if t not in ids] == []
+
+    def test_scope_box_states_both_directions(self):
+        html = self._built()
+        assert "FOR YOU IF" in html
+        assert "NOT FOR YOU IF" in html
