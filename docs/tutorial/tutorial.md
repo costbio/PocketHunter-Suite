@@ -143,6 +143,180 @@ run whose files have gone.
 
 ## Find pockets
 
+p2rank looks at one structure at a time, so the suite hands it every frame
+in turn. Extraction runs first, with your stride applied; then `prank
+predict` runs over a list of the extracted structures on four threads
+(`P2RANK_THREADS=4`, not exposed in the UI); then the per-frame
+prediction files are merged into
+one `pockets.csv` with five columns — `File name`, `Frame`,
+`pocket_index`, `probability`, `residues`. Frames keep their position in
+the original trajectory rather than their extraction order, so at stride
+10 the first structure is frame 10 and the second is frame 20.
+
+**A row is one pocket in one frame. It is not one site.** A groove that
+stays open across forty frames produces forty rows, each with its own
+`pocket_index` and its own slightly different residue list, and nothing
+at this stage knows they describe the same place. The count in the stats
+strip is therefore a count of detections: ninety frames returning ten
+hits apiece is 900 rows and possibly ten actual pockets. Turning those
+rows back into sites is the next stage's entire job.
+
+`probability` is p2rank's ligand-binding score for that pocket, and the
+panel bins it into three badges — High from 0.7 up, Medium from 0.4, Low
+below. The strip above the table gives the detection count, the mean
+probability, how many rows cleared 0.7, and the single best score. Two
+controls narrow the view: a **Min probability** slider running 0.0 to 1.0
+in steps of 0.05 and starting at 0.0, and a **Confidence** multiselect
+that starts with all three badges ticked. Both filter the table and
+nothing else. No job re-runs, no row is deleted, and the caption
+underneath keeps reporting how many of the total are on screen.
+
+Click a row and the Mol\* viewer paints that pocket's residues and jumps
+to the frame it was found in. A pocket with fewer than three residues
+gets a warning instead of a surface — below three points there is no mesh
+worth drawing. Ctrl- or shift-click to take several rows at once and an
+**Add N selected → docking** button appears under the table: pockets can
+go straight from here into the docking selection without being clustered
+at all, which is the right move when you already know which site you
+care about.
+
+The remaining two tabs are quieter. **Distribution** plots the
+probability histogram and probability against residue count, the quickest
+way to see whether a threshold you have in mind will keep everything or
+nothing. **Downloads** offers `pockets.csv` and the subset at or above
+0.7 on its own, plus a **Generate PDB archive** button that packs the
+per-frame PDBs p2rank ran on into a ZIP you then download — the same
+structures that become receptors when you dock.
+
+Two outcomes get their own message rather than an empty table. Zero
+pockets anywhere in the trajectory means detection finished and found
+nothing, and the panel points at the stride and at a possible
+topology/trajectory mismatch before anything else. More than 1,000
+extracted frames (`MAX_TRAJECTORY_FRAMES=1000`) stops the job before
+detection and names the stride to re-run with, because the viewer cannot
+render a trajectory that long.
+
 ## Cluster
 
+Clustering answers the question the pocket table cannot: which of those
+per-frame detections are the same pocket? Pick a completed run from
+**Source pockets**, and the stage reads its `pockets.csv`, drops every
+row below **Min. ligand-binding probability** (slider 0.0–1.0 in 0.05
+steps, starting at 0.5), and rewrites each surviving pocket as a binary
+vector over the union of every pocket-lining residue seen anywhere in the
+run — 1 where that residue lines this pocket, 0 where it does not.
+
+**Those vectors hold no coordinates. Pockets are grouped by which
+residues line them, not by where they sit.** DBSCAN runs with
+`metric='hamming'`, so the distance between two pockets is the fraction
+of residue slots on which they disagree. A pocket in frame 3 and a pocket
+in frame 88 land together because the same residue identifiers line both,
+whatever the geometry did in between. Read a cluster as a recurring
+residue signature, not as a neighbourhood.
+
+Each cluster's representative is its medoid — the member whose summed
+Hamming distance to the rest of its cluster is smallest — written to
+`cluster_representatives.csv`. Pockets DBSCAN cannot place go to label
+`-1`, the noise bin, and are dropped from both the heatmap and the
+representatives table.
+
+**The `eps` and `min_samples` a run settles on are not optimal, and
+nothing in the pipeline claims they are.** `PocketHunter/pockethunter.py`
+sweeps `eps` from `1/num_residues` toward `10/num_residues` in 0.005
+steps and `min_samples` upward from 2 % of the frame count (0.5 % above
+100 frames), stopping short of 20 % of it, fits DBSCAN at every
+combination with the Hamming metric
+(line 333), and keeps whichever fit scored highest on
+`silhouette_score(df, labels)` (line 339). That scoring call uses
+scikit-learn's default euclidean distance rather than the Hamming
+distance that formed the groups, and it receives the noise rows as well,
+scored as though `-1` were a cluster like any other. The winner is the
+best fit under a ruler that is not the one that did the cutting. So treat
+the output as a proposal and check it: open the Heatmap and confirm that
+each block's residue signature really is distinct from its neighbours',
+and if two clusters look like one pocket split in half, re-run at a
+different `min_prob` rather than assuming the choice was made for you.
+
+Results open on **Heatmap** — one strip per cluster, one row per pocket
+labelled `p=… · F=…`, one column per residue, a filled cell meaning that
+residue lines that pocket. Clicking a row pushes the pocket to the viewer
+and jumps to its frame. **Clustered pockets** is the same information as
+a table. **Representatives** lists one row per cluster and, where
+hierarchical refinement ran, a K spinner per cluster: K=1 keeps the
+DBSCAN medoid, K of 2 or more re-cuts that cluster's dendrogram into that
+many sub-representatives, up to ten or the member count, whichever is
+smaller. **Downloads** holds the CSVs.
+
+**Add all N cluster representatives → docking**, at the foot of the
+Representatives tab, is the normal handoff to the next stage — one
+receptor per displayed row, sub-cluster representatives grouped under
+their DBSCAN parent.
+
+When DBSCAN finds nothing the panel says so and names the two usual
+causes: `min_prob` filtered out too much, or too few pockets survived to
+form a dense group. Lowering the threshold and re-running Find pockets at
+a smaller stride are the fixes. Switching **Method** to hierarchical will
+always return clusters, which is occasionally what you want and never
+evidence that the clusters mean anything.
+
 ## Dock
+
+Docking needs two things: a set of pockets and a set of ligands. Pockets
+arrive in a bucket that carries across stages, filled either from **Add
+all N cluster representatives** or from rows you ticked in the pocket
+table. Ligands come through one uploader taking `.pdbqt`, `.sdf`, `.pdb`
+and `.zip`, several files at a time; SDF and PDB inputs are split
+server-side into one PDBQT per molecule with OpenBabel. Leave **Generate
+3D coordinates** off unless your input genuinely is 2D — curated
+libraries already carry coordinates, and the option costs minutes.
+
+The **smina parameters** expander holds three controls. **Scoring
+function** defaults to `vinardo`, with `vina`, `ad4_scoring` and
+`dkoes_scoring` also on offer. **Number of poses** is smina's
+`--num_modes`, 1 to 50, default 10 — how many binding modes are kept per
+ligand-receptor pair. **pH (protonation)** runs 4.0 to 10.0 in 0.1 steps,
+default 7.4, and is the pH OpenBabel protonates the receptor at before
+writing it as PDBQT. Exhaustiveness is deliberately absent: it is pinned
+server-side at `DOCKING_EXHAUSTIVENESS=8` with no slider, and the `.env`
+comment beside it says as much.
+
+You never draw a box. For each pocket the task takes the coordinates of
+that pocket's lining residues, pads their bounding box by 2 Å on every
+side, and clamps each edge into the range 10 Å to 25 Å — tight enough to
+keep the search on the pocket, capped so that an over-large p2rank hit
+cannot quietly become a whole-protein blind dock.
+
+**Every cell in the score grid is a predicted binding affinity in
+kcal/mol, and more negative is better** — −9.2 beats −6.4. The cell holds
+the best pose of that one ligand against that one receptor: smina
+generates up to **Number of poses** modes and the grid keeps the lowest
+affinity among them. Rows are ligands, columns are the receptor
+conformations you selected. That shape is the payoff for having run a
+trajectory at all — one ligand scored against an ensemble of
+conformations rather than against a single crystal structure.
+
+Four columns on the right collapse each row to one number, and **Rank
+ligands by** decides which of them sorts the grid. **Mean** and
+**Median** average that ligand's per-receptor affinities in kcal/mol,
+lowest first; reach for Median when one receptor in the ensemble scores
+oddly. **Best** takes the single most-negative cell in the row, which is
+the reading that surfaces a ligand fitting one rare open conformation and
+nothing else. **ECR** is Exponential Consensus Ranking: rank the ligands
+separately on each receptor, then sum `exp(−rank/σ)` across receptors
+with σ set to a tenth of the ligand count, floored at 1. It is unit-free
+and higher is
+better, and because it uses only ranks, a receptor whose scores are all
+shifted cannot drag the consensus with it.
+
+Click a row and the viewer loads that ligand's best pose in whichever
+receptor the slider is on, with a download button for exactly that
+complex — receptor PDB plus pose SDF. The Downloads expander carries the
+rest: the full per-pose results CSV, a best-pose-per-pair CSV, a ZIP of
+every pose SDF, and the receptors on their own.
+
+Two gates apply before **Dock** will run. Molecules × pockets must come
+to no more than 1,000 pairs (`DOCKING_MAX_PAIRS=1000`) — over that the
+panel refuses the submission up front and tells you how many molecules
+would fit — and a bucket holding more than 20 pockets (`MAX_DOCKING_PDBS`)
+is trimmed to the 20 with the highest probability, with a warning shown
+while you are still choosing.
