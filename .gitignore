@@ -32,6 +32,9 @@ static/*/
 # But the bridge bundle (B10) lives here and IS source-tracked.
 !static/js/
 static/js/*.map
+# So is the built tutorial page — a build artefact of docs/tutorial/,
+# committed so the rendered result is reviewable in a diff.
+!static/tutorial/
 
 # Frontend build outputs (B10).
 frontend/node_modules/

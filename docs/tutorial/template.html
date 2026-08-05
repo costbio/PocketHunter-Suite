@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorial — PocketHunter Suite</title>
+<link rel="icon" href="/app/static/favicon.svg">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #000000;
+  --bg2: #f4f4f4;
+  --accent: #d4ff00;
+  --muted: #666666;
+  --border: 2px solid #000000;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --masthead-h: 56px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--mono); font-size: 14px; line-height: 1.65;
+}
+a { color: var(--fg); text-decoration: underline; }
+a:hover { background: var(--accent); }
+
+.masthead {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; height: var(--masthead-h); padding: 0 18px;
+  background: var(--bg); border-bottom: var(--border);
+}
+.masthead .brand { font-weight: 800; letter-spacing: 1px; text-decoration: none; }
+.masthead .version { color: var(--muted); font-size: 0.85rem; }
+
+.layout {
+  display: grid; grid-template-columns: 260px minmax(0, 1fr);
+  gap: 32px; max-width: 1200px; margin: 0 auto; padding: 24px 18px 80px;
+}
+.toc {
+  position: sticky; align-self: start;
+  top: calc(var(--masthead-h) + 24px);
+  max-height: calc(100vh - var(--masthead-h) - 48px); overflow-y: auto;
+  border: var(--border); background: var(--bg2); padding: 12px 14px;
+}
+.toc ul { list-style: none; margin: 0; padding-left: 12px; }
+.toc > ul { padding-left: 0; }
+.toc a { text-decoration: none; display: block; padding: 3px 0; }
+.toc a:hover { background: var(--accent); }
+
+.content { min-width: 0; }
+.content h1 { font-size: 28px; font-weight: 800; }
+.content h2 {
+  font-size: 22px; font-weight: 700;
+  margin-top: 48px; padding-top: 10px; border-top: var(--border);
+}
+.content h3 { font-size: 18px; font-weight: 700; margin-top: 32px; }
+.content h1, .content h2, .content h3 {
+  scroll-margin-top: calc(var(--masthead-h) + 16px);
+}
+.content img { max-width: 100%; border: var(--border); display: block; }
+.content table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; }
+.content th, .content td { border: 1px solid var(--fg); padding: 6px 10px; text-align: left; }
+.content th { background: var(--bg2); font-weight: 700; }
+.content pre {
+  background: var(--bg2); border: var(--border);
+  padding: 12px; overflow-x: auto; font-size: 13px;
+}
+.content code { background: var(--bg2); padding: 1px 4px; }
+.content pre code { background: none; padding: 0; }
+.content blockquote {
+  margin: 20px 0; padding: 12px 16px;
+  border: var(--border); border-left-width: 8px; background: var(--bg2);
+}
+
+footer {
+  border-top: var(--border); padding: 16px 18px;
+  color: var(--muted); font-size: 0.85rem; text-align: center;
+}
+
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; max-height: none; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="/">POCKETHUNTER/SUITE — TUTORIAL</a>
+  <span class="version">[v.2.0]</span>
+</header>
+<div class="layout">
+  <nav class="toc" aria-label="Table of contents">{{ TOC }}</nav>
+  <main class="content">{{ CONTENT }}</main>
+</div>
+<footer>Built {{ BUILT_AT }} · <a href="/">Back to the app</a></footer>
+</body>
+</html>
