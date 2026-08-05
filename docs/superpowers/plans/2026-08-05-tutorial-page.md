@@ -19,7 +19,15 @@
 - **Do not claim optimal clustering parameters.** In the deployed `PocketHunter/pockethunter.py`, DBSCAN fits on `df[cols_2cluster]` with `metric='hamming'` (line 333) while the selecting silhouette score is computed on the whole dataframe with default euclidean (line 339).
 - **Neither repository has a LICENSE file.** The Citing section states this rather than implying terms.
 - **Docking scores may be explained without qualification.** The `GetPartialCharge()` loop in `step4_docking.py` is a valid Open Babel idiom; charges verified present in the written PDBQT.
-- **Prose gate:** no paragraph above 0.5 on lmscan, no section returning an "AI-generated" verdict. Run lmscan as a **CLI** from `~/.venvs/ph-tutorial/bin/lmscan`, never over MCP — see Task 3's decision note.
+- **Prose gate**, resolved against the installed tool (lmscan 0.6.1):
+
+  ```bash
+  ~/.venvs/ph-tutorial/bin/lmscan --file <path> --mixed
+  ```
+
+  Read the `📝 Per-Paragraph Analysis` table at the end of the output; each row gives an `AI %` and a verdict. **No paragraph may exceed 50 %**, and no paragraph may carry an `AI-generated` verdict (`Mixed` is the middle band and is also a rewrite trigger at or above 50 %). Do **not** add `--format json`: it silently drops the per-paragraph table. Run lmscan as a CLI, never over MCP — see Task 3's decision note.
+
+  The `⚠️ Flags` block names why a score is high — low burstiness, slop-word density, hedging, passive voice, no contractions. Those are the levers: the fix for a high paragraph is a concrete fact replacing generic filler, not a synonym swap.
 - **Tutorial URL (relative, no env coupling):** `/app/static/tutorial/index.html`
 - **Theme values, copied from `.streamlit/config.toml`:** background `#ffffff`, text `#000000`, secondary background `#f4f4f4`, accent `#d4ff00`, borders `2px solid #000000`, radius `0`, font `JetBrains Mono`, no shadows.
 
@@ -731,7 +739,7 @@ Every number in these sections must come from Step 1's output.
 Write the three sections to a scratch file and scan them with the lmscan CLI, using the invocation Task 3 recorded in its report:
 
 ```bash
-~/.venvs/ph-tutorial/bin/lmscan <per-paragraph invocation> /tmp/tutorial-sections.md
+~/.venvs/ph-tutorial/bin/lmscan --file /tmp/tutorial-sections.md --mixed
 ```
 
 Rewrite any paragraph scoring above 0.5. The reliable fix is replacing generic phrasing with the specific fact it is standing in for — a real path, a real range, a real number — not reaching for synonyms. Rescan until clean, and record the final scores in the report.
