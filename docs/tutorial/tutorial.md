@@ -105,17 +105,18 @@ lands you on `https://pockethunter.bio-cloud.site/?s=<code>&edit=<secret>`,
 where `s` is an 11-character short code and `edit` is a 32-character
 secret, both drawn from `secrets.token_urlsafe`. That URL is the only
 credential the session has — nothing gets emailed to you, and a lost
-`edit=` token can't be recovered. Bookmark it before you upload anything.
+`edit=` token can't be recovered. Bookmark it, then start a job before you
+wander off; an unused session does not survive its first cleanup sweep.
 
 Which half of the URL you're holding decides what you can do. With a
 matching `edit=` token the masthead chip reads **✏️ Editor** and every
 control works; with only `?s=` it reads **👁 Viewer**, and the uploaders
 and the buttons that launch jobs all come up greyed out. A viewer still
-gets the whole read side: the Mol* structure, the pocket tables, the
-cluster assignments, the docking scores. Two copy buttons sit beside the
-chip for exactly this, labelled *view-only link* and *editor link*. Send
-colleagues the first one unless you mean for them to run jobs on your
-session.
+gets the whole read side: the Mol\* structure, the pocket tables, the
+cluster assignments, the docking scores. An editor also gets two copy
+buttons beside the chip, labelled *view-only link* and *editor link*; a
+viewer sees only the first, having no token to hand out. Send colleagues
+the view-only link unless you mean for them to run jobs on your session.
 
 What the session has done persists on the server. Job rows live in
 Postgres and their artefacts under `results/<job_id>/`, so reopening the
@@ -125,15 +126,20 @@ visited, in a cookie named `ph_recent_sessions` — that list is client-side
 only and never reaches the server, so clearing cookies loses your session
 links unless you saved them somewhere else.
 
-Cleanup runs on three timers, all on UTC. A session that never submits a
-job is deleted 15 minutes after it was created (`SESSION_GRACE_MINUTES=15`)
-by a task that sweeps every five minutes, so an idle tab left on the
-landing page leaves nothing behind. Job directories untouched for 30 days
-go at 02:00 daily (`CLEANUP_AFTER_DAYS=30`), uploads and results together.
-At 15 past every hour a third task measures each session's disk usage and,
-for any session over 5 GB (`PER_SESSION_DISK_QUOTA_MB=5000`), deletes its
-oldest jobs until it fits again — the job rows survive, so the history
-still lists a run whose files have gone.
+**A bookmark is not storage.** A session that has never submitted a job is
+deleted 15 minutes after it was *created* (`SESSION_GRACE_MINUTES=15`),
+by a `cleanup-abandoned-sessions` task that runs every five minutes. That
+task reads creation time, not last activity, so keeping the tab open buys
+you nothing. Make a session, run something. Bookmark the URL, come back an
+hour later having started nothing, and there is nothing to come back to.
+
+Sessions that did run work live far longer, on two slower timers, both
+UTC. Job directories untouched for 30 days go at 02:00 daily
+(`CLEANUP_AFTER_DAYS=30`), uploads and results together. At 15 past every
+hour a third task measures each session's disk usage and, for any session
+over 5 GB (`PER_SESSION_DISK_QUOTA_MB=5000`), deletes its oldest jobs
+until it fits again — the job rows survive, so the history still lists a
+run whose files have gone.
 
 ## Find pockets
 

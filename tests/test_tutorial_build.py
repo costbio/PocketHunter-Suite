@@ -141,3 +141,54 @@ class TestIntroBlock:
         assert re.search(r'font-weight:\s*700', m.group(1)), (
             ".scope .scope-label must set font-weight: 700 explicitly"
         )
+
+
+class TestMarkdownEscaping:
+    """A markdown metacharacter inside prose corrupts the rendered page
+    silently: the build succeeds, every anchor still resolves, and only a
+    human reading the live HTML notices. ``Mol*`` is the standing example
+    — the trailing ``*`` opens an emphasis span, so the product name
+    renders as "Mol", an arbitrary run of following text is italicised
+    instead of the words that were marked up, and a stray ``*`` is left
+    behind wherever the span happens to close.
+    """
+
+    def _content(self):
+        built = REPO / "static" / "tutorial" / "index.html"
+        if not built.exists():
+            import pytest
+            pytest.skip("page not built yet")
+        html = built.read_text(encoding="utf-8")
+        # Only the rendered markdown, not the template's <style> block
+        # (which legitimately contains a `*` universal selector).
+        start = html.index('<main')
+        return html[start:html.index("</main>", start)]
+
+    def test_molstar_product_name_survives_rendering(self):
+        content = self._content()
+        assert "Mol*" in content, (
+            "the Mol* product name is missing from the built page — an "
+            "unescaped `Mol*` in the markdown eats its own asterisk"
+        )
+        assert "Mol<em>" not in content, (
+            "`Mol*` opened an emphasis span; escape it as `Mol\\*` or "
+            "wrap it in backticks"
+        )
+
+    def test_no_stray_asterisks_in_rendered_prose(self):
+        """An unbalanced emphasis marker leaves a literal `*` in the text.
+
+        Escaped asterisks reach the HTML as a bare `*` too, so this
+        allows the ones we mean (currently only `Mol*`) and fails on any
+        other — which is exactly the residue an eaten emphasis span
+        leaves behind.
+        """
+        content = self._content()
+        # Code spans may contain anything; markdown does not parse them.
+        prose = re.sub(r"<code>.*?</code>", "", content, flags=re.S)
+        prose = re.sub(r"<pre>.*?</pre>", "", prose, flags=re.S)
+        leftover = prose.replace("Mol*", "")
+        assert "*" not in leftover, (
+            "stray '*' in rendered prose — an emphasis span is unbalanced "
+            "or a metacharacter needs escaping"
+        )
