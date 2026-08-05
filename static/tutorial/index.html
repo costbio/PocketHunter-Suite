@@ -116,10 +116,10 @@ footer {
 <ul>
 <li><a href="#welcome">Welcome</a></li>
 <li><a href="#upload">Upload your files</a></li>
+<li><a href="#sessions">Sessions</a></li>
 <li><a href="#find-pockets">Find pockets</a></li>
 <li><a href="#cluster">Cluster</a></li>
 <li><a href="#dock">Dock</a></li>
-<li><a href="#before-you-start">Before you start</a></li>
 </ul>
 </div>
 </nav>
@@ -127,6 +127,15 @@ footer {
 <h2 id="welcome">Welcome</h2>
 <p>Find transient, druggable pockets across a molecular-dynamics trajectory —
 then dock ligands against them.</p>
+<p>A pocket that's wide open in one frame can be shut in the next. Run pocket
+detection on a single crystal structure and you see one snapshot of that
+motion — the cryptic site that opens for a handful of frames simply isn't
+there. This service takes the trajectory instead. It extracts every tenth
+frame by default, runs p2rank on each extracted structure, groups the hits
+that share the same lining residues into clusters, and docks your ligands
+into the cluster representatives with SMINA. What you hand it is an <code>.xtc</code>
+and a topology; what you get back is a ranked pocket list with the frames
+each pocket appeared in, plus binding scores for the ligands you tried.</p>
 <p><svg class="schematic" viewBox="0 0 620 120" role="img"
      aria-label="Pipeline: upload, find pockets, cluster, dock">
   <a class="stage" href="#upload">
@@ -177,11 +186,68 @@ then dock ligands against them.</p>
 </dl>
 
 <h2 id="upload">Upload your files</h2>
+<p>The Find pockets panel opens with an <strong>Input source</strong> radio button. Pick
+<em>From trajectory (XTC + topology)</em> and two uploaders appear: <strong>Trajectory
+(.xtc)</strong> takes a GROMACS <code>.xtc</code> and nothing else, while <strong>Topology (.pdb,
+.gro)</strong> takes either extension, so a <code>.gro</code> reference structure works just
+as well as a PDB. Under them sits <strong>Frame stride</strong>, an integer of at least
+1 that starts at 10 — raise it for a long trajectory, drop it to 1 to
+search every frame. Pick <em>From PDB ZIP archive</em> instead and you get a
+single <strong>PDB structures (.zip)</strong> uploader; extraction is skipped and
+p2rank runs straight over the structures in the archive.</p>
+<p>Two size limits apply, and the tighter one is the browser's. Streamlit's
+uploader refuses a file over 200 MB before it ever reaches the server, so
+200 MB per file is the number that actually binds; the server-side
+validator behind it is set to 500 MB (<code>MAX_UPLOAD_SIZE=524288000</code>). A ZIP
+clears two further checks before anything is unpacked: its compression
+ratio has to stay at or below 100:1, and its contents have to come to less
+than 1 GB uncompressed (<code>MAX_ZIP_SIZE=1073741824</code>). The extension
+allowlist is short — <code>.xtc</code>, <code>.pdb</code>, <code>.gro</code>, <code>.csv</code>, <code>.zip</code>, <code>.sdf</code>,
+<code>.pdbqt</code> — and anything else is rejected on its name before it lands on
+disk.</p>
+<p>No trajectory to hand? The landing page carries a <strong>Try with example
+trajectory</strong> button beside <strong>Start new analysis</strong>. It copies the bundled
+trypsin demo into a fresh session and queues the pocket search without
+asking you for anything: <code>examples/trypsin/topology.pdb</code> is 104,845 bytes
+and <code>examples/trypsin/trajectory.xtc</code> is 500,352 bytes. The deployed
+instance reads that pair from <code>/app/examples/trypsin</code>, set as
+<code>EXAMPLE_TRAJECTORY_DIR</code>; when the directory is missing the button hides
+itself rather than failing on you.</p>
+<h2 id="sessions">Sessions</h2>
+<p>There is no sign-up. Pressing <strong>Start new analysis</strong> mints a workspace and
+lands you on <code>https://pockethunter.bio-cloud.site/?s=&lt;code&gt;&amp;edit=&lt;secret&gt;</code>,
+where <code>s</code> is an 11-character short code and <code>edit</code> is a 32-character
+secret, both drawn from <code>secrets.token_urlsafe</code>. That URL is the only
+credential the session has — nothing gets emailed to you, and a lost
+<code>edit=</code> token can't be recovered. Bookmark it before you upload anything.</p>
+<p>Which half of the URL you're holding decides what you can do. With a
+matching <code>edit=</code> token the masthead chip reads <strong>✏️ Editor</strong> and every
+control works; with only <code>?s=</code> it reads <strong>👁 Viewer</strong>, and the uploaders
+and the buttons that launch jobs all come up greyed out. A viewer still
+gets the whole read side: the Mol<em> structure, the pocket tables, the
+cluster assignments, the docking scores. Two copy buttons sit beside the
+chip for exactly this, labelled </em>view-only link<em> and </em>editor link*. Send
+colleagues the first one unless you mean for them to run jobs on your
+session.</p>
+<p>What the session has done persists on the server. Job rows live in
+Postgres and their artefacts under <code>results/&lt;job_id&gt;/</code>, so reopening the
+URL next week brings the pocket tables and the poses back with nothing
+recomputed. Your browser keeps its own list of the sessions you've
+visited, in a cookie named <code>ph_recent_sessions</code> — that list is client-side
+only and never reaches the server, so clearing cookies loses your session
+links unless you saved them somewhere else.</p>
+<p>Cleanup runs on three timers, all on UTC. A session that never submits a
+job is deleted 15 minutes after it was created (<code>SESSION_GRACE_MINUTES=15</code>)
+by a task that sweeps every five minutes, so an idle tab left on the
+landing page leaves nothing behind. Job directories untouched for 30 days
+go at 02:00 daily (<code>CLEANUP_AFTER_DAYS=30</code>), uploads and results together.
+At 15 past every hour a third task measures each session's disk usage and,
+for any session over 5 GB (<code>PER_SESSION_DISK_QUOTA_MB=5000</code>), deletes its
+oldest jobs until it fits again — the job rows survive, so the history
+still lists a run whose files have gone.</p>
 <h2 id="find-pockets">Find pockets</h2>
 <h2 id="cluster">Cluster</h2>
-<h2 id="dock">Dock</h2>
-<h2 id="before-you-start">Before you start</h2>
-<p>Placeholder. Replaced in Task 4.</p></main>
+<h2 id="dock">Dock</h2></main>
 </div>
 <footer>Built 2026-08-05 · <a href="/">Back to the app</a></footer>
 </body>
