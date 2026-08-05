@@ -105,6 +105,23 @@ class TestIntroBlock:
         assert [t for t in targets if t not in ids] == []
 
     def test_scope_box_states_both_directions(self):
+        """A substring check alone can't tell markdown-parsed content from
+        raw un-parsed markdown text (both contain the same words), so this
+        asserts on real markup: labeled <p> elements and, more importantly,
+        real <ul><li> bullets — bullets only render as markup if the
+        surrounding markdown="1" div was actually parsed as markdown
+        (requires the `md_in_html` extension in scripts/build_tutorial.py).
+        """
         html = self._built()
-        assert "FOR YOU IF" in html
-        assert "NOT FOR YOU IF" in html
+        scope = html[html.index('class="scope"'):]
+        scope = scope[:scope.index("</div>") + len("</div>")]
+        assert re.search(r'<p class="scope-label">\s*FOR YOU IF\s*</p>', scope)
+        assert re.search(
+            r'<p class="scope-label negative">\s*NOT FOR YOU IF\s*</p>', scope
+        )
+        assert re.search(r'<ul>\s*<li>', scope), (
+            "bullets under the scope labels must be real <ul><li> markup, "
+            "not raw '- ...' markdown text"
+        )
+        assert scope.count("<li>") >= 6
+        assert "###" not in scope, "labels must not be raw unparsed headings"

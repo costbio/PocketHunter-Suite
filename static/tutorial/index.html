@@ -84,11 +84,11 @@ a:hover { background: var(--accent); }
 .schematic .arrow { stroke: var(--fg); stroke-width: 2; fill: none; }
 
 .scope { border: var(--border); margin: 24px 0; }
-.scope h3 {
+.scope .scope-label {
   margin: 0; padding: 8px 14px; font-size: 13px; letter-spacing: 1px;
   background: var(--fg); color: var(--bg);
 }
-.scope h3.negative { background: var(--bg2); color: var(--fg); border-top: var(--border); }
+.scope .scope-label.negative { background: var(--bg2); color: var(--fg); border-top: var(--border); }
 .scope ul { margin: 0; padding: 12px 14px 14px 32px; }
 .scope li { margin: 4px 0; }
 .facts { border: var(--border); background: var(--bg2); padding: 12px 14px; margin: 24px 0; }
@@ -114,11 +114,7 @@ footer {
 <div class="layout">
   <nav class="toc" aria-label="Table of contents"><div class="toc">
 <ul>
-<li><a href="#welcome">Welcome</a><ul>
-<li><a href="#for-you-if">FOR YOU IF</a></li>
-<li><a href="#not-for-you-if">NOT FOR YOU IF</a></li>
-</ul>
-</li>
+<li><a href="#welcome">Welcome</a></li>
 <li><a href="#upload">Upload your files</a></li>
 <li><a href="#find-pockets">Find pockets</a></li>
 <li><a href="#cluster">Cluster</a></li>
@@ -160,13 +156,13 @@ then dock ligands against them.</p>
 </svg></p>
 <p>Each stage above links to its section.</p>
 <div class="scope">
-<h3 id="for-you-if">FOR YOU IF</h3>
+<p class="scope-label">FOR YOU IF</p>
 <ul>
 <li>You have an MD trajectory and want the pockets a single static structure would miss.</li>
 <li>You want those pockets ranked and grouped rather than one hit per frame.</li>
 <li>You want to dock ligands against the pockets you select.</li>
 </ul>
-<h3 class="negative" id="not-for-you-if">NOT FOR YOU IF</h3>
+<p class="scope-label negative">NOT FOR YOU IF</p>
 <ul>
 <li>You have one static structure — run p2rank directly instead.</li>
 <li>You need covalent docking, or docking into a membrane or nucleic-acid site.</li>

@@ -36,13 +36,13 @@ then dock ligands against them.
 Each stage above links to its section.
 
 <div class="scope" markdown="1">
-### FOR YOU IF
+<p class="scope-label">FOR YOU IF</p>
 
 - You have an MD trajectory and want the pockets a single static structure would miss.
 - You want those pockets ranked and grouped rather than one hit per frame.
 - You want to dock ligands against the pockets you select.
 
-### NOT FOR YOU IF {: .negative }
+<p class="scope-label negative">NOT FOR YOU IF</p>
 
 - You have one static structure — run p2rank directly instead.
 - You need covalent docking, or docking into a membrane or nucleic-acid site.
