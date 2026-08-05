@@ -125,3 +125,19 @@ class TestIntroBlock:
         )
         assert scope.count("<li>") >= 6
         assert "###" not in scope, "labels must not be raw unparsed headings"
+
+    def test_scope_label_keeps_bold_weight(self):
+        """The labels used to be real <h3> elements, which picked up
+        font-weight: 700 from `.content h3` by cascade even though the old
+        `.scope h3` rule never set it directly. Now that the labels are
+        `<p class="scope-label">`, `.content h3` no longer selects them, so
+        the weight must be set explicitly on `.scope .scope-label` or the
+        labels silently render at the browser's regular <p> default (400).
+        """
+        html = self._built()
+        css = html[html.index("<style>"):html.index("</style>")]
+        m = re.search(r'\.scope \.scope-label\s*\{([^}]*)\}', css)
+        assert m, "expected a .scope .scope-label rule in the stylesheet"
+        assert re.search(r'font-weight:\s*700', m.group(1)), (
+            ".scope .scope-label must set font-weight: 700 explicitly"
+        )
