@@ -257,9 +257,7 @@ predict</code> runs over a list of the extracted structures on four threads
 (<code>P2RANK_THREADS=4</code>, not exposed in the UI); then the per-frame
 prediction files are merged into
 one <code>pockets.csv</code> with five columns — <code>File name</code>, <code>Frame</code>,
-<code>pocket_index</code>, <code>probability</code>, <code>residues</code>. Frames keep their position in
-the original trajectory rather than their extraction order, so at stride
-10 the first structure is frame 10 and the second is frame 20.</p>
+<code>pocket_index</code>, <code>probability</code>, <code>residues</code>.</p>
 <p><strong>A row is one pocket in one frame. It is not one site.</strong> A groove that
 stays open across forty frames produces forty rows, each with its own
 <code>pocket_index</code> and its own slightly different residue list, and nothing
@@ -267,6 +265,15 @@ at this stage knows they describe the same place. The count in the stats
 strip is therefore a count of detections: ninety frames returning ten
 hits apiece is 900 rows and possibly ten actual pockets. Turning those
 rows back into sites is the next stage's entire job.</p>
+<p>Take the <code>Frame</code> number for what it is, because <strong>it is not an index into
+your trajectory.</strong> The label is the stride times the structure's 1-based
+position among the extracted structures, so at stride 10 the structures
+come out labelled 10, 20, 30 — while the conformations inside them are
+your trajectory's frames 0, 10, 20. Every label sits one full stride
+ahead of the frame it was cut from. The labels agree with each other, so
+comparing pockets between frames inside the app is unaffected; it is the
+trip back to your own XTC that needs the correction. Subtract one stride
+before you go looking at a conformation.</p>
 <p><code>probability</code> is p2rank's ligand-binding score for that pocket, and the
 panel bins it into three badges — High from 0.7 up, Medium from 0.4, Low
 below. The strip above the table gives the detection count, the mean
@@ -323,9 +330,9 @@ nothing in the pipeline claims they are.</strong> <code>PocketHunter/pockethunte
 sweeps <code>eps</code> from <code>1/num_residues</code> toward <code>10/num_residues</code> in 0.005
 steps and <code>min_samples</code> upward from 2 % of the frame count (0.5 % above
 100 frames), stopping short of 20 % of it, fits DBSCAN at every
-combination with the Hamming metric
-(line 333), and keeps whichever fit scored highest on
-<code>silhouette_score(df, labels)</code> (line 339). That scoring call uses
+combination with the Hamming metric, and keeps whichever fit scored
+highest on <code>silhouette_score(df, labels)</code>. That scoring call sits in
+<code>optimized_dbscan</code>, the same loop that does the fitting, and it uses
 scikit-learn's default euclidean distance rather than the Hamming
 distance that formed the groups, and it receives the noise rows as well,
 scored as though <code>-1</code> were a cluster like any other. The winner is the

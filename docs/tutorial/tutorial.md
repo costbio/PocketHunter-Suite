@@ -149,9 +149,7 @@ predict` runs over a list of the extracted structures on four threads
 (`P2RANK_THREADS=4`, not exposed in the UI); then the per-frame
 prediction files are merged into
 one `pockets.csv` with five columns — `File name`, `Frame`,
-`pocket_index`, `probability`, `residues`. Frames keep their position in
-the original trajectory rather than their extraction order, so at stride
-10 the first structure is frame 10 and the second is frame 20.
+`pocket_index`, `probability`, `residues`.
 
 **A row is one pocket in one frame. It is not one site.** A groove that
 stays open across forty frames produces forty rows, each with its own
@@ -160,6 +158,16 @@ at this stage knows they describe the same place. The count in the stats
 strip is therefore a count of detections: ninety frames returning ten
 hits apiece is 900 rows and possibly ten actual pockets. Turning those
 rows back into sites is the next stage's entire job.
+
+Take the `Frame` number for what it is, because **it is not an index into
+your trajectory.** The label is the stride times the structure's 1-based
+position among the extracted structures, so at stride 10 the structures
+come out labelled 10, 20, 30 — while the conformations inside them are
+your trajectory's frames 0, 10, 20. Every label sits one full stride
+ahead of the frame it was cut from. The labels agree with each other, so
+comparing pockets between frames inside the app is unaffected; it is the
+trip back to your own XTC that needs the correction. Subtract one stride
+before you go looking at a conformation.
 
 `probability` is p2rank's ligand-binding score for that pocket, and the
 panel bins it into three badges — High from 0.7 up, Medium from 0.4, Low
@@ -225,9 +233,9 @@ nothing in the pipeline claims they are.** `PocketHunter/pockethunter.py`
 sweeps `eps` from `1/num_residues` toward `10/num_residues` in 0.005
 steps and `min_samples` upward from 2 % of the frame count (0.5 % above
 100 frames), stopping short of 20 % of it, fits DBSCAN at every
-combination with the Hamming metric
-(line 333), and keeps whichever fit scored highest on
-`silhouette_score(df, labels)` (line 339). That scoring call uses
+combination with the Hamming metric, and keeps whichever fit scored
+highest on `silhouette_score(df, labels)`. That scoring call sits in
+`optimized_dbscan`, the same loop that does the fitting, and it uses
 scikit-learn's default euclidean distance rather than the Hamming
 distance that formed the groups, and it receives the noise rows as well,
 scored as though `-1` were a cluster like any other. The winner is the
