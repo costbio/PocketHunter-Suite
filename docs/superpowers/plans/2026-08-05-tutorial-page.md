@@ -464,7 +464,19 @@ class TestIntroBlock:
 Run: `python -m pytest tests/test_tutorial_build.py::TestIntroBlock -v`
 Expected: FAIL — `assert "<svg" in html`.
 
-- [ ] **Step 3: Add intro-block CSS to the template**
+- [ ] **Step 3: Load the JetBrains Mono webfont**
+
+Carried over from Task 1's review. `template.html` names `'JetBrains Mono'` in `--mono` but never loads it, so most viewers fall back to a generic monospace and the page does not match the app. The app solves this in `.streamlit/config.toml` by pairing the family name with a Google Fonts URL; do the same here. Add to `docs/tutorial/template.html`, immediately before the `<style>` tag:
+
+```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap">
+```
+
+The weights requested must cover every weight the stylesheet uses — the template sets `700` on headings and `800` on `h1` and the brand — so a narrower request would silently synthesise bold. The `--mono` fallback chain stays as it is, so the page degrades to a system monospace if the font fails to load.
+
+- [ ] **Step 4: Add intro-block CSS to the template**
 
 Insert into `docs/tutorial/template.html` before the `footer {` rule:
 
@@ -489,7 +501,7 @@ Insert into `docs/tutorial/template.html` before the `footer {` rule:
 .facts dd { margin: 0 0 8px 0; }
 ```
 
-- [ ] **Step 4: Add the intro block to the source document**
+- [ ] **Step 5: Add the intro block to the source document**
 
 Replace the `## Welcome` section in `docs/tutorial/tutorial.md`. The schematic is hand-written SVG so each stage is a real link; `attr_list` and raw HTML pass through markdown untouched. Every stage `href` must match a heading id created in Tasks 4–6:
 
@@ -555,7 +567,7 @@ Placeholder to be replaced in Task 6 once measured: the worked-example facts blo
 </dl>
 ```
 
-- [ ] **Step 5: Add the anchor targets the schematic points at**
+- [ ] **Step 6: Add the anchor targets the schematic points at**
 
 The schematic links to four ids that must exist. Add or confirm these headings in `docs/tutorial/tutorial.md`; their exact spelling is what produces the slug:
 
@@ -574,12 +586,12 @@ Verify the slugs by building and grepping, rather than assuming:
 Run: `python scripts/build_tutorial.py --built-at 2026-08-05 && grep -o 'id="[a-z-]*"' static/tutorial/index.html | sort -u`
 Expected: the list includes `id="upload"`, `id="find-pockets"`, `id="cluster"`, `id="dock"`. If `## Upload your files` slugifies to `upload-your-files` instead of `upload`, pin it explicitly with `attr_list`: `## Upload your files {: #upload }`.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 7: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_tutorial_build.py -v`
 Expected: PASS, all tests.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add docs/tutorial/ tests/test_tutorial_build.py static/tutorial/
