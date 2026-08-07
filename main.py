@@ -107,6 +107,7 @@ st.markdown("""
        the prior .bh-newsession link (small, brutalist, no rounding). */
     .st-key-nav_new_session button,
     .st-key-nav_tutorial button,
+    .st-key-nav_tutorial a,
     .st-key-nav_help button {
         font-family: 'JetBrains Mono', ui-monospace, monospace !important;
         font-size: 0.85rem !important;
@@ -117,9 +118,11 @@ st.markdown("""
         color: #555 !important;
         border: 2px solid #000 !important;
         text-transform: uppercase;
+        text-decoration: none !important;
     }
     .st-key-nav_new_session button:hover:not(:disabled),
     .st-key-nav_tutorial button:hover:not(:disabled),
+    .st-key-nav_tutorial a:hover,
     .st-key-nav_help button:hover:not(:disabled) {
         background: #e0e0e0 !important;
         color: #000 !important;

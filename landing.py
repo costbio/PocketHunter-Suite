@@ -34,6 +34,10 @@ from session_routes import (
     navigate_to_session,
 )
 
+# Relative URL for the static tutorial page (Streamlit's static-file route
+# serves it at this path — no host/scheme coupling).
+TUTORIAL_URL = "/app/static/tutorial/index.html"
+
 
 def _render_captcha_if_enabled(*, key: str) -> tuple[bool, str | None]:
     """Render the Turnstile widget and return ``(ok_to_proceed, token_for_verify)``.
@@ -597,16 +601,6 @@ def _build_pool_load_chips_html() -> str:
     )
 
 
-@st.dialog("Tutorial")
-def _tutorial_dialog() -> None:
-    st.markdown(
-        "**Tutorial coming soon.**\n\n"
-        "Walkthrough videos and a guided first-run experience are in "
-        "development. For now, click **⌂ NEW SESSION** and the panels "
-        "will guide you through Find Pockets → Cluster → Dock."
-    )
-
-
 @st.dialog("Help")
 def _help_dialog() -> None:
     st.markdown(
@@ -733,9 +727,8 @@ def render_masthead(resolved: Optional[ResolvedSession] = None) -> None:
                 st.session_state["_pending_new_session"] = True
                 st.rerun(scope="app")
         with nav_cols[1]:
-            if st.button("TUTORIAL", key="nav_tutorial",
-                         use_container_width=True):
-                _tutorial_dialog()
+            st.link_button("TUTORIAL", TUTORIAL_URL, key="nav_tutorial",
+                           use_container_width=True)
         with nav_cols[2]:
             if st.button("HELP", key="nav_help",
                          use_container_width=True):

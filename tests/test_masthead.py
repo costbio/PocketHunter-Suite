@@ -25,7 +25,7 @@ def _render_to_capture(resolved):
     (list of {label, key, kwargs}). Suppresses the side-effects of
     st.container / st.columns / st.button so the function body runs
     end-to-end in bare mode."""
-    captured = {"markdown": [], "buttons": []}
+    captured = {"markdown": [], "buttons": [], "link_buttons": []}
 
     def fake_markdown(html, *args, **kwargs):
         captured["markdown"].append(html)
@@ -34,6 +34,10 @@ def _render_to_capture(resolved):
         captured["buttons"].append({"label": label, "key": key,
                                     "kwargs": dict(kwargs)})
         return False  # not clicked
+
+    def fake_link_button(label, url, *args, key=None, **kwargs):
+        captured["link_buttons"].append({"label": label, "url": url,
+                                         "key": key, "kwargs": dict(kwargs)})
 
     @contextlib.contextmanager
     def fake_container(**kwargs):
@@ -53,6 +57,7 @@ def _render_to_capture(resolved):
         "landing.st",
         markdown=fake_markdown,
         button=fake_button,
+        link_button=fake_link_button,
         container=fake_container,
         columns=fake_columns,
     ):
@@ -112,8 +117,9 @@ class TestRenderMastheadNoSession:
         # (v3 — previously NEW SESSION was suppressed on landing).
         keys = [b["key"] for b in cap["buttons"]]
         assert "nav_new_session" in keys
-        assert "nav_tutorial" in keys
         assert "nav_help" in keys
+        link_keys = [b["key"] for b in cap["link_buttons"]]
+        assert "nav_tutorial" in link_keys
 
     def test_intro_sentence_present_when_no_session(self):
         """Brand row's session-info slot is reused for a one-sentence
@@ -195,8 +201,9 @@ class TestRenderMastheadNav:
         cap = _render_to_capture(resolved=_make_resolved())
         keys = [b["key"] for b in cap["buttons"]]
         assert "nav_new_session" in keys
-        assert "nav_tutorial" in keys
         assert "nav_help" in keys
+        link_keys = [b["key"] for b in cap["link_buttons"]]
+        assert "nav_tutorial" in link_keys
         # Costbio link still rendered (its own st.markdown).
         assert "bh-group-link" in cap["html"]
 
@@ -206,8 +213,9 @@ class TestRenderMastheadNav:
         cap = _render_to_capture(resolved=None)
         keys = [b["key"] for b in cap["buttons"]]
         assert "nav_new_session" in keys
-        assert "nav_tutorial" in keys
         assert "nav_help" in keys
+        link_keys = [b["key"] for b in cap["link_buttons"]]
+        assert "nav_tutorial" in link_keys
         assert "bh-group-link" in cap["html"]
 
     def test_new_session_button_has_uppercase_label(self):
@@ -217,6 +225,26 @@ class TestRenderMastheadNav:
         new_btn = next(b for b in cap["buttons"] if b["key"] == "nav_new_session")
         assert "NEW SESSION" in new_btn["label"]
         assert "⌂" in new_btn["label"]
+
+
+# ── Tutorial link button ────────────────────────────────────────────────
+
+
+class TestTutorialLink:
+    def test_tutorial_is_a_link_button_to_the_static_page(self):
+        cap = _render_to_capture(resolved=None)
+        link = next(b for b in cap["link_buttons"] if b["key"] == "nav_tutorial")
+        assert link["label"] == "TUTORIAL"
+        assert link["url"] == "/app/static/tutorial/index.html"
+
+    def test_placeholder_dialog_is_gone(self):
+        import landing
+        assert not hasattr(landing, "_tutorial_dialog")
+
+    def test_help_stays_a_dialog_button(self):
+        """Only TUTORIAL changes; HELP has no page to point at yet."""
+        cap = _render_to_capture(resolved=None)
+        assert "nav_help" in [b["key"] for b in cap["buttons"]]
 
 
 # ── Costbio affiliation link ────────────────────────────────────────────
