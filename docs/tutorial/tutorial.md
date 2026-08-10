@@ -272,7 +272,7 @@ table, is the normal handoff to the next stage — one receptor per
 displayed row, sub-cluster representatives grouped under their DBSCAN
 parent.
 
-![The Add all 12 cluster representatives → docking button above a table listing the first nine of twelve clusters, with each row's Frame and lining residues](img/03-cluster.png)
+![The Add all 12 cluster representatives → docking button above a table of the first nine of twelve clusters; the panel's own width shows only Cluster, Frame, Location and probability — num_residues and Quality run off the right edge](img/03-cluster.png)
 
 When DBSCAN finds nothing the panel says so and names the two usual
 causes: `min_prob` filtered out too much, or too few pockets survived to
