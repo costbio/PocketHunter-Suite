@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,10 +66,17 @@ class Settings(BaseSettings):
 
     # ── Resource management ──────────────────────────────────────────────
     CLEANUP_AFTER_DAYS: int = Field(default=30)
-    MAX_DISK_USAGE_GB: int = Field(default=100)
+    # Renamed from MAX_DISK_USAGE_GB (defect D of the docs-driven fix pass):
+    # the value only sets the threshold at which check_disk_usage_task /
+    # health.py *report* disk usage as high (warning/critical log lines) —
+    # nothing refuses an upload or prunes anything on it, so "MAX_..." was
+    # misleading. The alias keeps reading the old env var name so a
+    # deployed host's existing .env needs no edit.
+    DISK_USAGE_WARN_GB: int = Field(
+        default=100,
+        validation_alias=AliasChoices("DISK_USAGE_WARN_GB", "MAX_DISK_USAGE_GB"),
+    )
     MAX_DOCKING_PDBS: int = Field(default=20)
-    MAX_DOCKING_LIGANDS: int = Field(default=10)
-    MAX_DOCKING_EXHAUSTIVENESS: int = Field(default=12)
     DOCKING_TIMEOUT: int = Field(default=7200)  # 2 hours
 
     # ── Worker & compute tuning (B11.21) ─────────────────────────────────
@@ -239,7 +246,7 @@ class Settings(BaseSettings):
         return v
 
     @field_validator("MAX_UPLOAD_SIZE", "MAX_ZIP_SIZE", "CLEANUP_AFTER_DAYS",
-                     "MAX_DISK_USAGE_GB", "WORKER_CONCURRENCY",
+                     "DISK_USAGE_WARN_GB", "WORKER_CONCURRENCY",
                      "DOCKING_CONCURRENCY", "P2RANK_THREADS",
                      "DOCKING_EXHAUSTIVENESS", "DOCKING_MAX_PAIRS",
                      "MAX_DOWNLOAD_ZIP_SIZE", "MAX_TRAJECTORY_FRAMES",
