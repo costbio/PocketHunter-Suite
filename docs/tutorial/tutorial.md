@@ -12,8 +12,9 @@ there. This service takes the trajectory instead. It extracts every tenth
 frame by default, runs p2rank on each extracted structure, groups the hits
 that share the same lining residues into clusters, and docks your ligands
 into the cluster representatives with SMINA. What you hand it is an `.xtc`
-and a topology; what you get back is a ranked pocket list with the frames
-each pocket appeared in, plus binding scores for the ligands you tried.
+and a topology — or, if you already hold the frames as structures, a ZIP
+of PDBs; what you get back is a ranked pocket list with the frames each
+pocket appeared in, plus binding scores for the ligands you tried.
 
 <svg class="schematic" viewBox="0 0 620 120" role="img"
      aria-label="Pipeline: upload, find pockets, cluster, dock">
@@ -67,9 +68,9 @@ Each stage above links to its section.
   otherwise-idle fast pool — measured 2026-08-10 from job
   <code>find_pockets_20260810_131454_5b46d71c</code>'s own submission
   timestamp to its completion update. A busier pool will be slower; the
-  landing page's own "~1 min" button copy (screenshot below) is a
-  conservative headline figure for that reason, not a different
-  measurement.</dd>
+  "~1 min" the landing page quotes in the italic line between its two
+  buttons (screenshot below) is a conservative headline figure for that
+  reason, not a different measurement.</dd>
   <dt>You end up with</dt>
   <dd>Ranked pockets per frame · cluster representatives · SMINA scores · downloadable poses</dd>
 </dl>
@@ -159,7 +160,10 @@ predict` runs over a list of the extracted structures on four threads
 (`P2RANK_THREADS=4`, not exposed in the UI); then the per-frame
 prediction files are merged into
 one `pockets.csv` with five columns — `File name`, `Frame`,
-`pocket_index`, `probability`, `residues`.
+`pocket_index`, `probability`, `residues`. The table you see on screen
+is not that file: the panel hides `File name` and `residues` and adds
+two columns of its own, `num_residues` and `Confidence`, neither of
+which is written to the CSV.
 
 **A row is one pocket in one frame. It is not one site.** A groove that
 stays open across forty frames produces forty rows, each with its own
@@ -192,9 +196,11 @@ underneath keeps reporting how many of the total are on screen.
 ![The Find Pockets results panel: 79 pockets, avg p=0.27, 8 high-confidence, best p=0.91, above the ranked pocket table](img/02-find-pockets.png)
 
 Click a row and the Mol\* viewer paints that pocket's residues and jumps
-to the frame it was found in. A pocket with fewer than three residues
-gets a warning instead of a surface — below three points there is no mesh
-worth drawing. Ctrl- or shift-click to take several rows at once and an
+to the frame it was found in. That viewer is the 3D panel down the
+left-hand column, and Reading the results covers it properly. A pocket
+with fewer than three residues gets a warning instead of a surface —
+below three points there is no mesh worth drawing. Ctrl- or shift-click
+to take several rows at once and an
 **Add N selected → docking** button appears under the table: pockets can
 go straight from here into the docking selection without being clustered
 at all, which is the right move when you already know which site you
@@ -259,10 +265,11 @@ different `min_prob` rather than assuming the choice was made for you.
 
 Results open on **Heatmap** — one strip per cluster, one row per pocket
 labelled `p=… · F=…`, one column per residue, a filled cell meaning that
-residue lines that pocket. Clicking a row pushes the pocket to the viewer
-and jumps to its frame. **Clustered pockets** is the same information as
-a table. **Representatives** lists one row per cluster and, where
-hierarchical refinement ran, a K spinner per cluster: K=1 keeps the
+residue lines that pocket. Clicking a row pushes the pocket to the
+left-hand Mol\* viewer and jumps to its frame. **Clustered pockets** is
+the same information as a table. **Representatives** lists one row per
+cluster and, where hierarchical refinement ran, a K spinner per
+cluster: K=1 keeps the
 DBSCAN medoid, K of 2 or more re-cuts that cluster's dendrogram into that
 many sub-representatives, up to ten or the member count, whichever is
 smaller. **Downloads** holds the CSVs.
@@ -289,8 +296,9 @@ all N cluster representatives** or from rows you ticked in the pocket
 table. Ligands come through one uploader taking `.pdbqt`, `.sdf`, `.pdb`
 and `.zip`, several files at a time; SDF and PDB inputs are split
 server-side into one PDBQT per molecule with OpenBabel. Leave **Generate
-3D coordinates** off unless your input genuinely is 2D — curated
-libraries already carry coordinates, and the option costs minutes.
+3D coordinates for ligands** off unless your input genuinely is 2D —
+curated libraries already carry coordinates, and the option costs
+minutes.
 
 The **smina parameters** expander holds three controls. **Scoring
 function** defaults to `vinardo`, with `vina`, `ad4_scoring` and
@@ -324,23 +332,40 @@ same ligand would see against an all-atom structure of the same protein.
 
 <figure markdown="1">
 
-![One ligand scored against nine of twelve receptor columns: five real affinities near −4.5 kcal/mol, four cells reading None where that pair failed to dock](img/04-dock.png)
+![One ligand scored against nine of twelve receptor columns: five real affinities near −4.5 kcal/mol, four cells reading None for pockets that share a source frame with another selected pocket](img/04-dock.png)
 
 <figcaption>Benzamidine — trypsin's classic small-molecule inhibitor —
 uploaded separately for this capture; it is not part of the bundled
-trypsin dataset. The full run reports "Docking complete — 12/12 pairs ·
-8/12 ligand-receptor pairs scored," the same partial-failure pattern
-covered in Troubleshooting below.</figcaption>
+trypsin dataset. The run reports "Docking complete — 12/12 pairs · 8/12
+ligand-receptor pairs scored," and the four cells with no number in them
+are the duplicate-frame case described in the next paragraph, not the
+partial failure covered in Troubleshooting.</figcaption>
 
 </figure>
 
+Those two counters count different things. `12/12 pairs` is how many
+ligand-receptor jobs smina ran. `8/12 scored` is how many grid cells
+came back with a number in them. They part company when two of the
+pockets you picked were found in the same frame: one frame is one PDB
+file, and the grid keys its columns on the receptor file, not on the
+pocket. Both pockets get docked, each in its own box. Only one of the
+two columns picks the result up; its twin sits empty. Nothing failed
+here, so no warning appears above the grid and there is no failure log
+to download. When a column comes up empty on a run that reported no
+failures, look at the `Frame` labels of the pockets you selected. The
+poses are all still in the full results CSV, filed under the shared
+receptor filename — but nothing in there tells you which of the two
+pockets any one of them came from.
+
 Four columns on the right collapse each row to one number, and **Rank
 ligands by** decides which of them sorts the grid. **Mean** and
-**Median** average that ligand's per-receptor affinities in kcal/mol,
-lowest first; reach for Median when one receptor in the ensemble scores
-oddly. **Best** takes the single most-negative cell in the row, which is
-the reading that surfaces a ligand fitting one rare open conformation and
-nothing else. **ECR** is Exponential Consensus Ranking: rank the ligands
+**Median** each reduce that ligand's per-receptor affinities in kcal/mol
+to a single figure — the arithmetic mean, and the middle value of the
+sorted set — lowest first; reach for Median when one receptor in the
+ensemble scores oddly. **Best** takes the single most-negative cell in
+the row, which is the reading that surfaces a ligand fitting one rare
+open conformation and nothing else. **ECR** is Exponential Consensus
+Ranking: rank the ligands
 separately on each receptor, then sum `exp(−rank/σ)` across receptors
 with σ set to a tenth of the ligand count, floored at 1. It is unit-free
 and higher is
@@ -457,7 +482,7 @@ for the rest of the browser session.
 | Hierarchical refinement | Cluster, settings, DBSCAN only | On · off | On | Sub-clusters within each DBSCAN cluster, which is what makes the K spinners appear later |
 | K, per parent cluster | Cluster, Representatives tab | 1 up to the member count, capped at 10 | 1 | View only — 1 shows the DBSCAN medoid, higher re-cuts that cluster's dendrogram |
 | Ligand files | Dock, settings | `.pdbqt` · `.sdf` · `.pdb` · `.zip`, several at once | — | SDF and PDB are split into one PDBQT per molecule |
-| Generate 3D coordinates | Dock, settings | On · off | Off | Runs OpenBabel `--gen3d` during prep. Costs minutes; only 2D input needs it |
+| Generate 3D coordinates for ligands | Dock, settings | On · off | Off | Runs OpenBabel `--gen3d` during prep. Costs minutes; only 2D input needs it |
 | Scoring function | Dock, smina parameters | vinardo · vina · ad4_scoring · dkoes_scoring | vinardo | smina's `--scoring` |
 | Number of poses | Dock, smina parameters | 1 to 50 | 10 | smina's `--num_modes` — how many modes are kept per pair |
 | pH (protonation) | Dock, smina parameters | 4.0 to 10.0, step 0.1 | 7.4 | The pH OpenBabel protonates the receptor at before writing PDBQT |
@@ -483,8 +508,8 @@ path, not merely declared in a config file.
 | Upload size, per file | 200 MB in the browser, 500 MB server-side | The browser's limit is the one you will meet |
 | ZIP archives | 100:1 compression ratio, 1 GB uncompressed | Checked before anything is unpacked |
 | Disk per session | 5,000 MB | An upload that would cross it is refused. An hourly sweep prunes a session's oldest jobs until it fits |
-| Uploads | 10 per minute | Per browser session |
-| Stage submissions | 5 per minute | Per browser session |
+| Uploads | 10 per minute | Per browser tab; the window resets on reload |
+| Stage submissions | 5 per minute | Per browser tab; the window resets on reload |
 | Fast jobs at once | 2 per session, 60 across the service | Find pockets and Cluster share this pool |
 | Docking jobs at once | 1 per session, 30 across the service | Docking has its own pool, so a docking queue never starves pocket finding |
 | New sessions per IP | 20 per day | Only sessions that actually dispatched a job are counted |
@@ -556,11 +581,14 @@ receptor-ligand pairs work and others do not, the run still completes
 and the results are still shown, with a warning above them reading *N
 of M docking pairs failed* and an expander naming each pair with its
 exception. A separate log is downloadable. Read the grid as covering
-the successful pairs only — a blank cell is a pair that did not run,
-not a ligand that scored badly. A second, distinct callout appears when
-OpenBabel converts fewer molecules than you uploaded, and it reports
-per source file how many of how many made it through. Malformed records
-in an SDF are the usual reason.
+the successful pairs only — a cell with no number in it is a pair that
+yielded no usable pose, and the expander says why, rather than a ligand
+that scored badly. The warning is the tell. An empty cell on a run that
+reported no failures at all is the separate duplicate-frame case, and
+the Dock section covers that one. A second, distinct callout appears
+when OpenBabel converts fewer molecules than you uploaded, and it
+reports per source file how many of how many made it through. Malformed
+records in an SDF are the usual reason.
 
 The viewer has its own failure modes, all of them separate from the job
 succeeding. *Viewer file skipped* means the per-frame PDBs added up past

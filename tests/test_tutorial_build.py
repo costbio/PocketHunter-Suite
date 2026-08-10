@@ -3,10 +3,16 @@
 A broken in-page anchor fails silently in a browser — the page simply
 does not move — so anchor integrity is the property most worth pinning
 down here.
+
+The other silent failure is staleness: the rendered page is committed
+alongside its markdown so the render is reviewable in a diff, which
+means the two can disagree. ``TestShippedPage`` re-renders from the
+committed sources and demands the bytes match.
 """
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import pathlib
 import re
 
@@ -78,6 +84,59 @@ class TestShippedPage:
         ids = set(re.findall(r'id="([^"]+)"', html))
         hrefs = re.findall(r'href="#([^"]+)"', html)
         assert [h for h in hrefs if h not in ids] == []
+
+    def test_committed_page_is_a_current_render_of_its_sources(self):
+        """Both the source and the artefact are committed, so they can
+        drift: edit ``tutorial.md``, forget to run the build script, and
+        nothing else in this file notices — the anchors still resolve
+        and a stale page ships. Re-render from the committed sources and
+        demand byte-equality.
+
+        ``--built-at`` is the one input that is not in the repository, so
+        it is scraped back out of the footer of the page under test
+        rather than taken from today's date. That keeps the test stable
+        on any day and still fails the moment the markdown, the template
+        or the builder moves without a rebuild.
+        """
+        built_path = REPO / "static" / "tutorial" / "index.html"
+        if not built_path.exists():
+            import pytest
+            pytest.skip("page not built yet")
+
+        shipped = built_path.read_text(encoding="utf-8")
+        stamp = re.search(r"<footer>Built\s+(.+?)\s+·", shipped)
+        assert stamp, (
+            "no 'Built <date> ·' stamp in the page footer — this test "
+            "reads the build date back out of the artefact, so the "
+            "footer format in docs/tutorial/template.html and this "
+            "pattern have to stay in step"
+        )
+
+        rebuilt = _load_builder().render(
+            (REPO / "docs" / "tutorial" / "tutorial.md").read_text(encoding="utf-8"),
+            (REPO / "docs" / "tutorial" / "template.html").read_text(encoding="utf-8"),
+            built_at=stamp.group(1),
+        )
+
+        if rebuilt != shipped:
+            import difflib
+            diff = "\n".join(
+                itertools.islice(
+                    difflib.unified_diff(
+                        shipped.splitlines(), rebuilt.splitlines(),
+                        fromfile="static/tutorial/index.html (committed)",
+                        tofile="rebuilt from docs/tutorial/",
+                        lineterm="",
+                    ),
+                    40,
+                )
+            )
+            raise AssertionError(
+                "static/tutorial/index.html is stale — it is not what the "
+                "committed docs/tutorial/ sources render to. Re-run "
+                "`python scripts/build_tutorial.py --built-at "
+                f"{stamp.group(1)}` and commit the result.\n\n{diff}"
+            )
 
 
 class TestIntroBlock:

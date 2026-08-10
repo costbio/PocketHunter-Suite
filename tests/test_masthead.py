@@ -1,10 +1,11 @@
 """Tests for landing.render_masthead — the unified brand + nav strip.
 
 render_masthead is split between (a) a top-row HTML markdown, (b) a
-nav row that uses st.columns containing 3 st.buttons + 2 st.markdowns
-(chips + costbio), and (c) the surrounding st.container. We capture
-all relevant calls so tests can assert on the concatenated HTML AND
-on which buttons / widget keys were created.
+nav row that uses st.columns containing 2 st.buttons (NEW SESSION,
+HELP) + 1 st.link_button (TUTORIAL) + 2 st.markdowns (chips + costbio),
+and (c) the surrounding st.container. We capture all relevant calls so
+tests can assert on the concatenated HTML AND on which buttons / links
+/ widget keys were created.
 
 Shape (v3, post nav-buttonisation):
 
@@ -21,10 +22,12 @@ from unittest.mock import patch
 
 def _render_to_capture(resolved):
     """Patch every st.* call render_masthead makes and run it. Returns a
-    dict with concatenated 'html' (all markdowns joined) and 'buttons'
-    (list of {label, key, kwargs}). Suppresses the side-effects of
-    st.container / st.columns / st.button so the function body runs
-    end-to-end in bare mode."""
+    dict with concatenated 'html' (all markdowns joined), 'buttons'
+    (list of {label, key, kwargs}) and 'link_buttons' (list of
+    {label, url, key, kwargs} — TUTORIAL is an st.link_button, so it
+    lands here and not in 'buttons'). Suppresses the side-effects of
+    st.container / st.columns / st.button / st.link_button so the
+    function body runs end-to-end in bare mode."""
     captured = {"markdown": [], "buttons": [], "link_buttons": []}
 
     def fake_markdown(html, *args, **kwargs):

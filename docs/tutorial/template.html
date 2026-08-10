@@ -40,7 +40,12 @@ a:hover { background: var(--accent); }
   display: grid; grid-template-columns: 260px minmax(0, 1fr);
   gap: 32px; max-width: 1200px; margin: 0 auto; padding: 24px 18px 80px;
 }
-.toc {
+/* Scope the box to the outer <nav>: python-markdown's `toc` extension
+   emits its own <div class="toc"> into {{ TOC }}, so an unqualified
+   `.toc` rule would draw the border, background and scroll region twice,
+   one nested inside the other. `.toc ul` / `.toc a` below stay
+   unqualified on purpose — they should match either way. */
+nav.toc {
   position: sticky; align-self: start;
   top: calc(var(--masthead-h) + 24px);
   max-height: calc(100vh - var(--masthead-h) - 48px); overflow-y: auto;
@@ -77,6 +82,10 @@ a:hover { background: var(--accent); }
 }
 
 .schematic { width: 100%; height: auto; margin: 24px 0; border: var(--border); background: var(--bg2); }
+/* The global `a { text-decoration: underline }` reaches SVG <a> too, and
+   each stage box wraps its title *and* its sub-labels in one link — so
+   without this every line in the diagram renders underlined. */
+.schematic a { text-decoration: none; }
 .schematic .stage rect { fill: var(--bg); stroke: var(--fg); stroke-width: 2; }
 .schematic .stage:hover rect { fill: var(--accent); }
 .schematic text { font-family: var(--mono); font-size: 11px; fill: var(--fg); }
@@ -102,7 +111,7 @@ footer {
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
-  .toc { position: static; max-height: none; }
+  nav.toc { position: static; max-height: none; }
 }
 </style>
 </head>
