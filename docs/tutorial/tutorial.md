@@ -66,7 +66,10 @@ Each stage above links to its section.
   <dd>13 seconds, end to end, for the bundled trypsin example on an
   otherwise-idle fast pool — measured 2026-08-10 from job
   <code>find_pockets_20260810_131454_5b46d71c</code>'s own submission
-  timestamp to its completion update. A busier pool will be slower.</dd>
+  timestamp to its completion update. A busier pool will be slower; the
+  landing page's own "~1 min" button copy (screenshot below) is a
+  conservative headline figure for that reason, not a different
+  measurement.</dd>
   <dt>You end up with</dt>
   <dd>Ranked pockets per frame · cluster representatives · SMINA scores · downloadable poses</dd>
 </dl>
@@ -103,7 +106,7 @@ instance reads that pair from `/app/examples/trypsin`, set as
 `EXAMPLE_TRAJECTORY_DIR`; when the directory is missing the button hides
 itself rather than failing on you.
 
-![The PocketHunter Suite landing page, showing the Start new analysis and Try with example trajectory buttons on the left and the Open an existing analysis form on the right, with the FAST/DOCK pool-occupancy indicator in the header](img/01-landing.png)
+![The landing page: Start new analysis and Try with example trajectory on the left, Open an existing analysis on the right](img/01-landing.png)
 
 ## Sessions {: #sessions }
 
@@ -186,7 +189,7 @@ that starts with all three badges ticked. Both filter the table and
 nothing else. No job re-runs, no row is deleted, and the caption
 underneath keeps reporting how many of the total are on screen.
 
-![The Find Pockets results panel for the trypsin worked example: a stats strip reading 79 pockets, avg p=0.27, 8 high-confidence, best p=0.91, and the pocket table with its Frame, pocket_index, probability, num_residues and Confidence columns](img/02-find-pockets.png)
+![The Find Pockets results panel: 79 pockets, avg p=0.27, 8 high-confidence, best p=0.91, above the ranked pocket table](img/02-find-pockets.png)
 
 Click a row and the Mol\* viewer paints that pocket's residues and jumps
 to the frame it was found in. A pocket with fewer than three residues
@@ -264,12 +267,12 @@ DBSCAN medoid, K of 2 or more re-cuts that cluster's dendrogram into that
 many sub-representatives, up to ten or the member count, whichever is
 smaller. **Downloads** holds the CSVs.
 
-**Add all N cluster representatives → docking**, at the foot of the
-Representatives tab, is the normal handoff to the next stage — one
-receptor per displayed row, sub-cluster representatives grouped under
-their DBSCAN parent.
+**Add all N cluster representatives → docking**, above the Representatives
+table, is the normal handoff to the next stage — one receptor per
+displayed row, sub-cluster representatives grouped under their DBSCAN
+parent.
 
-![The Cluster Representatives table for the trypsin worked example: 12 rows, one per cluster, each with its Frame and lining-residue Location, and the Add all 12 cluster representatives → docking button above it](img/03-cluster.png)
+![The Add all 12 cluster representatives → docking button above a table listing the first nine of twelve clusters, with each row's Frame and lining residues](img/03-cluster.png)
 
 When DBSCAN finds nothing the panel says so and names the two usual
 causes: `min_prob` filtered out too much, or too few pockets survived to
@@ -314,7 +317,22 @@ conformations you selected. That shape is the payoff for having run a
 trajectory at all — one ligand scored against an ensemble of
 conformations rather than against a single crystal structure.
 
-![The Dock score grid for the trypsin worked example: one ligand row (benzamidine, trypsin's classic small-molecule inhibitor — not part of the bundled dataset, uploaded separately for this capture) against nine of its twelve receptor columns, five cells showing real binding affinities in kcal/mol and the rest reading None where that ligand-receptor pair failed to dock — the caption above reads "Docking complete — 12/12 pairs · 8/12 ligand-receptor pairs scored", the same partial-failure pattern described below in Troubleshooting](img/04-dock.png)
+One caveat about the numbers below: the bundled trypsin topology carries
+backbone atoms plus CB only, not full side chains. Expect affinities a
+little weaker, and pairs a little more likely to fail outright, than the
+same ligand would see against an all-atom structure of the same protein.
+
+<figure markdown="1">
+
+![One ligand scored against nine of twelve receptor columns: five real affinities near −4.5 kcal/mol, four cells reading None where that pair failed to dock](img/04-dock.png)
+
+<figcaption>Benzamidine — trypsin's classic small-molecule inhibitor —
+uploaded separately for this capture; it is not part of the bundled
+trypsin dataset. The full run reports "Docking complete — 12/12 pairs ·
+8/12 ligand-receptor pairs scored," the same partial-failure pattern
+covered in Troubleshooting below.</figcaption>
+
+</figure>
 
 Four columns on the right collapse each row to one number, and **Rank
 ligands by** decides which of them sorts the grid. **Mean** and
