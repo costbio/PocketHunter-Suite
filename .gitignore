@@ -48,6 +48,10 @@ celerybeat-schedule*
 # pointed to by POSTGRES_DATA_DIR (defaults to ./pgdata). Never source.
 pgdata/
 
+# Persistent Chromium profile used by scripts/capture_tutorial_screenshots.py
+# to cache the Streamlit JS bundle across runs. Local cache, never source.
+.tutorial_capture_profile/
+
 # v2 Phase C C6: application log churn — operator-side, never source.
 # Worker containers (re)write this on every boot via logging_config.py's
 # rotating handler. logrotate (host-side, see docs/deployment.md) keeps
