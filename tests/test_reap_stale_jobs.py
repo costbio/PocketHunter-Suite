@@ -1,14 +1,20 @@
 """Tests for ``cleanup_job.reap_stale_jobs_task``.
 
 Behaviour under test:
-* A Job row older than its kind's ``STALE_JOB_CUTOFF_SECONDS``, still in an
-  in-flight status ('submitted' / 'queued' / 'running'), is marked 'failed'
-  with a structured error dict (``exc_type`` / ``exc_message`` / ``stage``).
-* A Job row inside its cutoff is left untouched.
+* A 'running' Job row older than its kind's ``STALE_JOB_CUTOFF_SECONDS`` is
+  marked 'failed' with a structured error dict (``exc_type`` /
+  ``exc_message`` / ``stage``).
+* A 'running' Job row inside its cutoff is left untouched.
 * An already-terminal Job row (e.g. 'completed', 'failed') is never
-  touched, no matter how old — the reaper only looks at in-flight rows.
+  touched, no matter how old — the reaper only looks at 'running' rows.
 * Per-kind cutoffs are respected: a docking job isn't reaped on the much
   shorter find_pockets/cluster timescale, only on its own (longer) one.
+* 'submitted' / 'queued' rows are NEVER reaped by wall-clock age, no
+  matter how old — those cutoffs bound run time, not queue-wait time, and
+  this codebase's pools are deliberately oversubscribed (see the module
+  comment in cleanup_job.py), so an old-but-healthy backlogged job must
+  survive. This is the fix for the "queued job gets falsely reaped under
+  backlog" defect a code review caught in an earlier pass.
 """
 from __future__ import annotations
 
@@ -138,7 +144,7 @@ class TestReapStaleJobs:
 
         docking_cutoff_hours = STALE_JOB_CUTOFF_SECONDS["docking"] / 3600
         with get_db() as db:
-            j = _seed_job(db, kind="docking", status="submitted",
+            j = _seed_job(db, kind="docking", status="running",
                           age_hours=docking_cutoff_hours + 1)
             jid = j.id
 
@@ -156,7 +162,7 @@ class TestReapStaleJobs:
 
         cluster_cutoff_hours = STALE_JOB_CUTOFF_SECONDS["cluster"] / 3600
         with get_db() as db:
-            j = _seed_job(db, kind="cluster", status="queued",
+            j = _seed_job(db, kind="cluster", status="running",
                           age_hours=cluster_cutoff_hours + 1)
             jid = j.id
 
@@ -166,10 +172,61 @@ class TestReapStaleJobs:
         row = get_job(jid)
         assert row.status == "failed"
 
+    def test_queued_job_survives_even_far_past_cutoff(self, db_with_schema):
+        """The core queue-wait fix: 'queued' rows are never reaped by
+        wall-clock age. FAST_POOL_SIZE=6 vs MAX_CONCURRENT_FAST_JOBS=60 (a
+        10x oversubscription, settings.py) means a perfectly healthy
+        queued job can legitimately sit for many multiples of the
+        find_pockets run-time cutoff waiting for a worker to free up.
+
+        Regression note: against the reap logic BEFORE this fix (which
+        queried status.in_(('submitted', 'queued', 'running')) and applied
+        the same run-time-derived cutoff to all three), this exact
+        scenario would have reaped == 1 and flipped the row to 'failed' —
+        this test fails on that implementation.
+        """
+        from cleanup_job import STALE_JOB_CUTOFF_SECONDS, reap_stale_jobs_task
+        from db.jobs import get as get_job
+        from db.session import get_db
+
+        cutoff_hours = STALE_JOB_CUTOFF_SECONDS["find_pockets"] / 3600
+        with get_db() as db:
+            # Many multiples past the run-time cutoff — still healthy
+            # backlog if no worker has claimed it yet.
+            j = _seed_job(db, kind="find_pockets", status="queued",
+                          age_hours=cutoff_hours * 5)
+            jid = j.id
+
+        result = reap_stale_jobs_task()
+        assert result["reaped"] == 0
+
+        row = get_job(jid)
+        assert row.status == "queued"
+        assert row.error is None
+
+    def test_submitted_job_survives_even_far_past_cutoff(self, db_with_schema):
+        """Same as above for 'submitted' — the other not-yet-claimed status."""
+        from cleanup_job import STALE_JOB_CUTOFF_SECONDS, reap_stale_jobs_task
+        from db.jobs import get as get_job
+        from db.session import get_db
+
+        cutoff_hours = STALE_JOB_CUTOFF_SECONDS["docking"] / 3600
+        with get_db() as db:
+            j = _seed_job(db, kind="docking", status="submitted",
+                          age_hours=cutoff_hours * 5)
+            jid = j.id
+
+        result = reap_stale_jobs_task()
+        assert result["reaped"] == 0
+
+        row = get_job(jid)
+        assert row.status == "submitted"
+
     def test_mixed_population(self, db_with_schema):
-        """Several rows at once — only the ones past THEIR OWN kind's
+        """Several rows at once — only 'running' rows past THEIR OWN kind's
         cutoff get reaped; everything else (inside-cutoff, longer-lived
-        kinds, and terminal rows) survives."""
+        kinds, terminal rows, and old-but-unclaimed queued/submitted rows)
+        survives."""
         from cleanup_job import STALE_JOB_CUTOFF_SECONDS, reap_stale_jobs_task
         from db.session import get_db
 
@@ -178,17 +235,17 @@ class TestReapStaleJobs:
         dk = STALE_JOB_CUTOFF_SECONDS["docking"] / 3600
 
         with get_db() as db:
-            # Should be reaped — past their own cutoff.
+            # Should be reaped — 'running' and past their own cutoff.
             _seed_job(db, kind="find_pockets", status="running",
                       age_hours=fp + 1, suffix="a")
-            _seed_job(db, kind="cluster", status="submitted",
+            _seed_job(db, kind="cluster", status="running",
                       age_hours=cl + 1, suffix="b")
             _seed_job(db, kind="docking", status="running",
                       age_hours=dk + 1, suffix="c")
             # Should survive — inside their own cutoff.
             _seed_job(db, kind="find_pockets", status="running",
                       age_hours=0.1, suffix="d")
-            _seed_job(db, kind="cluster", status="queued",
+            _seed_job(db, kind="cluster", status="running",
                       age_hours=cl - 0.5, suffix="e")
             # Should survive — docking, past find_pockets' timescale but
             # inside docking's own much longer cutoff.
@@ -197,6 +254,12 @@ class TestReapStaleJobs:
             # Should survive — terminal, however old.
             _seed_job(db, kind="find_pockets", status="completed",
                       age_hours=dk * 5, suffix="g")
+            # Should survive — queued/submitted, however old (not yet
+            # claimed by a worker; this is healthy backlog, not a zombie).
+            _seed_job(db, kind="find_pockets", status="queued",
+                      age_hours=fp * 5, suffix="h")
+            _seed_job(db, kind="docking", status="submitted",
+                      age_hours=dk * 5, suffix="i")
 
         result = reap_stale_jobs_task()
         assert result["reaped"] == 3

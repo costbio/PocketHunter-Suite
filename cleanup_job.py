@@ -65,11 +65,37 @@ logger = setup_logging(__name__)
 #                 legitimately run longer.
 #
 # On top of each "worst possible single attempt" figure we add a flat
-# safety margin to absorb ordinary scheduling noise (time a task can sit
-# queued before a worker dequeues it, plus the couple of seconds of slack
-# in _run_stage's own 1s poll loop) without having to guess how large that
-# noise really is. It's deliberately small relative to even the shortest
-# cutoff (find_pockets' 5400s) so it can't mask a real zombie for long.
+# safety margin to absorb ordinary scheduling noise -- the couple of
+# seconds of slack in _run_stage's own 1s poll loop, plus the gap between
+# a worker crashing and this beat task's own hourly tick -- without having
+# to guess how large that noise really is. It's deliberately small
+# relative to even the shortest cutoff (cluster's 3600s) so it can't mask
+# a real zombie for long.
+#
+# What this margin does NOT cover -- and why this reaper only ever
+# queries status == 'running': the cutoffs above bound how long a job can
+# run once a worker has actually started it. They say nothing about how
+# long a job may legitimately sit unclaimed in 'submitted' / 'queued'.
+# That wait is governed by pool saturation, not by any task time limit,
+# and this codebase deliberately oversubscribes both pools:
+# FAST_POOL_SIZE=6 workers against MAX_CONCURRENT_FAST_JOBS=60, and
+# DOCKING_POOL_SIZE=3 workers against MAX_CONCURRENT_DOCKING_JOBS=30
+# (settings.py) -- a 10x ratio in both pools. Under a full backlog the
+# last-in-line job can wait roughly (ratio - 1) x the pool's worst-case
+# per-job runtime before a worker even looks at it -- for the fast pool
+# that's up to ~9 x 5400s (~13.5h) using find_pockets' own worst case as
+# the conservative per-job estimate, an order of magnitude past the
+# find_pockets cutoff above. Applying the run-time cutoffs to
+# 'submitted'/'queued' rows would misclassify healthy backlog as a dead
+# worker -- telling a user their queued job failed, and inviting a
+# resubmit, at exactly the moment the pool is already backlogged: the
+# worst possible time. Safely bounding 'submitted'/'queued' staleness
+# needs to consult Celery's own task state, the way
+# panels/docking.py:_reattach_if_running already does for its
+# PENDING-vs-lost check -- that's future work. This reaper narrows itself
+# to the one thing it can prove from wall-clock age alone: a job a worker
+# already claimed (status='running') that has run far longer than any
+# task in this codebase is allowed to run.
 _REAPER_SAFETY_MARGIN_SECONDS = 15 * 60  # 15 minutes
 
 STALE_JOB_CUTOFF_SECONDS: dict = {
@@ -98,16 +124,17 @@ def _as_aware_utc(dt):
 
 @celery_app.task
 def reap_stale_jobs_task():
-    """Mark Job rows abandoned by a dead worker as 'failed'.
+    """Mark 'running' Job rows abandoned by a dead worker as 'failed'.
 
-    Finds every Job row still in an in-flight status (the same
-    ``submitted`` / ``queued`` / ``running`` set ``db.jobs.in_flight_count``
-    counts) whose ``updated_at`` — the timestamp of its last real status
-    transition, since intermediate Celery PROGRESS ticks never touch the DB
-    row — is older than that job kind's ``STALE_JOB_CUTOFF_SECONDS``. Such a
-    row cannot possibly still be legitimately running: see the module
-    comment above for how each cutoff is derived from tasks.py's own hard
-    time limits.
+    Finds every Job row with status == 'running' (deliberately narrower
+    than ``db.jobs.in_flight_count``'s ``submitted`` / ``queued`` /
+    ``running`` set — see the module comment above for why 'submitted' and
+    'queued' are excluded) whose ``updated_at`` — the timestamp of its
+    last real status transition, since intermediate Celery PROGRESS ticks
+    never touch the DB row — is older than that job kind's
+    ``STALE_JOB_CUTOFF_SECONDS``. Such a row cannot possibly still be
+    legitimately running: see the module comment above for how each
+    cutoff is derived from tasks.py's own hard time limits.
 
     Reaped rows are marked 'failed' through ``db.jobs.update_status`` (never
     raw SQL) with a structured ``error`` dict shaped like every other task
@@ -122,7 +149,7 @@ def reap_stale_jobs_task():
 
     from sqlalchemy import select
 
-    from db.jobs import _IN_FLIGHT_STATUSES, update_status
+    from db.jobs import update_status
     from db.models import Job
     from db.session import get_db
 
@@ -132,7 +159,7 @@ def reap_stale_jobs_task():
     reaped = 0
     try:
         with get_db() as db:
-            stmt = select(Job).where(Job.status.in_(_IN_FLIGHT_STATUSES))
+            stmt = select(Job).where(Job.status == "running")
             rows = list(db.scalars(stmt).all())
             for row in rows:
                 cutoff = STALE_JOB_CUTOFF_SECONDS.get(

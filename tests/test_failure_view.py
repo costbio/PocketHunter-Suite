@@ -74,6 +74,22 @@ class TestClassifyDependencyMissing:
         assert "smina" in r.suggestion.lower() or "install" in r.suggestion.lower()
 
 
+class TestClassifyWorkerLost:
+    def test_stale_job_reaped(self):
+        r = classify_error(_info(
+            "StaleJobReaped",
+            "This find_pockets job was still 'running' after 306.7h with no "
+            "update from any worker — longer than a find_pockets job can "
+            "legitimately take (1.8h). The worker that picked it up almost "
+            "certainly died before it could record success or failure.",
+        ))
+        assert r.category == ErrorCategory.WORKER_LOST
+        # Must NOT get the generic "bug report" copy — there is no bug here.
+        assert "bug report" not in r.suggestion.lower()
+        assert "task failed" not in r.headline.lower()
+        assert "resubmit" in r.suggestion.lower()
+
+
 class TestClassifyUnknown:
     def test_unknown_falls_through(self):
         r = classify_error(_info("WeirdCustomError", "something exploded in a way we don't recognise"))
