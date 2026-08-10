@@ -76,6 +76,19 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(minute='*/5'),
         'options': {'expires': 240},
     },
+    # Reap Job rows an actually-dead worker never got to finish (see the
+    # module comment on cleanup_job.reap_stale_jobs_task for the defect and
+    # the STALE_JOB_CUTOFF_SECONDS derivation). This is slow-moving by
+    # nature — the shortest per-kind cutoff is ~1.25h (cluster) and the
+    # longest ~2.33h (docking), so nothing legitimate could be reaped even
+    # at a much coarser cadence than the other beat tasks here. Hourly keeps
+    # a phantom row's lifetime bounded (worst case: one cutoff period plus
+    # one hour) without adding meaningful DB load.
+    'reap-stale-jobs': {
+        'task': 'cleanup_job.reap_stale_jobs_task',
+        'schedule': crontab(minute=45),  # 45 past every hour
+        'options': {'expires': 1800},
+    },
 }
 
 if __name__ == '__main__':
