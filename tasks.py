@@ -1435,11 +1435,14 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, n
                 pdb_to_pdbqt(protein_pdb, receptor_pdbqt, pH=ph_value)
                 # B11.16: per-pocket box. ``calc_box`` returns the
                 # residue cloud's center + min/max corners; size it to
-                # the bounding box + 4 Å padding, clamped to [10, 50].
+                # the bounding box + 2 Å padding, clamped to [10, 25].
+                # 2 Å pad keeps smina focused on the pocket; 25 Å max
+                # prevents the box from covering the entire protein when
+                # p2rank returns an over-large pocket.
                 box_center, box_min, box_max = calc_box(protein_pdb, pocket_row['residues'])
-                _pad = 4.0
+                _pad = 2.0
                 box_size = [
-                    float(min(max(box_max[i] - box_min[i] + 2 * _pad, 10.0), 50.0))
+                    float(min(max(box_max[i] - box_min[i] + 2 * _pad, 10.0), 25.0))
                     for i in range(3)
                 ]
                 dock_folder = protein_pdb[:-4] + '_smina'
