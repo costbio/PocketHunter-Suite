@@ -20,8 +20,9 @@ _MARKER = "<!-- pockethunter-shell-css -->"
 # Bumped on each meaningful change to the rules below so a redeploy
 # re-injects an updated block (otherwise the marker-check would skip
 # the write and the old rules would persist in site-packages).
-_MARKER_VERSION = "v2"
+_MARKER_VERSION = "v3"
 _EARLY_CSS = """
+<link rel="icon" type="image/svg+xml" href="/app/static/favicon.svg">
 <style>
   /* Hide Streamlit's default top toolbar — emotion paints a ~60 px
      gray strip when React first mounts, before our WebSocket-delivered
