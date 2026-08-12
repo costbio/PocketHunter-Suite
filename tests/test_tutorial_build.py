@@ -1,4 +1,4 @@
-"""Tests for scripts/build_tutorial.py.
+"""Tests for docs/tutorial/build.py.
 
 A broken in-page anchor fails silently in a browser — the page simply
 does not move — so anchor integrity is the property most worth pinning
@@ -20,7 +20,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def _load_builder():
-    path = REPO / "scripts" / "build_tutorial.py"
+    path = REPO / "docs" / "tutorial" / "build.py"
     spec = importlib.util.spec_from_file_location("build_tutorial", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -134,7 +134,7 @@ class TestShippedPage:
             raise AssertionError(
                 "static/tutorial/index.html is stale — it is not what the "
                 "committed docs/tutorial/ sources render to. Re-run "
-                "`python scripts/build_tutorial.py --built-at "
+                "`python docs/tutorial/build.py --built-at "
                 f"{stamp.group(1)}` and commit the result.\n\n{diff}"
             )
 
@@ -169,7 +169,7 @@ class TestIntroBlock:
         asserts on real markup: labeled <p> elements and, more importantly,
         real <ul><li> bullets — bullets only render as markup if the
         surrounding markdown="1" div was actually parsed as markdown
-        (requires the `md_in_html` extension in scripts/build_tutorial.py).
+        (requires the `md_in_html` extension in docs/tutorial/build.py).
         """
         html = self._built()
         scope = html[html.index('class="scope"'):]

@@ -31,8 +31,8 @@ you re-run it:
    survive a fresh navigation).
 
 Usage:
-    ~/.venvs/ph-tutorial/bin/python scripts/capture_tutorial_screenshots.py landing
-    ~/.venvs/ph-tutorial/bin/python scripts/capture_tutorial_screenshots.py full-run
+    ~/.venvs/ph-tutorial/bin/python docs/tutorial/capture_screenshots.py landing
+    ~/.venvs/ph-tutorial/bin/python docs/tutorial/capture_screenshots.py full-run
 
 `full-run` drives the whole worked example in one go: starts a session
 from the bundled trypsin example, waits for Find Pockets, runs Cluster,
@@ -54,7 +54,7 @@ import time
 from playwright.sync_api import Page, sync_playwright
 
 BASE = "https://pockethunter.bio-cloud.site"
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = REPO_ROOT / "docs" / "tutorial" / "img"
 
 # A persistent Chromium profile so the multi-MB JS bundle is cached across

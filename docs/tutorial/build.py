@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile docs/tutorial/tutorial.md into static/tutorial/index.html.
+"""Compile tutorial.md into static/tutorial/index.html.
 
 Streamlit serves ./static/ under /app/static/ (enableStaticServing in
 .streamlit/config.toml), and docker-compose bind-mounts the repository
@@ -24,7 +24,7 @@ import sys
 
 import markdown
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = pathlib.Path(__file__).resolve().parents[2]
 SRC_MD = REPO / "docs" / "tutorial" / "tutorial.md"
 TEMPLATE = REPO / "docs" / "tutorial" / "template.html"
 SRC_IMG = REPO / "docs" / "tutorial" / "img"
