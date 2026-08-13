@@ -116,6 +116,48 @@ def test_paths_are_resolved(base_env, monkeypatch, tmp_path):
     assert s.RESULTS_DIR.is_absolute()
 
 
+class TestDiskUsageWarnGbAlias:
+    """DISK_USAGE_WARN_GB replaced MAX_DISK_USAGE_GB (defect D — the old
+    name read as an enforced cap; it only ever fed a warning-log
+    percentage, never anything that refused an upload or pruned disk
+    space). The rename uses a ``validation_alias=AliasChoices(...)`` so a
+    deployed host's existing ``.env`` (which sets the old name) keeps
+    working without an edit. These pin that behaviour against this repo's
+    actual ``Settings`` class, not just a throwaway BaseSettings."""
+
+    def test_old_env_var_name_still_works(self, base_env, monkeypatch):
+        monkeypatch.delenv("DISK_USAGE_WARN_GB", raising=False)
+        monkeypatch.setenv("MAX_DISK_USAGE_GB", "55")
+        from settings import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.DISK_USAGE_WARN_GB == 55
+
+    def test_new_env_var_name_works(self, base_env, monkeypatch):
+        monkeypatch.delenv("MAX_DISK_USAGE_GB", raising=False)
+        monkeypatch.setenv("DISK_USAGE_WARN_GB", "77")
+        from settings import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.DISK_USAGE_WARN_GB == 77
+
+    def test_neither_set_falls_back_to_default(self, base_env, monkeypatch):
+        monkeypatch.delenv("MAX_DISK_USAGE_GB", raising=False)
+        monkeypatch.delenv("DISK_USAGE_WARN_GB", raising=False)
+        from settings import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.DISK_USAGE_WARN_GB == 100
+
+    def test_both_set_new_name_takes_precedence(self, base_env, monkeypatch):
+        monkeypatch.setenv("MAX_DISK_USAGE_GB", "55")
+        monkeypatch.setenv("DISK_USAGE_WARN_GB", "77")
+        from settings import Settings
+
+        s = Settings()  # type: ignore[call-arg]
+        assert s.DISK_USAGE_WARN_GB == 77
+
+
 def test_config_facade_attributes_match_settings(base_env):
     """The ``Config`` class re-exports settings under the v1 names."""
     # Need to re-import config.py with a clean Settings load. Because the

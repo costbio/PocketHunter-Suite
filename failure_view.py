@@ -25,6 +25,7 @@ class ErrorCategory(str, enum.Enum):
     TIMEOUT = "timeout"
     NO_OUTPUT = "no_output"
     DEPENDENCY_MISSING = "dependency_missing"
+    WORKER_LOST = "worker_lost"
     UNKNOWN = "unknown"
 
 
@@ -45,6 +46,11 @@ _EXC_TYPE_MAP: dict[str, ErrorCategory] = {
     "ClusteringFoundNoClusters": ErrorCategory.NO_OUTPUT,
     "DockingProducedNoResults": ErrorCategory.NO_OUTPUT,
     "CalledProcessError": ErrorCategory.SUBPROCESS_CRASH,
+    # cleanup_job.reap_stale_jobs_task's own synthetic exc_type — a
+    # by-design cleanup action, not a crash. Needs its own category so it
+    # doesn't fall through to _unknown()'s "consider opening a bug report"
+    # copy, which would be wrong: there is no bug here.
+    "StaleJobReaped": ErrorCategory.WORKER_LOST,
 }
 
 
@@ -83,6 +89,8 @@ def classify_error(task_info: Optional[dict]) -> ClassifiedError:
         return _subprocess_crash(exc_message)
     if category == ErrorCategory.DEPENDENCY_MISSING:
         return _dependency_missing(exc_message)
+    if category == ErrorCategory.WORKER_LOST:
+        return _worker_lost(exc_message)
     return _unknown(exc_message)
 
 
@@ -199,6 +207,20 @@ def _dependency_missing(msg: str) -> ClassifiedError:
             "A required binary (smina, p2rank) or input file is missing. "
             "Check the deployment: smina should be installed at SMINA_PATH "
             "and PocketHunter's first_setup.sh should have downloaded p2rank."
+        ),
+    )
+
+
+def _worker_lost(msg: str) -> ClassifiedError:
+    return ClassifiedError(
+        category=ErrorCategory.WORKER_LOST,
+        headline="Job abandoned by a dead worker",
+        suggestion=(
+            "The worker that was running this job died before it could "
+            "record success or failure — killed, out of memory, container "
+            "recycle, or host restart. No result was ever produced, and "
+            "this isn't a bug in your job or input — just resubmit if you "
+            "still need this run."
         ),
     )
 

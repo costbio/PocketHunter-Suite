@@ -1297,7 +1297,7 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, n
         from prody import parsePDB, writePDB
         import glob as _glob
         from docking_pair_failures import build_pair_failure_record
-        from task_errors import NoPosesParsed
+        from task_errors import NoPosesParsed, DockingProducedNoResults
 
         df_rep_pockets = pd.read_csv(cluster_representatives_csv)
 
@@ -1580,7 +1580,15 @@ def run_docking_task(self, cluster_representatives_csv, ligand_folder, job_id, n
         pair_failures_log = _write_pair_failure_log(job_id, pair_failures, total_pairs)
 
         if not list_outputs:
-            raise ValueError("No docking results generated. Check that ligands and receptors are valid.")
+            # Every receptor/ligand pair failed or yielded no poses — smina ran,
+            # it just produced nothing usable. This is not a validation problem
+            # (the inputs were accepted and docking was attempted for every pair),
+            # so raise the dedicated NO_OUTPUT exception rather than ValueError —
+            # see failure_view._EXC_TYPE_MAP / _no_output for the user-facing copy.
+            raise DockingProducedNoResults(
+                "No docking results generated. Every receptor/ligand pair failed "
+                "or yielded no poses. Check that ligands and receptors are valid."
+            )
 
         df_outputs = pd.concat(list_outputs, ignore_index=True)
         docking_results_file = os.path.join(output_folder_job, 'docking_results.csv')

@@ -107,12 +107,12 @@ class ResourceManager:
         results_size = ResourceManager.get_directory_size(Config.RESULTS_DIR)
         total_used = uploads_size + results_size
 
-        limit_bytes = Config.MAX_DISK_USAGE_GB * (1024 ** 3)
+        limit_bytes = Config.DISK_USAGE_WARN_GB * (1024 ** 3)
         usage_pct = (total_used / limit_bytes) * 100 if limit_bytes > 0 else 0
 
         logger.debug(
             f"Disk usage: {total_used / (1024**3):.2f} GB / "
-            f"{Config.MAX_DISK_USAGE_GB} GB ({usage_pct:.1f}%)"
+            f"{Config.DISK_USAGE_WARN_GB} GB ({usage_pct:.1f}%)"
         )
 
         return total_used, limit_bytes, usage_pct
@@ -140,7 +140,7 @@ class ResourceManager:
         results_info = ResourceManager.get_directory_info(Config.RESULTS_DIR)
 
         total_bytes = uploads_info['size_bytes'] + results_info['size_bytes']
-        limit_bytes = Config.MAX_DISK_USAGE_GB * (1024 ** 3)
+        limit_bytes = Config.DISK_USAGE_WARN_GB * (1024 ** 3)
         usage_pct = (total_bytes / limit_bytes) * 100 if limit_bytes > 0 else 0
 
         return {
@@ -156,7 +156,7 @@ class ResourceManager:
             },
             'total_size_gb': total_bytes / (1024 ** 3),
             'total_size_mb': total_bytes / (1024 ** 2),
-            'limit_gb': Config.MAX_DISK_USAGE_GB,
+            'limit_gb': Config.DISK_USAGE_WARN_GB,
             'usage_pct': round(usage_pct, 2)
         }
 

@@ -139,7 +139,7 @@ def check_disk_space() -> Dict[str, Any]:
             'status': status,
             'usage_pct': round(usage_pct, 2),
             'used_gb': round(used / (1024 ** 3), 2),
-            'limit_gb': Config.MAX_DISK_USAGE_GB,
+            'limit_gb': Config.DISK_USAGE_WARN_GB,
             'available_gb': round((limit - used) / (1024 ** 3), 2)
         }
 
@@ -234,7 +234,7 @@ def get_system_info() -> Dict[str, Any]:
                 'max_upload_size_mb': Config.MAX_UPLOAD_SIZE / (1024 ** 2),
                 'max_zip_size_gb': Config.MAX_ZIP_SIZE / (1024 ** 3),
                 'cleanup_after_days': Config.CLEANUP_AFTER_DAYS,
-                'max_disk_usage_gb': Config.MAX_DISK_USAGE_GB
+                'max_disk_usage_gb': Config.DISK_USAGE_WARN_GB
             },
             'usage': usage_report,
             'oldest_jobs': oldest_jobs
