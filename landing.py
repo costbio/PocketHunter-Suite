@@ -150,7 +150,12 @@ def _create_example_session() -> "object | None":
         job_id=job_id,
         xtc_file_path=str(xtc_dst),
         topology_file_path=str(top_dst),
-        stride=10,
+        # Stride 1 on purpose, unlike the panel's default of 10. The bundled
+        # example is a 98-frame ensemble, so taking every frame costs little
+        # and lets a newcomer see the whole trajectory go through the
+        # pipeline. The panel keeps 10 because a real trajectory is orders
+        # of magnitude longer and a user picks their own stride there.
+        stride=1,
     )
     # Mark the session so the find_pockets panel renders the running
     # state on first load (just like a normal manual submit).
