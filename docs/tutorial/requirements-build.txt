@@ -1,0 +1,3 @@
+# Build-time only. Never installed into a container image and never
+# imported by the application — see scripts/build_tutorial.py.
+markdown>=3.8,<4

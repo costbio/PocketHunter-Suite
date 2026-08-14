@@ -32,6 +32,9 @@ static/*/
 # But the bridge bundle (B10) lives here and IS source-tracked.
 !static/js/
 static/js/*.map
+# So is the built tutorial page — a build artefact of docs/tutorial/,
+# committed so the rendered result is reviewable in a diff.
+!static/tutorial/
 
 # Frontend build outputs (B10).
 frontend/node_modules/
@@ -44,6 +47,10 @@ celerybeat-schedule*
 # volume retired 2026-05-16; the data now lives at the host path
 # pointed to by POSTGRES_DATA_DIR (defaults to ./pgdata). Never source.
 pgdata/
+
+# Persistent Chromium profile used by scripts/capture_tutorial_screenshots.py
+# to cache the Streamlit JS bundle across runs. Local cache, never source.
+.tutorial_capture_profile/
 
 # v2 Phase C C6: application log churn — operator-side, never source.
 # Worker containers (re)write this on every boot via logging_config.py's
@@ -67,3 +74,6 @@ logs/
 
 # Manuscript drafts — handled separately from tool source.
 docs/manuscript/
+
+# Authoring-only MCP registration; machine-specific absolute paths.
+.mcp.json

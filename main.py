@@ -104,9 +104,19 @@ st.markdown("""
         align-items: center;
     }
     /* Compact buttons inside the masthead — match the visual weight of
-       the prior .bh-newsession link (small, brutalist, no rounding). */
+       the prior .bh-newsession link (small, brutalist, no rounding).
+
+       nav_tutorial is listed twice on purpose. NEW SESSION and HELP are
+       st.buttons and match the `button` selector; TUTORIAL is an
+       st.link_button, which Streamlit renders as an <a href> and not a
+       <button> at all, so the `a` line is the one actually styling it.
+       Delete either while tidying the list and the masthead's only link
+       silently reverts to Streamlit's default anchor — no test catches
+       it, because the masthead tests assert on the Python-side capture
+       rather than on this CSS. */
     .st-key-nav_new_session button,
     .st-key-nav_tutorial button,
+    .st-key-nav_tutorial a,
     .st-key-nav_help button {
         font-family: 'JetBrains Mono', ui-monospace, monospace !important;
         font-size: 0.85rem !important;
@@ -117,9 +127,11 @@ st.markdown("""
         color: #555 !important;
         border: 2px solid #000 !important;
         text-transform: uppercase;
+        text-decoration: none !important;
     }
     .st-key-nav_new_session button:hover:not(:disabled),
     .st-key-nav_tutorial button:hover:not(:disabled),
+    .st-key-nav_tutorial a:hover,
     .st-key-nav_help button:hover:not(:disabled) {
         background: #e0e0e0 !important;
         color: #000 !important;
