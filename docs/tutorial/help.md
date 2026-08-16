@@ -295,9 +295,18 @@ reaches the server. Decline and everything still works — you just keep
 your own links. Your answer is remembered in `ph_cookie_consent` so you
 are not asked again.
 
-**No third parties.** No tracking cookies, no analytics, no external
-fonts or scripts. Every asset on every page is served from this domain,
-so opening these pages tells nobody but us that you did.
+**No tracking.** No tracking cookies, no analytics, no external fonts or
+scripts. These documentation pages and the landing page load entirely
+from this domain, so reading them tells nobody but us that you did.
+
+One exception, on the analysis page only, and we would rather name it
+than let you find it. The Mol\* viewer we embed asks a public volume
+server at `molstarvolseg.ncbr.muni.cz`, run by Masaryk University, to
+list its available entries when it starts. That is a feature of Mol\*
+we do not use, it carries none of your data, and it happens whether or
+not you load a structure — but it does tell that server your IP address.
+It will go when we next rebuild the viewer bundle without that
+extension.
 
 ## Licence and citing {: #licence }
 
