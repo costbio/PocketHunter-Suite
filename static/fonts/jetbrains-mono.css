@@ -1,0 +1,64 @@
+/* JetBrains Mono, self-hosted.
+ *
+ * These faces used to come from fonts.googleapis.com. Every page view
+ * therefore sent the visitor's IP and user-agent to Google before a
+ * single byte of our own content rendered — a third-party request the
+ * user never agreed to, on a service whose whole privacy claim is that
+ * submitted data stays private. Serving the files ourselves removes the
+ * request entirely; nothing on this site now contacts a third party.
+ *
+ * JetBrains Mono is licensed under the SIL Open Font License 1.1. The
+ * full text sits beside these files in OFL.txt, as the licence requires
+ * when the font is redistributed.
+ *
+ * font-display: swap keeps text readable while the face loads, matching
+ * what the Google Fonts URL used to request.
+ */
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('JetBrainsMono-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('JetBrainsMono-Italic.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('JetBrainsMono-Medium.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('JetBrainsMono-SemiBold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('JetBrainsMono-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('JetBrainsMono-ExtraBold.woff2') format('woff2');
+}

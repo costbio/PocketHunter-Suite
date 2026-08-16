@@ -21,9 +21,14 @@ baseRadius = "none"
 buttonRadius = "none"
 linkUnderline = true
 
-font = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap"
-headingFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700;800&display=swap"
-codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+# Self-hosted webfont — see static/fonts/jetbrains-mono.css. Pointing
+# these at fonts.googleapis.com sent every visitor's IP to a third party
+# before any of our own content rendered, which the NAR Web Server Issue
+# rules out and which sits badly beside this service's privacy claim.
+# One stylesheet declares all five weights, so all three knobs share it.
+font = "'JetBrains Mono':/app/static/fonts/jetbrains-mono.css"
+headingFont = "'JetBrains Mono':/app/static/fonts/jetbrains-mono.css"
+codeFont = "'JetBrains Mono':/app/static/fonts/jetbrains-mono.css"
 codeFontSize = "13px"
 baseFontSize = 14
 baseFontWeight = 400
