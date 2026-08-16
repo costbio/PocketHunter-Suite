@@ -96,6 +96,13 @@ def record_session(
     cm = _cm()
     if cm is None:
         return
+    # No persistent cookie before the visitor has said yes. Absence of an
+    # answer is not consent, so this also covers the runs before the
+    # cookie component has delivered anything.
+    from cookie_consent import has_consent
+
+    if not has_consent():
+        return
     # The CookieManager returns a placeholder on its first run this
     # browser session; writing then would overwrite a real cookie.
     # Latch past that first run (the mount-rerun re-enters here).

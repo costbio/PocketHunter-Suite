@@ -400,6 +400,22 @@ st.markdown("""
         text-decoration-thickness: 2px;
     }
 
+    /* Cookie consent copy. Slightly larger than .bh-footer — it is a
+       question the visitor has to actually read and answer, not fine
+       print to be skimmed past. */
+    .bh-consent {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 0.8rem;
+        line-height: 1.65;
+        color: #333;
+        margin-bottom: 0.5rem;
+    }
+    .bh-consent code {
+        font-size: 0.75rem;
+        background: #f4f4f4;
+        padding: 0 0.25em;
+    }
+
     /* Inline pool-load chips inside the nav row — between NEW SESSION
        and the costbio link. Smaller font (0.75rem vs the nav row's
        0.9rem) so the busiest copy ("FAST ██████ 6/6 busy · 2 queued ·
@@ -520,6 +536,13 @@ set_session_in_state(_resolved)
 # before the page dispatch — both the landing page (lists recent
 # sessions) and the analysis page (records the current one) use it.
 recent_sessions.init()
+
+# Ask before writing the one persistent cookie this service sets. Must
+# come after recent_sessions.init() (it reuses that CookieManager) and
+# before any code path that could call record_session.
+import cookie_consent  # noqa: E402 — must follow the CookieManager mount
+
+cookie_consent.render_banner()
 
 # Mol* embedding spike entry-point. Unlinked from the main nav; used for
 # diagnostic checks when the viewer misbehaves.
