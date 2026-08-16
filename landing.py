@@ -47,6 +47,14 @@ CORE_REPO_URL = "https://github.com/costbio/PocketHunter"
 LICENSE_URL = f"{REPO_URL}/blob/main/LICENSE"
 LICENSE_NAME = "MIT"
 
+# The bundled sample data, published on the static route so it has a
+# stable URL that a paper or a help page can cite. These are copies of
+# examples/tem1/ — tests/test_sample_data_published.py asserts the two
+# stay byte-identical, since a drifted copy would document a format the
+# demo does not actually run.
+EXAMPLE_TOPOLOGY_URL = "/app/static/example/topology.pdb"
+EXAMPLE_TRAJECTORY_URL = "/app/static/example/trajectory.xtc"
+
 
 def _render_captcha_if_enabled(*, key: str) -> tuple[bool, str | None]:
     """Render the Turnstile widget and return ``(ok_to_proceed, token_for_verify)``.
@@ -241,6 +249,18 @@ def render_landing() -> None:
                 if row is None:
                     st.stop()
                 navigate_to_session(row.short_code, edit_secret=row.edit_secret)
+            # The same two files the button runs, downloadable, so anyone
+            # can check what the uploaders expect before preparing their
+            # own. Served straight off the static route rather than via
+            # st.download_button, which would have to hold 600 KB in
+            # memory on every landing-page render.
+            st.markdown(
+                f'<div class="bh-footer">Inspect the sample data: '
+                f'<a href="{EXAMPLE_TOPOLOGY_URL}" download>topology.pdb</a> · '
+                f'<a href="{EXAMPLE_TRAJECTORY_URL}" download>trajectory.xtc</a>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     with col_open:
         st.markdown("### Open an existing analysis")
