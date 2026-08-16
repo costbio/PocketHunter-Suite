@@ -10,7 +10,7 @@ This module provides:
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import Any, Dict, List, Optional, Set, Tuple
 from config import Config
 from logging_config import setup_logging
 
@@ -161,7 +161,10 @@ class ResourceManager:
         }
 
     @staticmethod
-    def cleanup_old_jobs(dry_run: bool = False) -> List[str]:
+    def cleanup_old_jobs(
+        dry_run: bool = False,
+        protected_job_ids: Optional[Set[str]] = None,
+    ) -> List[str]:
         """
         Remove job directories older than CLEANUP_AFTER_DAYS.
 
@@ -170,6 +173,11 @@ class ResourceManager:
 
         Args:
             dry_run: If True, only report what would be deleted without deleting
+            protected_job_ids: Job IDs to leave alone regardless of age.
+                Callers pass the jobs of pinned sessions here — see
+                ``db.sessions.pinned_job_legacy_ids``. This function
+                deliberately does not query the database itself, so the
+                protection set has to arrive from outside.
 
         Returns:
             List of deleted job IDs
@@ -185,6 +193,9 @@ class ResourceManager:
         """
         cutoff_date = datetime.now() - timedelta(days=Config.CLEANUP_AFTER_DAYS)
         deleted_jobs = []
+        protected = protected_job_ids or set()
+        if protected:
+            logger.info(f"Cleanup protecting {len(protected)} pinned job(s)")
 
         logger.info(
             f"{'[DRY RUN] ' if dry_run else ''}Starting cleanup of jobs older than "
@@ -204,6 +215,10 @@ class ResourceManager:
 
                 # Skip special directories
                 if job_dir.name.startswith('.') or job_dir.name in ('ligands_temp', '__pycache__'):
+                    continue
+
+                # Pinned sessions' artefacts never age out.
+                if job_dir.name in protected:
                     continue
 
                 try:

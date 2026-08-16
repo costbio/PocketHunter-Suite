@@ -19,10 +19,10 @@ from __future__ import annotations
 import datetime as _dt
 import uuid
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Uuid
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import false, func
 
 from db.base import Base
 
@@ -74,6 +74,14 @@ class Session(Base):
     # Loose "what's currently configured" — selected clusters, box dims, etc.
     # Normalized first-class concepts (job rows) live in the ``jobs`` table.
     state: Mapped[dict] = mapped_column(_JSONB, nullable=False, default=dict)
+
+    # Exempt from every cleanup sweep: the abandoned-session reaper, the
+    # per-session disk quota, and the time-based job-directory prune. Set
+    # by an operator, never by a user — it exists so the published demo
+    # session can be cited from a paper and still be there years later.
+    pinned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
 
     jobs: Mapped[list["Job"]] = relationship(
         back_populates="session",

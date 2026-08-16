@@ -716,12 +716,12 @@ was mostly done by other people's tools. Cite them.
   of Chemical Information and Modeling 2009
   (`doi:10.1021/ci9003078`).
 
-**On reuse, a caveat.** Neither `costbio/PocketHunter` nor
-`costbio/PocketHunter-Suite` carries a LICENSE file. No licence means
-no licence granted, so default copyright applies and you should not
-assume permission to copy, modify, redistribute or self-host either
-codebase. Using the hosted service and publishing what you learn from
-it is a different matter and is what the service is for. If you want to
-run your own instance or build on the code, ask the authors first —
-p2rank ships MIT and SMINA has its own terms, but the PocketHunter
-repositories currently say nothing at all.
+**On reuse.** Both `costbio/PocketHunter` and
+`costbio/PocketHunter-Suite` are released under the MIT licence, so you
+are free to copy, modify, redistribute and self-host either codebase,
+commercially or not, provided the copyright notice travels with it. The
+external tools keep their own terms — p2rank is MIT, SMINA has its own,
+and Mol\* is MIT — so check those before redistributing a bundle that
+includes them. Using the hosted service and publishing what you learn
+from it needs no permission from anyone; that is what the service is
+for.
