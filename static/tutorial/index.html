@@ -197,7 +197,7 @@ pocket appeared in, plus binding scores for the ligands you tried.</p>
 <div class="scope">
 <p class="scope-label">FOR YOU IF</p>
 <ul>
-<li>You have an MD trajectory and want the pockets a single static structure would miss.</li>
+<li>You have an MD trajectory — or any other ensemble of conformations — and want the pockets a single static structure would miss.</li>
 <li>You want those pockets ranked and grouped rather than one hit per frame.</li>
 <li>You want to dock ligands against the pockets you select.</li>
 </ul>
@@ -210,12 +210,15 @@ pocket appeared in, plus binding scores for the ligands you tried.</p>
 </div>
 <dl class="facts">
   <dt>Worked example</dt>
-  <dd>The bundled trypsin trajectory — 98 frames of a single 263-residue chain, which the default stride of 10 cuts down to 10 structures</dd>
+  <dd>The bundled TEM-1 β-lactamase ensemble — 98 conformations of a
+  single 263-residue chain, all 98 searched, because the example button
+  runs at stride 1 rather than the panel's default of 10</dd>
   <dt>Time to first pockets</dt>
-  <dd>13 seconds, end to end, for the bundled trypsin example on an
-  otherwise-idle fast pool — measured 2026-08-10 from job
-  <code>find_pockets_20260810_131454_5b46d71c</code>'s own submission
-  timestamp to its completion update. A busier pool will be slower; the
+  <dd>20 seconds, end to end, on an otherwise-idle fast pool — measured
+  2026-08-16 from job
+  <code>find_pockets_20260816_105047_44674a0b</code>'s own submission
+  timestamp to its completion update, 10:50:47.7 to 10:51:08.0. A
+  busier pool will be slower; the
   "~1 min" the landing page quotes in the italic line between its two
   buttons (screenshot below) is a conservative headline figure for that
   reason, not a different measurement.</dd>
@@ -244,13 +247,37 @@ allowlist is short — <code>.xtc</code>, <code>.pdb</code>, <code>.gro</code>, 
 <code>.pdbqt</code> — and anything else is rejected on its name before it lands on
 disk.</p>
 <p>No trajectory to hand? The landing page carries a <strong>Try with example
-trajectory</strong> button beside <strong>Start new analysis</strong>. It copies the bundled
-trypsin demo into a fresh session and queues the pocket search without
-asking you for anything: <code>examples/trypsin/topology.pdb</code> is 104,845 bytes
-and <code>examples/trypsin/trajectory.xtc</code> is 500,352 bytes. The deployed
-instance reads that pair from <code>/app/examples/trypsin</code>, set as
+trajectory</strong> button beside <strong>Start new analysis</strong>. It copies a bundled
+TEM-1 β-lactamase demo into a fresh session and queues the pocket search
+without asking you for anything: <code>examples/tem1/topology.pdb</code> is 104,845
+bytes and <code>examples/tem1/trajectory.xtc</code> is 500,352 bytes. The deployed
+instance reads that pair from <code>/app/examples/tem1</code>, set as
 <code>EXAMPLE_TRAJECTORY_DIR</code>; when the directory is missing the button hides
-itself rather than failing on you.</p>
+itself rather than failing on you. That one job is submitted at stride 1,
+not at the 10 the panel offers you — the ensemble is short enough that
+searching every member costs about as much as searching a tenth of it,
+and a first run is more informative when nothing has been skipped.</p>
+<p><strong>What the example actually contains, because it governs how to read
+every number that follows.</strong> It is not a molecular-dynamics trajectory.
+It is a 98-member conformational ensemble of TEM-1 β-lactamase produced
+by a generative model from the 1BTL crystal structure, then written to
+XTC so it travels the same code path a real trajectory would. Two things
+follow from that. The members are independent draws, so their order
+carries no time and no kinetics — member 40 does not come after member 39
+in any physical sense, and no sequence of them is a transition. And the
+model lays down one rigid frame per residue, from which N, CA, C, O and
+CB are reconstructed geometrically; nothing past CB was ever generated.
+Load the pair in any viewer and you will count 1,294 atoms across 263
+residues, with exactly those five atom names and no others.</p>
+<p>That is enough for the first two stages and not enough for the third.
+p2rank scores a surface, and the site this example is interesting for —
+TEM-1 has a well-described cryptic pocket that opens when helices 11 and
+12 draw apart — is opened by backbone motion, which is present here.
+Docking is where the missing side chains bite: a ligand has far less to
+pack against than it would in an all-atom structure. Read the worked
+example's affinities as evidence that the pipeline runs end to end, not
+as a prediction about the molecules in it. Your own trajectories, if
+they are all-atom, have no such caveat.</p>
 <p><img alt="The landing page: Start new analysis and Try with example trajectory on the left, Open an existing analysis on the right" src="img/01-landing.png" /></p>
 <h2 id="sessions">Sessions</h2>
 <p>There is no sign-up. Pressing <strong>Start new analysis</strong> mints a workspace and
@@ -304,15 +331,19 @@ which is written to the CSV.</p>
 stays open across forty frames produces forty rows, each with its own
 <code>pocket_index</code> and its own slightly different residue list, and nothing
 at this stage knows they describe the same place. The count in the stats
-strip is therefore a count of detections: ninety frames returning ten
-hits apiece is 900 rows and possibly ten actual pockets. Turning those
-rows back into sites is the next stage's entire job.</p>
+strip is therefore a count of detections, and it inflates fast: the
+worked example's 98 conformations return about eight hits apiece, which
+is the 778 in the screenshot below and nothing like 778 pockets. Turning
+those rows back into sites is the next stage's entire job.</p>
 <p>Take the <code>Frame</code> number for what it is, because <strong>it is not an index into
 your trajectory.</strong> The label is the stride times the structure's 1-based
 position among the extracted structures, so at stride 10 the structures
 come out labelled 10, 20, 30 — while the conformations inside them are
 your trajectory's frames 0, 10, 20. Every label sits one full stride
-ahead of the frame it was cut from. The labels agree with each other, so
+ahead of the frame it was cut from. The worked example runs at stride 1,
+where the shift is exactly one: the <code>Frame 42</code> at the top of the
+screenshot below is the ensemble's 42nd member, which is member 41 if you
+count from zero as the file does. The labels agree with each other, so
 comparing pockets between frames inside the app is unaffected; it is the
 trip back to your own XTC that needs the correction. Subtract one stride
 before you go looking at a conformation.</p>
@@ -325,7 +356,7 @@ in steps of 0.05 and starting at 0.0, and a <strong>Confidence</strong> multisel
 that starts with all three badges ticked. Both filter the table and
 nothing else. No job re-runs, no row is deleted, and the caption
 underneath keeps reporting how many of the total are on screen.</p>
-<p><img alt="The Find Pockets results panel: 79 pockets, avg p=0.27, 8 high-confidence, best p=0.91, above the ranked pocket table" src="img/02-find-pockets.png" /></p>
+<p><img alt="The Find Pockets results panel: 778 pockets, avg p=0.26, 70 high-confidence, best p=0.91, above the ranked pocket table" src="img/02-find-pockets.png" /></p>
 <p>Click a row and the Mol* viewer paints that pocket's residues and jumps
 to the frame it was found in. That viewer is the 3D panel down the
 left-hand column, and Reading the results covers it properly. A pocket
@@ -400,7 +431,12 @@ smaller. <strong>Downloads</strong> holds the CSVs.</p>
 table, is the normal handoff to the next stage — one receptor per
 displayed row, sub-cluster representatives grouped under their DBSCAN
 parent.</p>
-<p><img alt="The Add all 12 cluster representatives → docking button above a table of the first nine of twelve clusters; the panel's own width shows only Cluster, Frame, Location and probability — num_residues and Quality run off the right edge" src="img/03-cluster.png" /></p>
+<p>The reduction is usually severe, and it is meant to be. Left at its
+defaults the worked example takes the 778 detections of the previous
+stage down to three clusters, drawn from frames 69, 2 and 58, averaging
+31 lining residues and <code>probability</code> 0.68. Three receptors is a
+comfortable docking run; 778 would not have been one.</p>
+<p><img alt="The Add all 3 cluster representatives → docking button above a table of all three clusters, with representatives from frames 69, 2 and 58; the panel's own width truncates the Location column and cuts probability off at the right edge" src="img/03-cluster.png" /></p>
 <p>When DBSCAN finds nothing the panel says so and names the two usual
 causes: <code>min_prob</code> filtered out too much, or too few pockets survived to
 form a dense group. Lowering the threshold and re-running Find pockets at
@@ -439,32 +475,44 @@ affinity among them. Rows are ligands, columns are the receptor
 conformations you selected. That shape is the payoff for having run a
 trajectory at all — one ligand scored against an ensemble of
 conformations rather than against a single crystal structure.</p>
-<p>One caveat about the numbers below: the bundled trypsin topology carries
-backbone atoms plus CB only, not full side chains. Expect affinities a
-little weaker, and pairs a little more likely to fail outright, than the
-same ligand would see against an all-atom structure of the same protein.</p>
+<p>Column headers read <code>C&lt;cluster&gt;_F&lt;frame&gt;</code>, so <code>C0_F69</code> is the
+representative of cluster 0, taken from the structure labelled frame 69.
+That is the same <code>Frame</code> label the pocket table used, one stride ahead of
+your own numbering.</p>
 <figure>
-<p><img alt="One ligand scored against nine of twelve receptor columns: five real affinities near −4.5 kcal/mol, four cells reading None for pockets that share a source frame with another selected pocket" src="img/04-dock.png" /></p>
-<figcaption>Benzamidine — trypsin's classic small-molecule inhibitor —
-uploaded separately for this capture; it is not part of the bundled
-trypsin dataset. The run reports "Docking complete — 12/12 pairs · 8/12
-ligand-receptor pairs scored," and the four cells with no number in them
-are the duplicate-frame case described in the next paragraph, not the
-partial failure covered in Troubleshooting.</figcaption>
+<p><img alt="The docking score grid: two ligand rows, CBT and sulbactam, against three receptor columns C0_F69, C1_F2 and C2_F58, with Mean, Median, Best and ECR columns on the right and every one of the six cells filled" src="img/04-dock.png" /></p>
+<figcaption>Both ligands were uploaded for this capture; neither ships
+with the example. CBT is the compound Horn and Shoichet found bound to
+TEM-1's cryptic pocket in PDB 1PZO, roughly 16 Å away from the active
+site. Sulbactam is the orthosteric control — a clinical inhibitor of that
+active site itself. The run reports "Docking complete — 6/6 pairs · 6/6
+ligand-receptor pairs scored".</figcaption>
 </figure>
-<p>Those two counters count different things. <code>12/12 pairs</code> is how many
-ligand-receptor jobs smina ran. <code>8/12 scored</code> is how many grid cells
-came back with a number in them. They part company when two of the
-pockets you picked were found in the same frame: one frame is one PDB
-file, and the grid keys its columns on the receptor file, not on the
-pocket. Both pockets get docked, each in its own box. Only one of the
-two columns picks the result up; its twin sits empty. Nothing failed
-here, so no warning appears above the grid and there is no failure log
-to download. When a column comes up empty on a run that reported no
-failures, look at the <code>Frame</code> labels of the pockets you selected. The
-poses are all still in the full results CSV, filed under the shared
-receptor filename — but nothing in there tells you which of the two
-pockets any one of them came from.</p>
+<p><strong>These particular numbers are a demonstration, not a result.</strong> Their
+receptors come from an ensemble with no side chains past CB, as the
+example's own description warned, so every affinity here is computed
+against less protein than really exists. CBT beating sulbactam on all
+three receptors is a pleasing outcome and not evidence of anything; run
+the same pair against all-atom conformations before drawing a conclusion.
+What the figure is good for is the shape of the thing: two ligands, three
+conformations, six numbers, four ways of collapsing a row.</p>
+<p>That completion message carries two counters, and they count different
+things. <code>6/6 pairs</code> is how many ligand-receptor jobs smina ran. <code>6/6
+scored</code> is how many grid cells came back with a number in them. They part
+company in two situations, and only one of the two is a failure. The
+first is the ordinary one covered in Troubleshooting: a pair that ran and
+produced no usable pose, which raises a warning above the grid and an
+expander naming the pair. The second is quieter. If two of the pockets you picked were
+found in the same frame, one frame is one PDB file, and the grid keys its
+columns on the receptor file rather than on the pocket. Both pockets get
+docked, each in its own box, but only one of the two columns picks its
+result up; its twin sits empty with no warning and no failure log,
+because as far as the run is concerned nothing failed. When a column
+comes up empty on a run that reported no failures at all, that is the
+case you are looking at — check the <code>Frame</code> labels of the pockets you
+selected. The poses are all still in the full results CSV, filed under
+the shared receptor filename, but nothing in there records which of the
+two pockets any one of them came from.</p>
 <p>Four columns on the right collapse each row to one number, and <strong>Rank
 ligands by</strong> decides which of them sorts the grid. <strong>Mean</strong> and
 <strong>Median</strong> each reduce that ligand's per-receptor affinities in kcal/mol
@@ -490,18 +538,15 @@ panel refuses the submission up front and tells you how many molecules
 would fit — and a bucket holding more than 20 pockets (<code>MAX_DOCKING_PDBS</code>)
 is trimmed to the 20 with the highest probability, with a warning shown
 while you are still choosing.</p>
-<p>One failure is worth naming here because its card misreads. If <strong>every</strong>
-receptor-ligand pair fails, the task has nothing to write and stops with
-a <code>ValueError</code>, which the error classifier files under validation — so
-the red headline says <em>Input validation failed</em> and the advice under it
-claims the task rejected your inputs before doing any work. It did no
-such thing. smina ran every pair and every one came back empty. Open
-<strong>Show full error details</strong> and the real message is there:
-<code>No docking results generated</code>. Read it as a docking failure and check
-the two things that cause it — ligands that did not convert cleanly, and
-pockets too small for smina to place anything inside. When only some
-pairs fail you get a partial-results warning instead, and the results
-you did get; that case is under Troubleshooting.</p>
+<p>One failure is worth naming here. If <strong>every</strong> receptor-ligand pair
+fails, the task has nothing to write and stops with
+<code>DockingProducedNoResults</code>, whose card is headed <em>Docking produced no
+poses</em>. That is a docking failure and not an input rejection: smina ran
+every pair and every one came back empty. The advice on the card names
+the two usual causes, the ligand files and the box size, and a box too
+small for smina to place anything inside is the more common of them.
+When only some pairs fail you get a partial-results warning instead, and
+the results you did get; that case is under Troubleshooting.</p>
 <h2 id="reading-the-results">Reading the results</h2>
 <p>The left-hand column holds one Mol* viewer for the whole session, and
 it does not reset when you switch stages. Whatever you clicked last
@@ -892,8 +937,18 @@ with in their own sections above, where the advice can be specific.</p>
 <tbody>
 <tr>
 <td>Input validation failed</td>
-<td>Usually what it says. On a docking job it can also mean every pair failed — see the Dock section</td>
-<td>Re-check the files and parameters, and read the full error text before trusting the headline</td>
+<td>What it says: the task rejected an input before doing any work</td>
+<td>Re-check the files and the parameters</td>
+</tr>
+<tr>
+<td>Docking produced no poses</td>
+<td>Every receptor-ligand pair ran and none yielded a scoreable pose</td>
+<td>The ligand files, and the box size — a box too small to place anything in is the usual cause</td>
+</tr>
+<tr>
+<td>Job abandoned by a dead worker</td>
+<td>The worker died mid-job without recording an outcome, and an hourly sweep closed the row</td>
+<td>Nothing on your side. Resubmit</td>
 </tr>
 <tr>
 <td>Task timed out</td>
@@ -1007,6 +1062,6 @@ run your own instance or build on the code, ask the authors first —
 p2rank ships MIT and SMINA has its own terms, but the PocketHunter
 repositories currently say nothing at all.</p></main>
 </div>
-<footer>Built 2026-08-05 · <a href="/">Back to the app</a></footer>
+<footer>Built 2026-08-16 · <a href="/">Back to the app</a></footer>
 </body>
 </html>

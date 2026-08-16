@@ -73,11 +73,26 @@ in the same direction.
 ## Screenshots
 
 `capture_screenshots.py` drives the **live** service and creates a real session and
-real worker jobs on a shared, quota-limited box. Use the bundled `examples/trypsin`
-dataset. Streamlit replaces DOM nodes on every rerun, so selectors go stale
-mid-interaction; wait on content appearing (or a loading placeholder disappearing)
-rather than on a fixed sleep or on `networkidle`, which never fires because
-Streamlit holds a WebSocket open.
+real worker jobs on a shared, quota-limited box. Use the bundled `examples/tem1`
+dataset and nothing bigger. Streamlit replaces DOM nodes on every rerun, so
+selectors go stale mid-interaction; wait on content appearing (or a loading
+placeholder disappearing) rather than on a fixed sleep or on `networkidle`, which
+never fires because Streamlit holds a WebSocket open.
+
+Two selector traps, both of which have already broken a capture. Every results
+panel renders a `Next: <stage> →` primary button alongside the stage's own submit
+button, so filtering primary buttons by stage name matches two elements and
+Playwright refuses the click — `stage_submit_button()` excludes the wizard button
+for you. And anchoring a crop on a node matched by exact `textContent` is fragile,
+because Streamlit's re-nesting can leave you holding a bare heading whose box stops
+above the content you meant to show; prefer a structural anchor such as
+`[data-testid="stColumn"]`.
+
+`resume <session-url>` redoes Cluster and Dock against a session that already has a
+Find Pockets run, which is the polite way to recapture the later stages. Those two
+stages must stay in one browser connection: the staged-pocket bucket and the
+ligand uploader live in per-connection Streamlit session state, not in the
+database.
 
 The Mol\* viewer does not mount in headless Chromium even with WebGL available, so
 the results-viewer panel has no screenshot. Capture that one by hand if it is
