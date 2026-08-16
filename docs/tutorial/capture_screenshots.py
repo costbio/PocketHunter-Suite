@@ -325,8 +325,20 @@ def run_find_pockets(page: Page) -> str:
     # --- Start a session from the bundled TEM-1 example. This queues
     # the find-pockets job immediately, at stride 1. ---
     page.get_by_role("button", name="Try with example trajectory").click()
-    page.wait_for_url(lambda u: "edit=" in u, timeout=NAV_TIMEOUT_MS)
-    session_url = page.url
+    # Poll page.url rather than page.wait_for_url(). Streamlit swaps the
+    # session into the query string through the History API, so whether a
+    # navigation event fires at all is a race — this exact call has both
+    # succeeded and timed out against an unchanged build. Polling the URL
+    # observes the state instead of an event, so it cannot lose that race.
+    session_url = ""
+    t0 = time.time()
+    while time.time() - t0 < NAV_TIMEOUT_MS / 1000:
+        if "edit=" in page.url:
+            session_url = page.url
+            break
+        time.sleep(1)
+    if not session_url:
+        raise RuntimeError("session never appeared in the URL after clicking the example button")
     print("session started:", session_url)
 
     # --- Find Pockets: poll until the job's own status settles, then

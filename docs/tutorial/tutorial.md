@@ -66,10 +66,10 @@ Each stage above links to its section.
   single 263-residue chain, all 98 searched, because the example button
   runs at stride 1 rather than the panel's default of 10</dd>
   <dt>Time to first pockets</dt>
-  <dd>20 seconds, end to end, on an otherwise-idle fast pool — measured
+  <dd>22 seconds, end to end, on an otherwise-idle fast pool — measured
   2026-08-16 from job
-  <code>find_pockets_20260816_105047_44674a0b</code>'s own submission
-  timestamp to its completion update, 10:50:47.7 to 10:51:08.0. A
+  <code>find_pockets_20260816_111634_6e904395</code>'s own submission
+  timestamp to its completion update, 11:16:34.7 to 11:16:57.2. A
   busier pool will be slower; the
   "~1 min" the landing page quotes in the italic line between its two
   buttons (screenshot below) is a conservative headline figure for that
@@ -203,18 +203,23 @@ worked example's 98 conformations return about eight hits apiece, which
 is the 778 in the screenshot below and nothing like 778 pockets. Turning
 those rows back into sites is the next stage's entire job.
 
-Take the `Frame` number for what it is, because **it is not an index into
-your trajectory.** The label is the stride times the structure's 1-based
-position among the extracted structures, so at stride 10 the structures
-come out labelled 10, 20, 30 — while the conformations inside them are
-your trajectory's frames 0, 10, 20. Every label sits one full stride
-ahead of the frame it was cut from. The worked example runs at stride 1,
-where the shift is exactly one: the `Frame 42` at the top of the
-screenshot below is the ensemble's 42nd member, which is member 41 if you
-count from zero as the file does. The labels agree with each other, so
-comparing pockets between frames inside the app is unaffected; it is the
-trip back to your own XTC that needs the correction. Subtract one stride
-before you go looking at a conformation.
+**The `Frame` number is a 0-based index into the trajectory you
+uploaded**, so nothing needs correcting on the way back out. At stride 10
+the structures come out labelled 0, 10, 20, and those are the frames they
+were cut from; `traj[40]` in mdtraj or MDAnalysis is the conformation
+behind `Frame 40`. The worked example runs at stride 1 and labels its 98
+members 0 through 97. What the number is *not* is the reading on the
+viewer's frame slider, which counts baked models from 1 — Reading the
+results takes that one apart.
+
+One caveat for older sessions, since sessions outlive the fix. Until
+2026-08-16 every label sat one full stride ahead of the frame it was cut
+from, so a run you started before that and reopen now still carries the
+old numbering, and you do need to subtract a stride from it. The tell is
+the largest label in the run: the old scheme always overshot the end of
+the trajectory, so 98 frames at stride 10 finished at `Frame 100` — a
+frame that does not exist. If the largest label is smaller than the
+number of frames you uploaded, you are reading the corrected numbering.
 
 `probability` is p2rank's ligand-binding score for that pocket, and the
 panel bins it into three badges — High from 0.7 up, Medium from 0.4, Low
@@ -314,11 +319,17 @@ parent.
 
 The reduction is usually severe, and it is meant to be. Left at its
 defaults the worked example takes the 778 detections of the previous
-stage down to three clusters, drawn from frames 69, 2 and 58, averaging
+stage down to three clusters, drawn from frames 57, 1 and 68, averaging
 31 lining residues and `probability` 0.68. Three receptors is a
 comfortable docking run; 778 would not have been one.
 
-![The Add all 3 cluster representatives → docking button above a table of all three clusters, with representatives from frames 69, 2 and 58; the panel's own width truncates the Location column and cuts probability off at the right edge](img/03-cluster.png)
+Cluster numbers are not stable across runs, incidentally. Re-cluster the
+same pockets and the same three groups can come back as 0, 1, 2 in a
+different order — DBSCAN numbers its labels in the order it encounters
+them, and nothing pins that. Identify a cluster by its residue signature
+or its representative's frame, never by its number.
+
+![The Add all 3 cluster representatives → docking button above a table of all three clusters, with representatives from frames 57, 1 and 68; the panel's own width truncates the Location column and cuts probability off at the right edge](img/03-cluster.png)
 
 When DBSCAN finds nothing the panel says so and names the two usual
 causes: `min_prob` filtered out too much, or too few pockets survived to
@@ -364,14 +375,16 @@ conformations you selected. That shape is the payoff for having run a
 trajectory at all — one ligand scored against an ensemble of
 conformations rather than against a single crystal structure.
 
-Column headers read `C<cluster>_F<frame>`, so `C0_F69` is the
-representative of cluster 0, taken from the structure labelled frame 69.
-That is the same `Frame` label the pocket table used, one stride ahead of
-your own numbering.
+Column headers read `C<cluster>_F<frame>`, so `C2_F68` is the
+representative of cluster 2, taken from the structure at frame 68. That
+is the same `Frame` label the pocket table used, which means it is also a
+0-based index into your own trajectory — the column header alone tells
+you which conformation you are looking at. The columns are not
+necessarily in cluster order.
 
 <figure markdown="1">
 
-![The docking score grid: two ligand rows, CBT and sulbactam, against three receptor columns C0_F69, C1_F2 and C2_F58, with Mean, Median, Best and ECR columns on the right and every one of the six cells filled](img/04-dock.png)
+![The docking score grid: two ligand rows, CBT and sulbactam, against three receptor columns C2_F68, C1_F1 and C0_F57, with Mean, Median, Best and ECR columns on the right and every one of the six cells filled](img/04-dock.png)
 
 <figcaption>Both ligands were uploaded for this capture; neither ships
 with the example. CBT is the compound Horn and Shoichet found bound to
@@ -458,18 +471,19 @@ slider, when you click a row, or when a running job pushes a page
 refresh. An idle tab left open overnight shows you exactly what it
 showed at midnight.
 
-**The number on the frame slider is a third numbering, and it agrees
-with neither of the other two.** The label reads `Frame n / N`, where
-`N` counts the models baked into the viewer file and `n` is your
-position among them. Baking caps out at 200 models
-(`MAX_VIEWER_LOADED_FRAMES=200`): extract 200 structures or fewer and
-every one of them is in there, so slider position `n` is the `n`-th
-extracted structure. Extract more and the viewer takes a second stride
-of its own — `ceil(N_extracted / 200)`, so 2 for 400 structures, 5 for
-the 1,000-structure ceiling — and the slider then steps over that
-thinned set. Neither reading is the `Frame` column of `pockets.csv`,
-and neither is a frame index in your XTC. Scrub to look around; click a
-row when you need a specific pocket.
+**The number on the frame slider is its own numbering, and it is not the
+`Frame` column.** The label reads `Frame n / N`, where `N` counts the
+models baked into the viewer file and `n` is your 1-based position among
+them. Baking caps out at 200 models (`MAX_VIEWER_LOADED_FRAMES=200`):
+extract 200 structures or fewer and every one of them is in there, so
+slider position `n` is the `n`-th extracted structure — which, since the
+`Frame` column counts from zero in units of your stride, is the row
+labelled `(n − 1) × stride`. Extract more
+and the viewer takes a second stride of its own —
+`ceil(N_extracted / 200)`, so 2 for 400 structures, 5 for the
+1,000-structure ceiling — and the slider then steps over that thinned
+set, at which point no simple arithmetic relates the two at all. Scrub to
+look around; click a row when you need a specific pocket.
 
 Clicking always wins over scrubbing, which is the point. A pocket row,
 a cluster representative or a docking receptor carries the filename of
@@ -522,7 +536,7 @@ for the rest of the browser session.
 | Parameter | Where | Range | Default | Effect |
 | --- | --- | --- | --- | --- |
 | Input source | Find pockets, settings | From trajectory (XTC + topology) · From PDB ZIP archive | From trajectory | Trajectory mode extracts frames first; ZIP mode skips straight to p2rank |
-| Frame stride | Find pockets, settings | Integer, 1 and up, no ceiling on the widget | 10 | Every n-th frame is extracted. Also sets the `Frame` labels, which come out at stride × extraction position |
+| Frame stride | Find pockets, settings | Integer, 1 and up, no ceiling on the widget | 10 | Every n-th frame is extracted. Also sets the `Frame` labels, which are the original 0-based frame indices: stride × extraction position, counting from zero |
 | Min probability | Find pockets, results | 0.00 to 1.00, step 0.05 | 0.00 | View only — hides rows below the threshold |
 | Confidence | Find pockets, results | High · Medium · Low, any combination | All three ticked | View only — hides badge classes |
 | Source pockets | Cluster, settings | Completed pocket runs in this session, newest first | The newest one | Which `pockets.csv` gets clustered |
