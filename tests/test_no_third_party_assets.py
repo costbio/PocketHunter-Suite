@@ -59,6 +59,43 @@ class TestStreamlitTheme:
                     f"theme font points at a remote host: {stripped}"
                 )
 
+    def test_usage_telemetry_is_off(self):
+        """Streamlit posts to webhooks.fivetran.com unless told not to.
+
+        Default is on, so its absence from config.toml is not neutral — it
+        is a third-party request from every visitor's browser. Static
+        scanning cannot catch this one (Streamlit's own bundle issues it),
+        which is why it is asserted here against the config instead.
+        """
+        cfg = (REPO / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+        assert re.search(r"^\s*gatherUsageStats\s*=\s*false\s*$", cfg, re.MULTILINE), (
+            "gatherUsageStats is not explicitly false"
+        )
+
+
+class TestInlineFontFaces:
+    """The app's faces are declared in main.py, not linked from config.toml.
+
+    Streamlit silently ignored a root-relative stylesheet URL in the
+    theme's `font = "Family:url"` form: nothing fetched, no face
+    registered, and a fallback to Source Sans that still looked correct on
+    any machine with JetBrains Mono installed locally.
+    """
+
+    def test_main_declares_every_weight_the_css_does(self):
+        main = (REPO / "main.py").read_text(encoding="utf-8")
+        declared = set(re.findall(r"font-weight:\s*(\d+);\s*\n?\s*font-display", main))
+        assert {"400", "500", "600", "700", "800"} <= declared, (
+            f"main.py declares only {sorted(declared)}"
+        )
+
+    def test_every_inline_src_resolves_to_a_shipped_file(self):
+        main = (REPO / "main.py").read_text(encoding="utf-8")
+        srcs = re.findall(r"url\('/app/static/fonts/([^']+)'\)", main)
+        assert srcs, "no inline @font-face src found in main.py"
+        for name in srcs:
+            assert (REPO / "static" / "fonts" / name).exists(), f"missing: {name}"
+
 
 class TestVendoredFont:
     def test_every_declared_face_file_exists(self):

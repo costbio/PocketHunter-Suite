@@ -52,6 +52,17 @@ from session_routes import resolve_session_from_query, set_session_in_state
 import recent_sessions
 
 
+# Public origin for the menu links below. Falls back to the production
+# host so a missing BASE_URL degrades to a slightly wrong link rather
+# than to an unstartable app.
+def _menu_base() -> str:
+    import os
+
+    return (os.environ.get("BASE_URL") or "https://pockethunter.bio-cloud.site").rstrip("/")
+
+
+_MENU_BASE = _menu_base()
+
 st.set_page_config(
     page_title="PocketHunter Suite",
         layout="wide",
@@ -60,8 +71,13 @@ st.set_page_config(
     # clicked them. Get Help points at the help page rather than the
     # repository — someone reaching for help wants to read how to use the
     # thing, not browse source.
+    #
+    # Absolute, and built from BASE_URL rather than hardcoded: Streamlit's
+    # validate_menu_items rejects a relative path outright and raises on
+    # every script run, which takes the whole app down rather than just
+    # breaking the menu entry.
     menu_items={
-        'Get Help': '/app/static/help/index.html',
+        'Get Help': f"{_MENU_BASE}/app/static/help/index.html",
         'Report a bug': "https://github.com/costbio/PocketHunter-Suite/issues",
         'About': (
             "# PocketHunter Suite\n\n"
@@ -77,6 +93,44 @@ st.set_page_config(
 # Global theming (fonts, colors, borders, radii) lives in .streamlit/config.toml.
 st.markdown("""
 <style>
+    /* Self-hosted JetBrains Mono. Declared inline rather than linked,
+       because .streamlit/config.toml's `font = "Family:url"` form
+       silently ignored a root-relative stylesheet — no fetch, no face,
+       and a fallback to Source Sans that looked correct on any machine
+       with the font installed locally. Inline @font-face has no URL
+       resolution to get wrong; the src paths below are absolute against
+       the static route. See static/fonts/OFL.txt for the licence. */
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: italic; font-weight: 400;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Italic.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 600;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 800;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-ExtraBold.woff2') format('woff2');
+    }
+
     /* Reclaim vertical space: hide Streamlit's top toolbar + tighten
        the main block's top padding. This frees roughly 80–110px of
        viewport height so the viewer + slider + panel fit without

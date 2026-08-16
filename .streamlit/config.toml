@@ -6,6 +6,16 @@
 # so the Mol* component can fetch per-session viewer.cif by URL.
 enableStaticServing = true
 
+[browser]
+# Streamlit posts anonymous usage telemetry to webhooks.fivetran.com by
+# default. That is a third-party request made from every visitor's
+# browser, which the NAR Web Server Issue rules out and which contradicts
+# this service's own privacy statement — the help page tells readers that
+# no page here contacts a third party. Caught by a runtime request trace
+# after deploy; static HTML scanning cannot see it, because Streamlit's
+# own bundle issues it.
+gatherUsageStats = false
+
 [theme]
 base = "light"
 
@@ -21,14 +31,19 @@ baseRadius = "none"
 buttonRadius = "none"
 linkUnderline = true
 
-# Self-hosted webfont — see static/fonts/jetbrains-mono.css. Pointing
-# these at fonts.googleapis.com sent every visitor's IP to a third party
-# before any of our own content rendered, which the NAR Web Server Issue
-# rules out and which sits badly beside this service's privacy claim.
-# One stylesheet declares all five weights, so all three knobs share it.
-font = "'JetBrains Mono':/app/static/fonts/jetbrains-mono.css"
-headingFont = "'JetBrains Mono':/app/static/fonts/jetbrains-mono.css"
-codeFont = "'JetBrains Mono':/app/static/fonts/jetbrains-mono.css"
+# Family name only — no URL. The @font-face rules are injected inline by
+# main.py instead, because Streamlit silently ignored a root-relative
+# stylesheet URL here: it fetched nothing, registered no face, and fell
+# back to Source Sans. Silently, which is the dangerous part — the app
+# still looked right on any machine with JetBrains Mono installed
+# locally, and wrong for everyone else.
+#
+# (These pointed at fonts.googleapis.com until 2026-08-16. That sent
+# every visitor's IP to a third party before our own content rendered,
+# which the NAR Web Server Issue rules out.)
+font = "JetBrains Mono"
+headingFont = "JetBrains Mono"
+codeFont = "JetBrains Mono"
 codeFontSize = "13px"
 baseFontSize = 14
 baseFontWeight = 400
