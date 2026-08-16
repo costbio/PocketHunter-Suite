@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Help — PocketHunter Suite</title>
+<link rel="icon" href="/app/static/favicon.svg">
+<!-- Self-hosted; see static/fonts/jetbrains-mono.css for why. The path is
+     relative so the built page renders identically whether it is served
+     from /app/static/tutorial/ or opened as a local file during review. -->
+<link rel="stylesheet" href="../fonts/jetbrains-mono.css">
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #000000;
+  --bg2: #f4f4f4;
+  --accent: #d4ff00;
+  --muted: #666666;
+  --border: 2px solid #000000;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --masthead-h: 56px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--mono); font-size: 14px; line-height: 1.65;
+}
+a { color: var(--fg); text-decoration: underline; }
+a:hover { background: var(--accent); }
+
+.masthead {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; height: var(--masthead-h); padding: 0 18px;
+  background: var(--bg); border-bottom: var(--border);
+}
+.masthead .brand { font-weight: 800; letter-spacing: 1px; text-decoration: none; }
+.masthead .version { color: var(--muted); font-size: 0.85rem; }
+
+.layout {
+  display: grid; grid-template-columns: 260px minmax(0, 1fr);
+  gap: 32px; max-width: 1200px; margin: 0 auto; padding: 24px 18px 80px;
+}
+/* Scope the box to the outer <nav>: python-markdown's `toc` extension
+   emits its own <div class="toc"> into <div class="toc">
+<ul>
+<li><a href="#what-this-page-is">What this page is</a></li>
+<li><a href="#sample">Try it before you upload anything</a></li>
+<li><a href="#pockets">Reading the pocket table</a></li>
+<li><a href="#clusters">Reading the clusters</a></li>
+<li><a href="#docking">Reading the docking scores</a><ul>
+<li><a href="#what-these-numbers-will-not-support">What these numbers will not support</a></li>
+<li><a href="#the-counters-under-the-grid">The counters under the grid</a></li>
+</ul>
+</li>
+<li><a href="#viewer">Reading the viewer</a></li>
+<li><a href="#downloads">Getting your results out</a></li>
+<li><a href="#sessions">Your session, and how long it lasts</a></li>
+<li><a href="#privacy">Privacy and cookies</a></li>
+<li><a href="#licence">Licence and citing</a></li>
+<li><a href="#problems">When something goes wrong</a></li>
+<li><a href="#contact">Contact</a></li>
+</ul>
+</div>
+, so an unqualified
+   `.toc` rule would draw the border, background and scroll region twice,
+   one nested inside the other. `.toc ul` / `.toc a` below stay
+   unqualified on purpose — they should match either way. */
+nav.toc {
+  position: sticky; align-self: start;
+  top: calc(var(--masthead-h) + 24px);
+  max-height: calc(100vh - var(--masthead-h) - 48px); overflow-y: auto;
+  border: var(--border); background: var(--bg2); padding: 12px 14px;
+}
+.toc ul { list-style: none; margin: 0; padding-left: 12px; }
+.toc > ul { padding-left: 0; }
+.toc a { text-decoration: none; display: block; padding: 3px 0; }
+.toc a:hover { background: var(--accent); }
+
+.content { min-width: 0; }
+.content h1 { font-size: 28px; font-weight: 800; }
+.content h2 {
+  font-size: 22px; font-weight: 700;
+  margin-top: 48px; padding-top: 10px; border-top: var(--border);
+}
+.content h3 { font-size: 18px; font-weight: 700; margin-top: 32px; }
+.content h1, .content h2, .content h3 {
+  scroll-margin-top: calc(var(--masthead-h) + 16px);
+}
+.content img { max-width: 100%; border: var(--border); display: block; }
+.content table { border-collapse: collapse; width: 100%; display: block; overflow-x: auto; }
+.content th, .content td { border: 1px solid var(--fg); padding: 6px 10px; text-align: left; }
+.content th { background: var(--bg2); font-weight: 700; }
+.content pre {
+  background: var(--bg2); border: var(--border);
+  padding: 12px; overflow-x: auto; font-size: 13px;
+}
+.content code { background: var(--bg2); padding: 1px 4px; }
+.content pre code { background: none; padding: 0; }
+.content blockquote {
+  margin: 20px 0; padding: 12px 16px;
+  border: var(--border); border-left-width: 8px; background: var(--bg2);
+}
+
+.schematic { width: 100%; height: auto; margin: 24px 0; border: var(--border); background: var(--bg2); }
+/* The global `a { text-decoration: underline }` reaches SVG <a> too, and
+   each stage box wraps its title *and* its sub-labels in one link — so
+   without this every line in the diagram renders underlined. */
+.schematic a { text-decoration: none; }
+.schematic .stage rect { fill: var(--bg); stroke: var(--fg); stroke-width: 2; }
+.schematic .stage:hover rect { fill: var(--accent); }
+.schematic text { font-family: var(--mono); font-size: 11px; fill: var(--fg); }
+.schematic .stage-title { font-weight: 700; font-size: 12px; }
+.schematic .arrow { stroke: var(--fg); stroke-width: 2; fill: none; }
+
+.scope { border: var(--border); margin: 24px 0; }
+.scope .scope-label {
+  margin: 0; padding: 8px 14px; font-size: 13px; font-weight: 700; letter-spacing: 1px;
+  background: var(--fg); color: var(--bg);
+}
+.scope .scope-label.negative { background: var(--bg2); color: var(--fg); border-top: var(--border); }
+.scope ul { margin: 0; padding: 12px 14px 14px 32px; }
+.scope li { margin: 4px 0; }
+.facts { border: var(--border); background: var(--bg2); padding: 12px 14px; margin: 24px 0; }
+.facts dt { font-weight: 700; }
+.facts dd { margin: 0 0 8px 0; }
+
+footer {
+  border-top: var(--border); padding: 16px 18px;
+  color: var(--muted); font-size: 0.85rem; text-align: center;
+}
+
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  nav.toc { position: static; max-height: none; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="/">POCKETHUNTER/SUITE — HELP</a>
+  <span class="version">[v.2.0]</span>
+</header>
+<div class="layout">
+  <nav class="toc" aria-label="Table of contents"><div class="toc">
+<ul>
+<li><a href="#what-this-page-is">What this page is</a></li>
+<li><a href="#sample">Try it before you upload anything</a></li>
+<li><a href="#pockets">Reading the pocket table</a></li>
+<li><a href="#clusters">Reading the clusters</a></li>
+<li><a href="#docking">Reading the docking scores</a><ul>
+<li><a href="#what-these-numbers-will-not-support">What these numbers will not support</a></li>
+<li><a href="#the-counters-under-the-grid">The counters under the grid</a></li>
+</ul>
+</li>
+<li><a href="#viewer">Reading the viewer</a></li>
+<li><a href="#downloads">Getting your results out</a></li>
+<li><a href="#sessions">Your session, and how long it lasts</a></li>
+<li><a href="#privacy">Privacy and cookies</a></li>
+<li><a href="#licence">Licence and citing</a></li>
+<li><a href="#problems">When something goes wrong</a></li>
+<li><a href="#contact">Contact</a></li>
+</ul>
+</div>
+</nav>
+  <main class="content"><h1 id="pockethunter-suite-help">PocketHunter Suite help</h1>
+<h2 id="what-this-page-is">What this page is</h2>
+<p>This page explains how to read what the server hands back. It assumes
+you have a result on screen — or are looking at the worked example
+below — and want to know what a number means, how much weight it will
+carry, and where it stops being evidence.</p>
+<p>The <a href="/app/static/tutorial/index.html">tutorial</a> is the other half: it
+walks the pipeline stage by stage, from uploading a trajectory to
+downloading a pose, and documents every control. Start there if you have
+not run anything yet. Come back here when you have output in front of
+you.</p>
+<p>Everything below describes the service running at
+<code>pockethunter.bio-cloud.site</code>. No account, no registration, no email
+address — the service never asks for one.</p>
+<h2 id="sample">Try it before you upload anything</h2>
+<p>Two things are published so you can see the whole thing work without
+preparing a file of your own.</p>
+<p><strong>A finished analysis you can click through.</strong> This link opens a real
+session, in view-only mode, with all three stages already run:</p>
+<ul>
+<li><a href="https://pockethunter.bio-cloud.site/?s=t610wnb-_kc">Worked example — TEM-1 β-lactamase</a></li>
+</ul>
+<p>It is not a recording or a set of screenshots. It is the ordinary
+result page, driven by the ordinary code, on data the ordinary pipeline
+produced; the only difference from your own session is that you cannot
+launch new jobs inside it. Switch stages with the segmented control,
+click a row to paint that pocket in the viewer, drag the frame slider,
+open the Downloads expanders and take the files. What you see is what
+your own run will look like.</p>
+<p><strong>The input files.</strong> The same two files the example ran on:</p>
+<ul>
+<li><a href="/app/static/example/topology.pdb"><code>topology.pdb</code></a> — 104,845 bytes</li>
+<li><a href="/app/static/example/trajectory.xtc"><code>trajectory.xtc</code></a> — 500,352 bytes</li>
+</ul>
+<p>Download them to check what the uploaders expect before you prepare
+your own. The topology is a single 263-residue chain; the trajectory
+holds 98 conformations of it. If your own pair loads in <code>mdtraj</code> with
+<code>md.load_xtc(traj, top)</code> and returns the frame count you expect, it will
+load here.</p>
+<p>You can also start a fresh copy of this analysis yourself: the landing
+page's <strong>Try with example trajectory</strong> button creates a new session,
+copies those two files into it and queues the pocket search, with no
+input from you.</p>
+<div class="scope">
+<p class="scope-label">READ THIS PAGE IF</p>
+<ul>
+<li>A <code>probability</code> of 0.63 is on your screen and you want to know what it claims.</li>
+<li>You are about to put a docking score in a figure.</li>
+<li>You need the licence, the retention schedule, or the DOIs to cite.</li>
+</ul>
+<p class="scope-label negative">READ THE TUTORIAL INSTEAD IF</p>
+<ul>
+<li>You have not run anything yet and want the guided path.</li>
+<li>You are looking for a specific control and what it does.</li>
+<li>You hit an error message and want the fix.</li>
+</ul>
+</div>
+<h2 id="pockets">Reading the pocket table</h2>
+<p>The Find pockets stage returns one row per pocket per frame. The
+worked example produces 778 of them from 98 conformations — roughly
+eight detections in each.</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>What it is</th>
+<th>How to read it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Frame</code></td>
+<td>0-based index of the conformation this pocket was found in</td>
+<td>Use it directly against your own trajectory: <code>traj[57]</code> in mdtraj is the structure behind <code>Frame 57</code></td>
+</tr>
+<tr>
+<td><code>pocket_index</code></td>
+<td>p2rank's rank within that one frame</td>
+<td>1 is that frame's top-scoring pocket. Not comparable across frames</td>
+</tr>
+<tr>
+<td><code>probability</code></td>
+<td>p2rank's ligand-binding score, 0 to 1</td>
+<td>Higher means p2rank found the local geometry and chemistry more like a known ligand-binding site</td>
+</tr>
+<tr>
+<td><code>num_residues</code></td>
+<td>How many residues line the pocket</td>
+<td>Very small pockets are usually noise; under three residues the viewer cannot even draw a surface</td>
+</tr>
+<tr>
+<td><code>Confidence</code></td>
+<td>A badge binned from <code>probability</code></td>
+<td>High from 0.70, Medium from 0.40, Low below</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The single most common misreading is treating the row count as a
+pocket count.</strong> It is a detection count. A groove that stays open across
+forty frames produces forty rows, and nothing at this stage knows they
+describe one place. The example's 778 rows correspond to a handful of
+actual sites, which is what the next stage exists to work out.</p>
+<p><strong><code>probability</code> is a similarity score, not a probability of anything
+happening.</strong> p2rank was trained to recognise surfaces resembling known
+binding sites, so 0.9 means "this looks a great deal like sites that
+bind ligands", not "a ligand binds here 90% of the time". Read it as a
+ranking device: the top of the list is where to look first, and the
+absolute value is not a quantity to quote.</p>
+<p>Useful signal, on the other hand, is <strong>how often a site appears</strong>. A
+pocket that scores 0.65 in eighty of your frames is a more interesting
+prospect than one that scores 0.95 in a single frame, because the first
+is a feature of the protein's accessible conformations and the second
+may be one distorted structure. The pocket table cannot show you that;
+clustering can.</p>
+<h2 id="clusters">Reading the clusters</h2>
+<p>Clustering answers the question the pocket table cannot: which of those
+per-frame detections are the same site?</p>
+<p>Each surviving pocket becomes a binary vector over every pocket-lining
+residue seen anywhere in the run — 1 where that residue lines this
+pocket, 0 where it does not — and DBSCAN groups them with a Hamming
+metric.</p>
+<p><strong>A cluster is a recurring residue signature, not a region of space.</strong>
+The vectors hold no coordinates. Two pockets land together because the
+same residues line both, whatever the geometry did in between. This is
+usually what you want for a conformational ensemble, and it is worth
+knowing when a result surprises you.</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>How to read it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cluster</code></td>
+<td>An arbitrary label. <strong>Not stable across runs</strong> — re-cluster the same pockets and the same groups can come back numbered differently. Identify a cluster by its residues or its representative's frame</td>
+</tr>
+<tr>
+<td><code>Frame</code></td>
+<td>Which conformation the representative came from, in your trajectory's own numbering</td>
+</tr>
+<tr>
+<td><code>Location</code></td>
+<td>The residues lining the representative, as chain and residue numbers. This is the cluster's identity</td>
+</tr>
+<tr>
+<td><code>probability</code></td>
+<td>The representative's own p2rank score</td>
+</tr>
+<tr>
+<td><code>num_residues</code></td>
+<td>Size of the representative pocket</td>
+</tr>
+</tbody>
+</table>
+<p>The representative is the cluster's medoid — the member with the
+smallest summed Hamming distance to the rest — so it is the most typical
+member, not the best-scoring one. Pockets DBSCAN cannot place go to
+label <code>-1</code> and are dropped.</p>
+<p>In the worked example the 778 detections reduce to three clusters, with
+representatives from frames 57, 1 and 68, averaging 31 lining residues.
+Open the <strong>Heatmap</strong> tab in the demo session to see the structure
+directly: one strip per cluster, one row per pocket, one column per
+residue, a filled cell meaning that residue lines that pocket. Blocks
+that look alike are the thing to be sceptical about.</p>
+<p><strong>Treat the clustering as a proposal.</strong> The <code>eps</code> and <code>min_samples</code> are
+chosen by a sweep that scores candidates with <code>silhouette_score</code> under
+euclidean distance, while the grouping itself used Hamming — the winner
+is the best fit under a ruler that is not the one that did the cutting,
+and noise points are scored as though they were a cluster. So check the
+heatmap rather than trusting the numbers, and if two clusters look like
+one site split in half, re-run at a different minimum probability.</p>
+<h2 id="docking">Reading the docking scores</h2>
+<p>The Dock stage returns a grid: one row per ligand, one column per
+receptor conformation, and four ranking columns on the right.</p>
+<p><strong>Every cell is a predicted binding affinity in kcal/mol, and more
+negative is better.</strong> −9.2 beats −6.4. The cell holds the best pose of
+that one ligand against that one receptor — smina generates up to
+<strong>Number of poses</strong> modes and the grid keeps the lowest.</p>
+<p>Column headers read <code>C&lt;cluster&gt;_F&lt;frame&gt;</code>, so <code>C2_F68</code> is the
+representative of cluster 2, taken from frame 68 of your trajectory.</p>
+<p>The four right-hand columns collapse a row to one number, and they
+answer different questions:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>What it rewards</th>
+<th>Reach for it when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Mean</strong></td>
+<td>Consistent scoring across the whole ensemble</td>
+<td>You want a general-purpose ranking</td>
+</tr>
+<tr>
+<td><strong>Median</strong></td>
+<td>The same, but ignoring outliers</td>
+<td>One receptor scores oddly and you do not want it steering the result</td>
+</tr>
+<tr>
+<td><strong>Best</strong></td>
+<td>The single most-negative cell in the row</td>
+<td>You are hunting a ligand that fits one rare open conformation and nothing else — the point of docking an ensemble at all</td>
+</tr>
+<tr>
+<td><strong>ECR</strong></td>
+<td>Agreement across receptors, by rank rather than value</td>
+<td>Receptors disagree on absolute scale. Higher is better here, unlike the other three</td>
+</tr>
+</tbody>
+</table>
+<p>Mean, Median and Best stay in kcal/mol. ECR is unit-free: it ranks the
+ligands separately on each receptor, then sums <code>exp(−rank/σ)</code> across
+receptors, so a receptor whose scores are all shifted cannot drag the
+consensus with it.</p>
+<h3 id="what-these-numbers-will-not-support">What these numbers will not support</h3>
+<p>Docking scores are the most over-read output this service produces, so
+it is worth being blunt about the ceiling.</p>
+<p><strong>A score is not a binding affinity you can quote.</strong> Vinardo and Vina
+scoring functions correlate with measured affinity loosely at best;
+their reliable use is <em>ranking</em> candidates under identical conditions,
+not predicting a Kd. Two ligands scored against the same receptor set
+can be compared. A single number cannot be converted into anything
+experimental.</p>
+<p><strong>Compare within a run, not between runs.</strong> Change the scoring function,
+the box, the protonation pH or the receptor set and the numbers move.
+Rankings survive that better than values do.</p>
+<p><strong>A good score is not a pose you have checked.</strong> Click the row, load
+the pose in the viewer, and look at it. Scores are assigned to
+geometries that are sometimes physically silly — a ligand threaded
+through a gap, or floating in a box corner. The viewer is there for
+this.</p>
+<p><strong>Receptor quality bounds everything.</strong> If the conformations came from
+a backbone-only model, as the worked example's do, there are no side
+chains for a ligand to pack against and the scores are a demonstration
+that the pipeline runs rather than a statement about the molecules. The
+example's grid shows CBT scoring better than sulbactam on all three
+receptors; that is a pleasing outcome and not evidence of anything. Your
+own all-atom trajectories carry no such caveat.</p>
+<h3 id="the-counters-under-the-grid">The counters under the grid</h3>
+<p>The completion line reads like <code>6/6 pairs · 6/6 ligand-receptor pairs
+scored</code>. The two count different things: how many docking jobs ran, and
+how many cells came back with a number. They part company in two
+situations, and only one is a failure.</p>
+<ul>
+<li><strong>A pair failed.</strong> A warning appears above the grid, an expander names
+  each failed pair with its exception, and a log is downloadable. An
+  empty cell here means no usable pose, not a bad score.</li>
+<li><strong>Two of your pockets came from the same frame.</strong> One frame is one PDB
+  file and the grid keys its columns on the receptor file, so both get
+  docked but only one column collects a result. Its twin sits empty with
+  no warning and no log, because nothing failed. If a column is empty on
+  a run that reported no failures, check the <code>Frame</code> labels of the
+  pockets you selected.</li>
+</ul>
+<h2 id="viewer">Reading the viewer</h2>
+<p>The left-hand column holds one Mol* viewer for the whole session, and
+it does not reset when you switch stages — whatever you clicked last
+stays on screen.</p>
+<p>Clicking a row always beats dragging the slider. A pocket row, a cluster
+representative or a docking receptor carries the filename of the
+structure it came from, so selecting it loads that exact structure. The
+slider is for looking around.</p>
+<p><strong>The slider's number is not the <code>Frame</code> column.</strong> It reads <code>Frame n /
+N</code>, where <code>N</code> counts the models baked into the viewer file and <code>n</code> is
+your 1-based position among them. While every extracted structure is
+baked, slider <code>n</code> is the row labelled <code>(n − 1) × stride</code>. Above 200
+structures the viewer thins the set with a stride of its own and no
+simple arithmetic relates the two — click a row when you need a
+specific pocket.</p>
+<h2 id="downloads">Getting your results out</h2>
+<p>Everything on screen has a download behind it, built on demand from what
+the job wrote to disk. The full inventory is in the
+<a href="/app/static/tutorial/index.html#reading-the-results">tutorial's downloads table</a>;
+in short: <code>pockets.csv</code> for every detection,
+<code>cluster_representatives.csv</code> for one row per cluster, a full per-pose
+CSV and a best-pose-per-pair CSV for docking, plus ZIPs of the
+structures, the poses, and receptor-and-pose complexes.</p>
+<p>Archives are assembled against a 512 MB budget, smallest file first. One
+that hits the budget is still delivered, with a caption counting what
+was left out — download per cluster rather than in bulk when you see
+that.</p>
+<h2 id="sessions">Your session, and how long it lasts</h2>
+<p>There is no sign-up. Starting an analysis mints a URL of the form
+<code>?s=&lt;code&gt;&amp;edit=&lt;secret&gt;</code>, and that URL is the only credential the
+session has. Nothing is emailed. A lost <code>edit=</code> token cannot be
+recovered, so bookmark it.</p>
+<p>Sharing is by URL. The <code>?s=</code> half alone is a view-only link — recipients
+see every result and can download everything, but cannot launch jobs or
+change anything. The masthead gives you both links as copy buttons. The
+demo session linked at the top of this page is exactly such a view-only
+link.</p>
+<p>Retention, all UTC:</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>When it goes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A session that never ran a job</td>
+<td>15 minutes after creation</td>
+</tr>
+<tr>
+<td>Job files (uploads and results)</td>
+<td>30 days after they were last touched</td>
+</tr>
+<tr>
+<td>Oldest jobs of a session over 5 GB</td>
+<td>At quarter past each hour, until it fits</td>
+</tr>
+</tbody>
+</table>
+<p>Job rows outlive their files, so history can list a run whose artefacts
+have gone. Download what matters rather than treating a bookmark as
+storage.</p>
+<h2 id="privacy">Privacy and cookies</h2>
+<p><strong>Your data is yours.</strong> Uploads and results are readable only through
+your session URL. Nothing is shared, published, or shown to other users,
+and no one else can enumerate your session. Files are deleted on the
+schedule above.</p>
+<p><strong>No accounts, ever.</strong> The service asks for no email address, no
+registration and no login, and there is no guest login either.</p>
+<p><strong>One cookie, and only if you say yes.</strong> A banner asks before anything
+persistent is written. The single cookie, <code>ph_recent_sessions</code>, holds
+the list of analyses this browser has opened so the landing page can
+show them to you; it lives a year, stays in your browser and never
+reaches the server. Decline and everything still works — you just keep
+your own links. Your answer is remembered in <code>ph_cookie_consent</code> so you
+are not asked again.</p>
+<p><strong>No third parties.</strong> No tracking cookies, no analytics, no external
+fonts or scripts. Every asset on every page is served from this domain,
+so opening these pages tells nobody but us that you did.</p>
+<h2 id="licence">Licence and citing</h2>
+<p>PocketHunter Suite and the PocketHunter pipeline are released under the
+<strong>MIT licence</strong> — free to use, copy, modify, redistribute and self-host,
+academically or commercially, provided the copyright notice travels
+along. Source:
+<a href="https://github.com/costbio/PocketHunter-Suite">PocketHunter-Suite</a> ·
+<a href="https://github.com/costbio/PocketHunter">PocketHunter</a>.</p>
+<p>The external tools keep their own terms: p2rank is MIT, Mol* is MIT,
+and SMINA has its own. Check those before redistributing a bundle that
+includes them.</p>
+<p>If this service contributed to something you publish, most of the work
+was done by other people's tools — the
+<a href="/app/static/tutorial/index.html#citing">tutorial's citing section</a>
+lists each with its DOI: p2rank for the pocket detection, SMINA and
+Vinardo for the docking, Mol* for the viewer, and the paper behind
+whichever ranking metric you quote.</p>
+<h2 id="problems">When something goes wrong</h2>
+<p>A failed job renders one card: a red headline, a suggestion, a <strong>Show
+full error details</strong> expander with the raw exception, and a
+<strong>Download error log</strong> button when the job wrote one. Read the headline,
+then open the details — the headline is a category and the exception is
+the fact.</p>
+<p>The <a href="/app/static/tutorial/index.html#troubleshooting">tutorial's troubleshooting section</a>
+carries the full table of headlines with causes and fixes, including the
+stage-specific messages for zero pockets, zero clusters, and partial
+docking failures.</p>
+<p>Two things that are not failures and read like them: <em>You already have
+1/1 docking job(s) running in this session</em> and <em>The docking pool is
+busy</em> are concurrency caps and clear on their own.</p>
+<p>If you have found a genuine bug — a wrong number, a crash, a result you
+can show is incorrect — the error log plus the session's short code is
+what makes it fixable. Send both.</p>
+<h2 id="contact">Contact</h2>
+<p>The service is built and run by the
+<a href="https://costbio.github.io">COSTBIO group</a> at Gebze Technical
+University. Questions, bug reports and feature requests go to the group
+via that page; bugs are best filed as issues on
+<a href="https://github.com/costbio/PocketHunter-Suite/issues">the repository</a>,
+where they are visible and get tracked.</p></main>
+</div>
+<footer>Built 2026-08-16 · <a href="/">Back to the app</a></footer>
+</body>
+</html>

@@ -98,7 +98,7 @@ def _example_data_available() -> bool:
 
 def _create_example_session() -> "object | None":
     """B3.1: one-click demo — create a session and auto-dispatch a find_pockets
-    job against the bundled trypsin trajectory under ``examples/trypsin/``.
+    job against the bundled TEM-1 ensemble under ``examples/tem1/``.
 
     The user lands directly in the running state of the Find Pockets
     panel; no upload required. Honours the per-IP rate limit + CAPTCHA
@@ -118,7 +118,7 @@ def _create_example_session() -> "object | None":
         return None
 
     # Stage the example trajectory (configurable via EXAMPLE_TRAJECTORY_DIR;
-    # default ./examples/trypsin) into the new session's uploads dir, then
+    # default ./examples/tem1) into the new session's uploads dir, then
     # dispatch a find_pockets job against it.
     example_dir = Path(Config.EXAMPLE_TRAJECTORY_DIR)
     src_xtc = example_dir / "trajectory.xtc"
@@ -663,16 +663,6 @@ def _build_pool_load_chips_html() -> str:
     )
 
 
-@st.dialog("Help")
-def _help_dialog() -> None:
-    st.markdown(
-        "**Help is on the way.**\n\n"
-        "A help centre with FAQs, troubleshooting, and the PocketHunter "
-        "method paper is being prepared. In the meantime, questions go "
-        "to **costbio@gtubeng** via the link at the bottom of the nav row."
-    )
-
-
 def render_masthead(resolved: Optional[ResolvedSession] = None) -> None:
     """Unified brutalist masthead.
 
@@ -792,9 +782,8 @@ def render_masthead(resolved: Optional[ResolvedSession] = None) -> None:
             st.link_button("TUTORIAL", TUTORIAL_URL, key="nav_tutorial",
                            use_container_width=True)
         with nav_cols[2]:
-            if st.button("HELP", key="nav_help",
-                         use_container_width=True):
-                _help_dialog()
+            st.link_button("HELP", HELP_URL, key="nav_help",
+                           use_container_width=True)
         with nav_cols[3]:
             st.markdown(
                 f'<div class="bh-load-chips-row">{_build_pool_load_chips_html()}</div>',

@@ -1,11 +1,16 @@
 """Tests for landing.render_masthead — the unified brand + nav strip.
 
 render_masthead is split between (a) a top-row HTML markdown, (b) a
-nav row that uses st.columns containing 2 st.buttons (NEW SESSION,
-HELP) + 1 st.link_button (TUTORIAL) + 2 st.markdowns (chips + costbio),
+nav row that uses st.columns containing 1 st.button (NEW SESSION) +
+2 st.link_buttons (TUTORIAL, HELP) + 2 st.markdowns (chips + costbio),
 and (c) the surrounding st.container. We capture all relevant calls so
 tests can assert on the concatenated HTML AND on which buttons / links
 / widget keys were created.
+
+Both link_buttons point at static pages under /app/static/. Streamlit
+renders link_button as an <a>, not a <button>, which is why they land in
+'link_buttons' rather than 'buttons' — and why main.py's masthead CSS
+needs an `a` selector for each of them.
 
 Shape (v3, post nav-buttonisation):
 
@@ -120,9 +125,9 @@ class TestRenderMastheadNoSession:
         # (v3 — previously NEW SESSION was suppressed on landing).
         keys = [b["key"] for b in cap["buttons"]]
         assert "nav_new_session" in keys
-        assert "nav_help" in keys
         link_keys = [b["key"] for b in cap["link_buttons"]]
         assert "nav_tutorial" in link_keys
+        assert "nav_help" in link_keys
 
     def test_intro_sentence_present_when_no_session(self):
         """Brand row's session-info slot is reused for a one-sentence
@@ -198,15 +203,15 @@ class TestRenderMastheadViewer:
 
 class TestRenderMastheadNav:
     def test_nav_row_with_session_has_all_three_buttons_and_costbio(self):
-        """Nav row holds 3 Streamlit buttons (NEW SESSION / TUTORIAL /
-        HELP) plus pool-load chips plus the costbio link, regardless of
-        whether a session is loaded."""
+        """Nav row holds NEW SESSION (a button) plus TUTORIAL and HELP
+        (link_buttons to static pages), plus pool-load chips plus the
+        costbio link, regardless of whether a session is loaded."""
         cap = _render_to_capture(resolved=_make_resolved())
         keys = [b["key"] for b in cap["buttons"]]
         assert "nav_new_session" in keys
-        assert "nav_help" in keys
         link_keys = [b["key"] for b in cap["link_buttons"]]
         assert "nav_tutorial" in link_keys
+        assert "nav_help" in link_keys
         # Costbio link still rendered (its own st.markdown).
         assert "bh-group-link" in cap["html"]
 
@@ -216,9 +221,9 @@ class TestRenderMastheadNav:
         cap = _render_to_capture(resolved=None)
         keys = [b["key"] for b in cap["buttons"]]
         assert "nav_new_session" in keys
-        assert "nav_help" in keys
         link_keys = [b["key"] for b in cap["link_buttons"]]
         assert "nav_tutorial" in link_keys
+        assert "nav_help" in link_keys
         assert "bh-group-link" in cap["html"]
 
     def test_new_session_button_has_uppercase_label(self):
@@ -244,10 +249,16 @@ class TestTutorialLink:
         import landing
         assert not hasattr(landing, "_tutorial_dialog")
 
-    def test_help_stays_a_dialog_button(self):
-        """Only TUTORIAL changes; HELP has no page to point at yet."""
+    def test_help_is_a_link_button_to_the_static_page(self):
+        """HELP was a placeholder dialog until the help page existed."""
         cap = _render_to_capture(resolved=None)
-        assert "nav_help" in [b["key"] for b in cap["buttons"]]
+        link = next(b for b in cap["link_buttons"] if b["key"] == "nav_help")
+        assert link["label"] == "HELP"
+        assert link["url"] == "/app/static/help/index.html"
+
+    def test_help_placeholder_dialog_is_gone(self):
+        import landing
+        assert not hasattr(landing, "_help_dialog")
 
 
 # ── Costbio affiliation link ────────────────────────────────────────────

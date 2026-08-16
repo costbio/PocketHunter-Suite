@@ -35,6 +35,7 @@ static/js/*.map
 # So is the built tutorial page — a build artefact of docs/tutorial/,
 # committed so the rendered result is reviewable in a diff.
 !static/tutorial/
+!static/help/
 # And the vendored webfont (self-hosted so no page contacts a third
 # party) plus the published sample data. Both are source, not runtime
 # artefacts — a clone without them renders in a fallback font and offers

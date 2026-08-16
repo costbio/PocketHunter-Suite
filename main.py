@@ -56,10 +56,19 @@ st.set_page_config(
     page_title="PocketHunter Suite",
         layout="wide",
     initial_sidebar_state="collapsed",
+    # These were placeholder your-repo URLs that 404'd for anyone who
+    # clicked them. Get Help points at the help page rather than the
+    # repository — someone reaching for help wants to read how to use the
+    # thing, not browse source.
     menu_items={
-        'Get Help': 'https://github.com/your-repo/pockethunter',
-        'Report a bug': "https://github.com/your-repo/pockethunter/issues",
-        'About': "# PocketHunter Suite\nA modern molecular dynamics pocket detection and analysis tool.",
+        'Get Help': '/app/static/help/index.html',
+        'Report a bug': "https://github.com/costbio/PocketHunter-Suite/issues",
+        'About': (
+            "# PocketHunter Suite\n\n"
+            "Pocket detection, clustering and ensemble docking for "
+            "molecular-dynamics trajectories. Free and open source under "
+            "the MIT licence — https://github.com/costbio/PocketHunter-Suite"
+        ),
     },
 )
 
@@ -106,18 +115,19 @@ st.markdown("""
     /* Compact buttons inside the masthead — match the visual weight of
        the prior .bh-newsession link (small, brutalist, no rounding).
 
-       nav_tutorial is listed twice on purpose. NEW SESSION and HELP are
-       st.buttons and match the `button` selector; TUTORIAL is an
-       st.link_button, which Streamlit renders as an <a href> and not a
-       <button> at all, so the `a` line is the one actually styling it.
-       Delete either while tidying the list and the masthead's only link
-       silently reverts to Streamlit's default anchor — no test catches
-       it, because the masthead tests assert on the Python-side capture
-       rather than on this CSS. */
+       TUTORIAL and HELP are st.link_buttons, which Streamlit renders as
+       <a href> and not <button> at all, so their `a` lines are the ones
+       actually styling them; NEW SESSION is an st.button and matches
+       `button`. The unused `button` lines for the two links are kept
+       because Streamlit has changed this element before. Delete an `a`
+       line while tidying and that link silently reverts to Streamlit's
+       default anchor — no test catches it, because the masthead tests
+       assert on the Python-side capture rather than on this CSS. */
     .st-key-nav_new_session button,
     .st-key-nav_tutorial button,
     .st-key-nav_tutorial a,
-    .st-key-nav_help button {
+    .st-key-nav_help button,
+    .st-key-nav_help a {
         font-family: 'JetBrains Mono', ui-monospace, monospace !important;
         font-size: 0.85rem !important;
         font-weight: 600 !important;
@@ -132,7 +142,8 @@ st.markdown("""
     .st-key-nav_new_session button:hover:not(:disabled),
     .st-key-nav_tutorial button:hover:not(:disabled),
     .st-key-nav_tutorial a:hover,
-    .st-key-nav_help button:hover:not(:disabled) {
+    .st-key-nav_help button:hover:not(:disabled),
+    .st-key-nav_help a:hover {
         background: #e0e0e0 !important;
         color: #000 !important;
     }

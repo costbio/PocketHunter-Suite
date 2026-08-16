@@ -1,37 +1,64 @@
-# The tutorial page
+# The documentation pages
 
-Everything editable for `https://pockethunter.bio-cloud.site/app/static/tutorial/index.html`
-lives in this directory.
+Everything editable for the two hosted documentation pages lives in this
+directory. They share one template, one build and one stylesheet:
+
+| Page | Source | Served at |
+| --- | --- | --- |
+| Tutorial — the guided walkthrough | `tutorial.md` | `/app/static/tutorial/index.html` |
+| Help — how to read the results | `help.md` | `/app/static/help/index.html` |
 
 ```
-tutorial.md              the prose — this is what you edit
+tutorial.md              the walkthrough — stage by stage, with screenshots
+help.md                  the reference — what the numbers mean, licence, privacy
 template.html            page shell: theme CSS, masthead, TOC slot
-img/                     screenshots
-build.py                 compiles tutorial.md + template.html into the served page
+img/                     screenshots (tutorial only)
+build.py                 compiles both pages; PAGES at the top is the list
 capture_screenshots.py   drives the live service with Playwright to re-take img/
 requirements-build.txt   build-time dependency (markdown), not a runtime one
 ```
 
-Two related files sit outside this directory and cannot move:
+Which page does a given fact belong on? The tutorial answers "how do I do this";
+the help page answers "what does this output mean". A control's range and default
+goes in the tutorial's parameter reference. A column's interpretation goes in
+help. When in doubt, prefer help for anything a reader needs *after* a job
+finishes — NAR requires the help page specifically to carry result interpretation.
 
-- `tests/test_tutorial_build.py` — CI runs `pytest tests/`, so a test moved out of
-  that directory silently stops running.
-- `static/tutorial/` — the build output. Streamlit serves `static/` under
-  `/app/static/` (`enableStaticServing` in `.streamlit/config.toml`), which is how
-  the page reaches a browser at all.
+Related files outside this directory that cannot move:
+
+- `tests/test_tutorial_build.py`, `tests/test_help_build.py` — CI runs
+  `pytest tests/`, so a test moved out of that directory silently stops running.
+- `static/tutorial/`, `static/help/` — the build output. Streamlit serves
+  `static/` under `/app/static/` (`enableStaticServing` in
+  `.streamlit/config.toml`), which is how the pages reach a browser at all.
+  Both are unignored in `.gitignore`; `static/*/` would otherwise swallow them.
+- `static/fonts/` — the self-hosted webfont both pages link. No page may fetch
+  anything from a third-party host; `tests/test_no_third_party_assets.py`
+  enforces that by scanning for external subresources.
 
 ## Editing
 
 ```bash
-$EDITOR docs/tutorial/tutorial.md
-python docs/tutorial/build.py
-python -m pytest tests/test_tutorial_build.py -q
+$EDITOR docs/tutorial/help.md        # or tutorial.md
+python docs/tutorial/build.py        # builds BOTH pages
+python -m pytest tests/test_tutorial_build.py tests/test_help_build.py -q
 ```
 
-**Never edit `static/tutorial/index.html`.** It is generated, and the next build
-overwrites it. `test_committed_page_is_a_current_render_of_its_sources` fails if
-the committed page and its sources disagree, so a forgotten rebuild is caught
+**Never edit `static/tutorial/index.html` or `static/help/index.html`.** They are
+generated, and the next build overwrites them. Each page has a staleness test that
+re-renders the source and compares byte-for-byte, so a forgotten rebuild is caught
 rather than shipped.
+
+## The demo session link
+
+The help page links a live, view-only session as its "sample output that performs
+interactively in the same way as real output" — a NAR requirement that screenshots
+do not satisfy. That session is **pinned** (`sessions.pinned`), which exempts it
+from all three cleanup sweeps; see `db/sessions.pinned_job_legacy_ids`.
+
+If you ever replace it, pin the new one *before* publishing the link, and never
+publish the `?edit=` half. `test_the_demo_link_is_view_only` fails the build if an
+edit token appears in a published URL.
 
 Both the source and the built page are committed. That is deliberate: it makes the
 rendered result reviewable in a diff, and it means a deploy is a file copy rather
