@@ -377,6 +377,29 @@ st.markdown("""
         text-decoration-thickness: 2px;
     }
 
+    /* Landing-page footer carrying the licence, source links and the
+       cookie notice. Muted and small — it is a legal/provenance strip,
+       not navigation — but deliberately not hidden: the NAR Web Server
+       Issue requires the licence to be visible on the landing page. */
+    .bh-footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 1.5rem;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 0.75rem;
+        line-height: 1.6;
+        color: #666;
+    }
+    .bh-footer a {
+        color: #444 !important;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+    .bh-footer a:hover {
+        color: #000 !important;
+        text-decoration-thickness: 2px;
+    }
+
     /* Inline pool-load chips inside the nav row — between NEW SESSION
        and the costbio link. Smaller font (0.75rem vs the nav row's
        0.9rem) so the busiest copy ("FAST ██████ 6/6 busy · 2 queued ·

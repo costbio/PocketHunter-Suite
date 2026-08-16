@@ -37,6 +37,15 @@ from session_routes import (
 # Relative URL for the static tutorial page (Streamlit's static-file route
 # serves it at this path — no host/scheme coupling).
 TUTORIAL_URL = "/app/static/tutorial/index.html"
+HELP_URL = "/app/static/help/index.html"
+
+# Repository + licence. Shown on the landing page because the NAR Web
+# Server Issue requires a standard licence to be visible there, not
+# merely present in the source tree.
+REPO_URL = "https://github.com/costbio/PocketHunter-Suite"
+CORE_REPO_URL = "https://github.com/costbio/PocketHunter"
+LICENSE_URL = f"{REPO_URL}/blob/main/LICENSE"
+LICENSE_NAME = "MIT"
 
 
 def _render_captcha_if_enabled(*, key: str) -> tuple[bool, str | None]:
@@ -254,6 +263,34 @@ def render_landing() -> None:
                 navigate_to_session(short, edit_secret=secret)
 
     _render_recent_sessions()
+    render_landing_footer()
+
+
+def render_landing_footer() -> None:
+    """Licence, source and contact, shown on the landing page.
+
+    Kept a plain function rather than inlined so the licence line stays
+    unit-testable: the NAR Web Server Issue requires a standard licence
+    to be *visible on the landing page*, and a requirement that is only
+    satisfied by a string buried in a layout is one a refactor can drop
+    without anyone noticing.
+    """
+    st.divider()
+    st.markdown(
+        f'<div class="bh-footer">'
+        f'<span>PocketHunter Suite is free and open-source software, '
+        f'released under the <a href="{LICENSE_URL}" target="_blank" '
+        f'rel="noopener noreferrer">{LICENSE_NAME} licence</a>. '
+        f'Free for academic and commercial use alike.</span>'
+        f'<span>Source: '
+        f'<a href="{REPO_URL}" target="_blank" rel="noopener noreferrer">suite</a>'
+        f' · '
+        f'<a href="{CORE_REPO_URL}" target="_blank" rel="noopener noreferrer">pipeline</a>'
+        f' · <a href="{TUTORIAL_URL}">tutorial</a>'
+        f' · <a href="{HELP_URL}">help</a></span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_recent_sessions() -> None:
