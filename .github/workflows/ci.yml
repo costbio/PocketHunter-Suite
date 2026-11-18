@@ -65,7 +65,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ hashFiles('**/Dockerfile', '**/worker.Dockerfile', '**/streamlit.Dockerfile', '**/orchestrator.Dockerfile', '**/requirements.txt', '**/worker-requirements.txt') }}
+          # Explicit paths, not '**' globs: the post-job cache save re-evaluates
+          # this key after the stack ran, and '**' then walks into
+          # container-owned dirs (pgdata/, results/) the runner cannot read,
+          # which fails the whole job with "The template is not valid".
+          key: ${{ runner.os }}-buildx-${{ hashFiles('worker.Dockerfile', 'streamlit.Dockerfile', 'orchestrator.Dockerfile', 'requirements.txt', 'worker-requirements.txt', 'PocketHunter/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-buildx-
 
@@ -77,6 +81,13 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f docker-compose.test.yml \
             build streamlit celery-beat orchestrator
+
+      - name: Create writable bind-mount directories
+        run: |
+          # Without this, Docker creates them root-owned on first mount and
+          # the UID-1000 containers cannot write logs, uploads or results.
+          mkdir -p uploads results logs
+          chmod 777 uploads results logs
 
       - name: Bring up the full test stack (orchestrator spawns workers)
         run: |
