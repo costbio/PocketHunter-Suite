@@ -167,8 +167,14 @@ def xtc_to_pdb_conversion(xtc_file, topology, stride, outfolder, overwrite, conf
         os.makedirs(outfolder, exist_ok=True)
         pdb_files = []
         for i, frame in enumerate(traj):
-            real_frame_number = (i+1)*stride
-            pdb_file = os.path.join(outfolder, f"{os.path.splitext(os.path.basename(xtc_file))[0]}_{real_frame_number}.pdb")
+            # md.load_xtc(..., stride=stride) has already applied the stride:
+            # element i of traj is original (unstrided) frame i*stride. Do not
+            # add 1 here -- that would label each extracted structure with the
+            # frame *after* the one it was actually cut from (e.g. the
+            # structure from original frame 0 would be named "_10.pdb" at
+            # stride=10), which is silently wrong rather than out of range.
+            original_frame_index = i*stride
+            pdb_file = os.path.join(outfolder, f"{os.path.splitext(os.path.basename(xtc_file))[0]}_{original_frame_index}.pdb")
             frame.save_pdb(pdb_file)
             pdb_files.append(pdb_file)
             # Log progress every 10%
@@ -372,6 +378,16 @@ def hierarchical_clustering(data, method='ward', threshold=1.0):
     cluster_labels = fcluster(linkage_matrix, t=threshold, criterion='distance')
     return cluster_labels
 
+def sequence_to_binary(sequence, residues_list):
+    """Return a 0/1 Series marking which residues in residues_list occur in sequence.
+
+    Residue IDs are matched as whole tokens. A substring test on the raw
+    string (`res in sequence`) makes "A_12" match inside "A_123" (issue #10).
+    """
+    present = set(str(sequence).split())
+    binary_vector = [1 if res in present else 0 for res in residues_list]
+    return pd.Series(binary_vector, index=residues_list)
+
 def perform_clustering(infile, outfolder, method, depth, min_prob, config, hierarchical=False):
 
     logger = config['logger']
@@ -393,11 +409,6 @@ def perform_clustering(infile, outfolder, method, depth, min_prob, config, hiera
     all_residues = [residue for residue in all_residues if residue != '']
 
     unique_residues = sorted(list(set(all_residues)))  # Get unique residues and sort them for consistency
-
-    # Function to create binary vector
-    def sequence_to_binary(sequence, residues_list):
-        binary_vector = [1 if res in sequence else 0 for res in residues_list]
-        return pd.Series(binary_vector, index=residues_list)
 
     # Apply the function and create the binary DataFrame
     logger.info('Binarizing the pocket data frame.')
