@@ -404,9 +404,7 @@ parent.</p>
 <p>When DBSCAN finds nothing the panel says so and names the two usual
 causes: <code>min_prob</code> filtered out too much, or too few pockets survived to
 form a dense group. Lowering the threshold and re-running Find pockets at
-a smaller stride are the fixes. Switching <strong>Method</strong> to hierarchical will
-always return clusters, which is occasionally what you want and never
-evidence that the clusters mean anything.</p>
+a smaller stride are the fixes.</p>
 <h2 id="dock">Dock</h2>
 <p>Docking needs two things: a set of pockets and a set of ligands. Pockets
 arrive in a bucket that carries across stages, filled either from <strong>Add
@@ -670,13 +668,6 @@ for the rest of the browser session.</p>
 <td>0.00 to 1.00, step 0.05</td>
 <td>0.50</td>
 <td>Rows below it are dropped before the residue vectors are built, so it changes the clustering itself</td>
-</tr>
-<tr>
-<td>Method</td>
-<td>Cluster, settings</td>
-<td>dbscan · hierarchical</td>
-<td>dbscan</td>
-<td>DBSCAN can return nothing; hierarchical always returns something</td>
 </tr>
 <tr>
 <td>Hierarchical refinement</td>
@@ -1007,6 +998,6 @@ run your own instance or build on the code, ask the authors first —
 p2rank ships MIT and SMINA has its own terms, but the PocketHunter
 repositories currently say nothing at all.</p></main>
 </div>
-<footer>Built 2026-08-05 · <a href="/">Back to the app</a></footer>
+<footer>Built 2026-11-18 · <a href="/">Back to the app</a></footer>
 </body>
 </html>

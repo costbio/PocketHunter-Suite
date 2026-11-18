@@ -411,13 +411,9 @@ def _render_settings(session, is_editor: bool) -> None:
         help="Pockets below this p2rank probability are filtered before clustering.",
     )
 
-    method = st.selectbox(
-        "Method",
-        options=["dbscan", "hierarchical"],
-        index=0,
-        key="cluster_method",
-        help="DBSCAN groups dense regions; Hierarchical always produces clusters.",
-    )
+    # PocketHunter's `--method hierarchical` writes no output (only the dbscan
+    # branch is implemented upstream), so DBSCAN is the only working method.
+    method = "dbscan"
 
     if method == "dbscan":
         st.checkbox(
@@ -767,9 +763,7 @@ def _render_results(latest_job: dict, is_editor: bool, session) -> None:
             "Try:\n"
             "- Lower **`min_prob`** in the settings (defaults to 0.5).\n"
             "- Re-run **Find Pockets** with a smaller stride to extract "
-            "more frames.\n"
-            "- Switch the method to **hierarchical** — it always "
-            "produces clusters, at the cost of less-meaningful groupings."
+            "more frames."
         )
         return
 
