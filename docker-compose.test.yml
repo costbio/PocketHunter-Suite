@@ -21,3 +21,18 @@ services:
       - ORCHESTRATOR_TICK_SECONDS=5
       # Recycle after fewer jobs so the recycle path is exercised in CI.
       - WORKER_JOBS_BEFORE_RECYCLE=3
+    # CI runners have working DNS on the default bridge, so the
+    # `build.network: host` that production needs on its host isn't
+    # needed here — and since Compose builds through `buildx bake` it
+    # demands an explicit `--allow=network.host` entitlement that
+    # `docker compose build` has no flag for. Override it for CI only.
+    build:
+      network: default
+
+  streamlit:
+    build:
+      network: default
+
+  celery-beat:
+    build:
+      network: default
