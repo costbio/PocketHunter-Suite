@@ -78,6 +78,13 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.test.yml \
             build streamlit celery-beat orchestrator
 
+      - name: Create writable bind-mount directories
+        run: |
+          # Without this, Docker creates them root-owned on first mount and
+          # the UID-1000 containers cannot write logs, uploads or results.
+          mkdir -p uploads results logs
+          chmod 777 uploads results logs
+
       - name: Bring up the full test stack (orchestrator spawns workers)
         run: |
           docker compose -f docker-compose.yml -f docker-compose.test.yml up -d

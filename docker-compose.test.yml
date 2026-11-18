@@ -32,6 +32,12 @@ services:
   streamlit:
     build:
       network: default
+    environment:
+      # Production sets this in .env; CI has no .env, and the settings
+      # default (/app/pockethunter-suite.log) sits in the runner-owned
+      # checkout that UID 1000 cannot write, so importing logging_config
+      # fails test collection. Point it at the logs/ bind mount instead.
+      - LOG_FILE=/app/logs/pockethunter-suite.log
 
   celery-beat:
     build:
