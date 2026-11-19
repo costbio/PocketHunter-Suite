@@ -131,8 +131,12 @@ class TestBuiltPage:
         """
         text = re.sub(r"<[^>]+>", "", html)
         assert r"Mol\*" not in text, "an escaped asterisk leaked into the output"
-        assert md.count(r"Mol\*") == text.count("Mol*") > 0, (
-            f"source has {md.count(r'Mol\\*')} escaped Mol*, "
+        # Counted outside the f-string: a backslash inside an f-string
+        # expression is a SyntaxError before Python 3.12, and the
+        # containers run 3.10 — the whole module failed to collect.
+        escaped = md.count(r"Mol\*")
+        assert escaped == text.count("Mol*") > 0, (
+            f"source has {escaped} escaped Mol*, "
             f"output has {text.count('Mol*')} literal ones — an unescaped "
             "asterisk was consumed as emphasis"
         )
