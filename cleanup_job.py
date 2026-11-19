@@ -222,9 +222,27 @@ def cleanup_old_jobs_task():
     """
     logger.info("Starting periodic cleanup task")
 
+    # Which job directories must survive regardless of age. Resolve this
+    # BEFORE the sweep and bail out if it fails: cleanup_old_jobs treats an
+    # empty set as "protect nothing", so a DB outage would otherwise delete
+    # a pinned session's artefacts on the next tick. Skipping a sweep is
+    # recoverable; an rmtree is not.
+    try:
+        from db.sessions import pinned_job_legacy_ids
+        protected = pinned_job_legacy_ids()
+    except Exception as e:
+        logger.error(
+            "Cleanup aborted: could not resolve pinned jobs (%s). Skipping "
+            "this sweep rather than risk deleting protected artefacts.", e,
+        )
+        return {'status': 'error', 'error': f'pinned-job lookup failed: {e}',
+                'deleted_count': 0, 'deleted_jobs': []}
+
     try:
         # Perform cleanup (not a dry run)
-        deleted_jobs = ResourceManager.cleanup_old_jobs(dry_run=False)
+        deleted_jobs = ResourceManager.cleanup_old_jobs(
+            dry_run=False, protected_job_ids=protected,
+        )
 
         # Also clean up temporary files
         temp_files_deleted = ResourceManager.cleanup_temp_files()
@@ -324,7 +342,10 @@ def enforce_session_disk_quotas_task():
     try:
         with get_db() as db:
             rows = db.scalars(
-                select(SessionRow).where(SessionRow.expired_at.is_(None))
+                select(SessionRow).where(
+                    SessionRow.expired_at.is_(None),
+                    SessionRow.pinned.is_(False),
+                )
             ).all()
             for s in rows:
                 used = disk_usage_mb(s.id, db=db)
@@ -403,6 +424,7 @@ def cleanup_abandoned_sessions_task():
         with get_db() as db:
             stmt = select(Session).where(
                 Session.created_at < cutoff,
+                Session.pinned.is_(False),
                 not_(exists().where(Job.session_id == Session.id)),
             )
             rows = list(db.scalars(stmt).all())
