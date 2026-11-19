@@ -194,6 +194,35 @@ def disk_usage_mb(session_id, *, db: Optional[OrmSession] = None) -> float:
     return bytes_total / (1024 * 1024)
 
 
+def pinned_job_legacy_ids(*, db: Optional[OrmSession] = None) -> set[str]:
+    """Disk job-ids belonging to pinned sessions.
+
+    ``ResourceManager.cleanup_old_jobs`` walks the uploads and results
+    directories and deletes by mtime alone — it has no view of the
+    database, and keeping it that way is deliberate (it is a filesystem
+    utility, usable on a box with no DB reachable). So the protection
+    set is computed here and handed to it, rather than teaching it to
+    query.
+
+    Returns an empty set on any DB error. That is the safe direction for
+    a *quota* check but the unsafe one here, since an empty set means
+    "protect nothing" — callers that cannot tolerate losing a pinned
+    session's artefacts should treat a DB outage as a reason to skip the
+    sweep entirely, which ``cleanup_old_jobs_task`` does.
+    """
+    from db.models import Job, Session as _SessionRow
+
+    stmt = (
+        select(Job.legacy_id)
+        .join(_SessionRow, Job.session_id == _SessionRow.id)
+        .where(_SessionRow.pinned.is_(True), Job.legacy_id.is_not(None))
+    )
+    if db is None:
+        with get_db() as inner_db:
+            return {r for r in inner_db.scalars(stmt).all() if r}
+    return {r for r in db.scalars(stmt).all() if r}
+
+
 def mark_expired(session: SessionRow, *, db: Optional[OrmSession] = None) -> None:
     """Set ``expired_at`` to now (idempotent)."""
     if session.expired_at is not None:

@@ -52,14 +52,39 @@ from session_routes import resolve_session_from_query, set_session_in_state
 import recent_sessions
 
 
+# Public origin for the menu links below. Falls back to the production
+# host so a missing BASE_URL degrades to a slightly wrong link rather
+# than to an unstartable app.
+def _menu_base() -> str:
+    import os
+
+    return (os.environ.get("BASE_URL") or "https://pockethunter.bio-cloud.site").rstrip("/")
+
+
+_MENU_BASE = _menu_base()
+
 st.set_page_config(
     page_title="PocketHunter Suite",
         layout="wide",
     initial_sidebar_state="collapsed",
+    # These were placeholder your-repo URLs that 404'd for anyone who
+    # clicked them. Get Help points at the help page rather than the
+    # repository — someone reaching for help wants to read how to use the
+    # thing, not browse source.
+    #
+    # Absolute, and built from BASE_URL rather than hardcoded: Streamlit's
+    # validate_menu_items rejects a relative path outright and raises on
+    # every script run, which takes the whole app down rather than just
+    # breaking the menu entry.
     menu_items={
-        'Get Help': 'https://github.com/your-repo/pockethunter',
-        'Report a bug': "https://github.com/your-repo/pockethunter/issues",
-        'About': "# PocketHunter Suite\nA modern molecular dynamics pocket detection and analysis tool.",
+        'Get Help': f"{_MENU_BASE}/app/static/help/index.html",
+        'Report a bug': "https://github.com/costbio/PocketHunter-Suite/issues",
+        'About': (
+            "# PocketHunter Suite\n\n"
+            "Pocket detection, clustering and ensemble docking for "
+            "molecular-dynamics trajectories. Free and open source under "
+            "the MIT licence — https://github.com/costbio/PocketHunter-Suite"
+        ),
     },
 )
 
@@ -68,6 +93,44 @@ st.set_page_config(
 # Global theming (fonts, colors, borders, radii) lives in .streamlit/config.toml.
 st.markdown("""
 <style>
+    /* Self-hosted JetBrains Mono. Declared inline rather than linked,
+       because .streamlit/config.toml's `font = "Family:url"` form
+       silently ignored a root-relative stylesheet — no fetch, no face,
+       and a fallback to Source Sans that looked correct on any machine
+       with the font installed locally. Inline @font-face has no URL
+       resolution to get wrong; the src paths below are absolute against
+       the static route. See static/fonts/OFL.txt for the licence. */
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: italic; font-weight: 400;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Italic.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 600;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-SemiBold.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'JetBrains Mono'; font-style: normal; font-weight: 800;
+        font-display: swap;
+        src: url('/app/static/fonts/JetBrainsMono-ExtraBold.woff2') format('woff2');
+    }
+
     /* Reclaim vertical space: hide Streamlit's top toolbar + tighten
        the main block's top padding. This frees roughly 80–110px of
        viewport height so the viewer + slider + panel fit without
@@ -106,18 +169,19 @@ st.markdown("""
     /* Compact buttons inside the masthead — match the visual weight of
        the prior .bh-newsession link (small, brutalist, no rounding).
 
-       nav_tutorial is listed twice on purpose. NEW SESSION and HELP are
-       st.buttons and match the `button` selector; TUTORIAL is an
-       st.link_button, which Streamlit renders as an <a href> and not a
-       <button> at all, so the `a` line is the one actually styling it.
-       Delete either while tidying the list and the masthead's only link
-       silently reverts to Streamlit's default anchor — no test catches
-       it, because the masthead tests assert on the Python-side capture
-       rather than on this CSS. */
+       TUTORIAL and HELP are st.link_buttons, which Streamlit renders as
+       <a href> and not <button> at all, so their `a` lines are the ones
+       actually styling them; NEW SESSION is an st.button and matches
+       `button`. The unused `button` lines for the two links are kept
+       because Streamlit has changed this element before. Delete an `a`
+       line while tidying and that link silently reverts to Streamlit's
+       default anchor — no test catches it, because the masthead tests
+       assert on the Python-side capture rather than on this CSS. */
     .st-key-nav_new_session button,
     .st-key-nav_tutorial button,
     .st-key-nav_tutorial a,
-    .st-key-nav_help button {
+    .st-key-nav_help button,
+    .st-key-nav_help a {
         font-family: 'JetBrains Mono', ui-monospace, monospace !important;
         font-size: 0.85rem !important;
         font-weight: 600 !important;
@@ -132,7 +196,8 @@ st.markdown("""
     .st-key-nav_new_session button:hover:not(:disabled),
     .st-key-nav_tutorial button:hover:not(:disabled),
     .st-key-nav_tutorial a:hover,
-    .st-key-nav_help button:hover:not(:disabled) {
+    .st-key-nav_help button:hover:not(:disabled),
+    .st-key-nav_help a:hover {
         background: #e0e0e0 !important;
         color: #000 !important;
     }
@@ -377,6 +442,45 @@ st.markdown("""
         text-decoration-thickness: 2px;
     }
 
+    /* Landing-page footer carrying the licence, source links and the
+       cookie notice. Muted and small — it is a legal/provenance strip,
+       not navigation — but deliberately not hidden: the NAR Web Server
+       Issue requires the licence to be visible on the landing page. */
+    .bh-footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 1.5rem;
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 0.75rem;
+        line-height: 1.6;
+        color: #666;
+    }
+    .bh-footer a {
+        color: #444 !important;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+    .bh-footer a:hover {
+        color: #000 !important;
+        text-decoration-thickness: 2px;
+    }
+
+    /* Cookie consent copy. Slightly larger than .bh-footer — it is a
+       question the visitor has to actually read and answer, not fine
+       print to be skimmed past. */
+    .bh-consent {
+        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-size: 0.8rem;
+        line-height: 1.65;
+        color: #333;
+        margin-bottom: 0.5rem;
+    }
+    .bh-consent code {
+        font-size: 0.75rem;
+        background: #f4f4f4;
+        padding: 0 0.25em;
+    }
+
     /* Inline pool-load chips inside the nav row — between NEW SESSION
        and the costbio link. Smaller font (0.75rem vs the nav row's
        0.9rem) so the busiest copy ("FAST ██████ 6/6 busy · 2 queued ·
@@ -497,6 +601,13 @@ set_session_in_state(_resolved)
 # before the page dispatch — both the landing page (lists recent
 # sessions) and the analysis page (records the current one) use it.
 recent_sessions.init()
+
+# Ask before writing the one persistent cookie this service sets. Must
+# come after recent_sessions.init() (it reuses that CookieManager) and
+# before any code path that could call record_session.
+import cookie_consent  # noqa: E402 — must follow the CookieManager mount
+
+cookie_consent.render_banner()
 
 # Mol* embedding spike entry-point. Unlinked from the main nav; used for
 # diagnostic checks when the viewer misbehaves.

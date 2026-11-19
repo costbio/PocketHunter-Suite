@@ -37,6 +37,23 @@ from session_routes import (
 # Relative URL for the static tutorial page (Streamlit's static-file route
 # serves it at this path — no host/scheme coupling).
 TUTORIAL_URL = "/app/static/tutorial/index.html"
+HELP_URL = "/app/static/help/index.html"
+
+# Repository + licence. Shown on the landing page because the NAR Web
+# Server Issue requires a standard licence to be visible there, not
+# merely present in the source tree.
+REPO_URL = "https://github.com/costbio/PocketHunter-Suite"
+CORE_REPO_URL = "https://github.com/costbio/PocketHunter"
+LICENSE_URL = f"{REPO_URL}/blob/main/LICENSE"
+LICENSE_NAME = "MIT"
+
+# The bundled sample data, published on the static route so it has a
+# stable URL that a paper or a help page can cite. These are copies of
+# examples/tem1/ — tests/test_sample_data_published.py asserts the two
+# stay byte-identical, since a drifted copy would document a format the
+# demo does not actually run.
+EXAMPLE_TOPOLOGY_URL = "/app/static/example/topology.pdb"
+EXAMPLE_TRAJECTORY_URL = "/app/static/example/trajectory.xtc"
 
 
 def _render_captcha_if_enabled(*, key: str) -> tuple[bool, str | None]:
@@ -81,7 +98,7 @@ def _example_data_available() -> bool:
 
 def _create_example_session() -> "object | None":
     """B3.1: one-click demo — create a session and auto-dispatch a find_pockets
-    job against the bundled trypsin trajectory under ``examples/trypsin/``.
+    job against the bundled TEM-1 ensemble under ``examples/tem1/``.
 
     The user lands directly in the running state of the Find Pockets
     panel; no upload required. Honours the per-IP rate limit + CAPTCHA
@@ -101,7 +118,7 @@ def _create_example_session() -> "object | None":
         return None
 
     # Stage the example trajectory (configurable via EXAMPLE_TRAJECTORY_DIR;
-    # default ./examples/trypsin) into the new session's uploads dir, then
+    # default ./examples/tem1) into the new session's uploads dir, then
     # dispatch a find_pockets job against it.
     example_dir = Path(Config.EXAMPLE_TRAJECTORY_DIR)
     src_xtc = example_dir / "trajectory.xtc"
@@ -232,6 +249,18 @@ def render_landing() -> None:
                 if row is None:
                     st.stop()
                 navigate_to_session(row.short_code, edit_secret=row.edit_secret)
+            # The same two files the button runs, downloadable, so anyone
+            # can check what the uploaders expect before preparing their
+            # own. Served straight off the static route rather than via
+            # st.download_button, which would have to hold 600 KB in
+            # memory on every landing-page render.
+            st.markdown(
+                f'<div class="bh-footer">Inspect the sample data: '
+                f'<a href="{EXAMPLE_TOPOLOGY_URL}" download>topology.pdb</a> · '
+                f'<a href="{EXAMPLE_TRAJECTORY_URL}" download>trajectory.xtc</a>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     with col_open:
         st.markdown("### Open an existing analysis")
@@ -254,6 +283,34 @@ def render_landing() -> None:
                 navigate_to_session(short, edit_secret=secret)
 
     _render_recent_sessions()
+    render_landing_footer()
+
+
+def render_landing_footer() -> None:
+    """Licence, source and contact, shown on the landing page.
+
+    Kept a plain function rather than inlined so the licence line stays
+    unit-testable: the NAR Web Server Issue requires a standard licence
+    to be *visible on the landing page*, and a requirement that is only
+    satisfied by a string buried in a layout is one a refactor can drop
+    without anyone noticing.
+    """
+    st.divider()
+    st.markdown(
+        f'<div class="bh-footer">'
+        f'<span>PocketHunter Suite is free and open-source software, '
+        f'released under the <a href="{LICENSE_URL}" target="_blank" '
+        f'rel="noopener noreferrer">{LICENSE_NAME} licence</a>. '
+        f'Free for academic and commercial use alike.</span>'
+        f'<span>Source: '
+        f'<a href="{REPO_URL}" target="_blank" rel="noopener noreferrer">suite</a>'
+        f' · '
+        f'<a href="{CORE_REPO_URL}" target="_blank" rel="noopener noreferrer">pipeline</a>'
+        f' · <a href="{TUTORIAL_URL}">tutorial</a>'
+        f' · <a href="{HELP_URL}">help</a></span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_recent_sessions() -> None:
@@ -606,16 +663,6 @@ def _build_pool_load_chips_html() -> str:
     )
 
 
-@st.dialog("Help")
-def _help_dialog() -> None:
-    st.markdown(
-        "**Help is on the way.**\n\n"
-        "A help centre with FAQs, troubleshooting, and the PocketHunter "
-        "method paper is being prepared. In the meantime, questions go "
-        "to **costbio@gtubeng** via the link at the bottom of the nav row."
-    )
-
-
 def render_masthead(resolved: Optional[ResolvedSession] = None) -> None:
     """Unified brutalist masthead.
 
@@ -735,9 +782,8 @@ def render_masthead(resolved: Optional[ResolvedSession] = None) -> None:
             st.link_button("TUTORIAL", TUTORIAL_URL, key="nav_tutorial",
                            use_container_width=True)
         with nav_cols[2]:
-            if st.button("HELP", key="nav_help",
-                         use_container_width=True):
-                _help_dialog()
+            st.link_button("HELP", HELP_URL, key="nav_help",
+                           use_container_width=True)
         with nav_cols[3]:
             st.markdown(
                 f'<div class="bh-load-chips-row">{_build_pool_load_chips_html()}</div>',
