@@ -21,3 +21,24 @@ services:
       - ORCHESTRATOR_TICK_SECONDS=5
       # Recycle after fewer jobs so the recycle path is exercised in CI.
       - WORKER_JOBS_BEFORE_RECYCLE=3
+    # CI runners have working DNS on the default bridge, so the
+    # `build.network: host` that production needs on its host isn't
+    # needed here — and since Compose builds through `buildx bake` it
+    # demands an explicit `--allow=network.host` entitlement that
+    # `docker compose build` has no flag for. Override it for CI only.
+    build:
+      network: default
+
+  streamlit:
+    build:
+      network: default
+    environment:
+      # Production sets this in .env; CI has no .env, and the settings
+      # default (/app/pockethunter-suite.log) sits in the runner-owned
+      # checkout that UID 1000 cannot write, so importing logging_config
+      # fails test collection. Point it at the logs/ bind mount instead.
+      - LOG_FILE=/app/logs/pockethunter-suite.log
+
+  celery-beat:
+    build:
+      network: default

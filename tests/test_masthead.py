@@ -161,19 +161,34 @@ class TestRenderMastheadEditor:
         assert "bh-session-row" not in html  # old class is gone
         assert "📁" in html
         assert "<strong>my run</strong>" in html
-        # URL with edit token visible + copy-button JS payload.
+        # URL with edit token visible + copy buttons. st.markdown strips
+        # inline onclick, so the buttons are data-copy-url spans and the
+        # click handler lives in streamlit.Dockerfile (see the test below).
         assert "ABC123" in html
         assert "EDIT_TOK" in html
         assert "edit=" in html
         assert "✏️" in html
         assert ">Editor" in html or "Editor<" in html
-        assert "bh-copy" in html
-        assert "navigator.clipboard.writeText" in html
+        assert 'class="bh-copy-btn"' in html
+        assert "data-copy-url=" in html
+        assert "editor link" in html
         # Session inline must appear BEFORE the right cluster (version
         # pill) in DOM order — nested in the top row, not below.
         inline_pos = html.index("bh-session-inline")
         right_pos = html.index("bh-right")
         assert inline_pos < right_pos
+
+    def test_copy_button_click_handler_is_injected_by_dockerfile(self):
+        # The masthead's .bh-copy-btn spans do nothing on their own; the
+        # document-level click handler is sed-injected into Streamlit's
+        # index.html at image build time. Guard that the two stay paired.
+        from pathlib import Path
+
+        dockerfile = (Path(__file__).resolve().parent.parent
+                      / "streamlit.Dockerfile").read_text()
+        assert ".bh-copy-btn" in dockerfile
+        assert "data-copy-url" in dockerfile
+        assert "navigator.clipboard.writeText" in dockerfile
 
     def test_editor_falls_back_to_short_code_when_no_display_name(self):
         resolved = _make_resolved(is_editor=True, display_name=None,
