@@ -334,9 +334,7 @@ or its representative's frame, never by its number.
 When DBSCAN finds nothing the panel says so and names the two usual
 causes: `min_prob` filtered out too much, or too few pockets survived to
 form a dense group. Lowering the threshold and re-running Find pockets at
-a smaller stride are the fixes. Switching **Method** to hierarchical will
-always return clusters, which is occasionally what you want and never
-evidence that the clusters mean anything.
+a smaller stride are the fixes.
 
 ## Dock
 
@@ -541,7 +539,6 @@ for the rest of the browser session.
 | Confidence | Find pockets, results | High · Medium · Low, any combination | All three ticked | View only — hides badge classes |
 | Source pockets | Cluster, settings | Completed pocket runs in this session, newest first | The newest one | Which `pockets.csv` gets clustered |
 | Min. ligand-binding probability | Cluster, settings | 0.00 to 1.00, step 0.05 | 0.50 | Rows below it are dropped before the residue vectors are built, so it changes the clustering itself |
-| Method | Cluster, settings | dbscan · hierarchical | dbscan | DBSCAN can return nothing; hierarchical always returns something |
 | Hierarchical refinement | Cluster, settings, DBSCAN only | On · off | On | Sub-clusters within each DBSCAN cluster, which is what makes the K spinners appear later |
 | K, per parent cluster | Cluster, Representatives tab | 1 up to the member count, capped at 10 | 1 | View only — 1 shows the DBSCAN medoid, higher re-cuts that cluster's dendrogram |
 | Ligand files | Dock, settings | `.pdbqt` · `.sdf` · `.pdb` · `.zip`, several at once | — | SDF and PDB are split into one PDBQT per molecule |

@@ -970,14 +970,17 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
     try:
         start_time = time.time()
 
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=current_working_dir,
-            text=True,
-            encoding='utf-8'
-        )
+        # Redirect to files, not PIPE: the poll loop below never drains the
+        # pipes, so >64 KB of DBSCAN log output would block the child forever.
+        # .live/ also lets the UI's live-log panel tail the run.
+        live_dir = os.path.join(job_main_output_folder, '.live')
+        os.makedirs(live_dir, exist_ok=True)
+        stdout_path = os.path.join(live_dir, 'cluster.stdout.log')
+        stderr_path = os.path.join(live_dir, 'cluster.stderr.log')
+        with open(stdout_path, 'w') as fout_h, open(stderr_path, 'w') as ferr_h:
+            process = subprocess.Popen(
+                command, stdout=fout_h, stderr=ferr_h, cwd=current_working_dir,
+            )
 
         # Progress tracking variables
         progress = 5
@@ -1018,7 +1021,11 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                 )
                 last_update = current_time
 
-        stdout, stderr = process.communicate(timeout=60)
+        process.wait()
+        with open(stdout_path, 'r', errors='replace') as f:
+            stdout = f.read()
+        with open(stderr_path, 'r', errors='replace') as f:
+            stderr = f.read()
         elapsed = time.time() - start_time
         returncode = process.returncode
         hierarchical_fallback = False
@@ -1120,8 +1127,7 @@ def run_cluster_pockets_task(self, pockets_csv_path_abs, job_id, min_prob, clust
                 from task_errors import ClusteringFoundNoClusters
                 err = ClusteringFoundNoClusters(
                     f"Clustering produced no representatives for job {job_id} at min_prob={min_prob}. "
-                    "Lower min_prob (try 0.3 or 0.2), reduce the trajectory stride, "
-                    "or switch to the Hierarchical method."
+                    "Lower min_prob (try 0.3 or 0.2) or reduce the trajectory stride."
                 )
                 _fail_job(self, job_id, 'cluster', err,
                           log_path=os.path.join(RESULTS_DIR, job_id, 'error.log'))

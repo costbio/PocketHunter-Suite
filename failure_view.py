@@ -127,8 +127,8 @@ def _no_output(exc_type: str, msg: str) -> ClassifiedError:
             headline="Clustering produced no clusters",
             suggestion=(
                 "DBSCAN found no dense pocket regions at the current threshold. "
-                "Lower min_prob (try 0.3 or 0.2), reduce the trajectory stride "
-                "to get more frames, or switch to the Hierarchical method."
+                "Lower min_prob (try 0.3 or 0.2) or reduce the trajectory stride "
+                "to get more frames."
             ),
         )
     if exc_type == "DetectionProducedNoOutput":

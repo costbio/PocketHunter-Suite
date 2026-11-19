@@ -18,10 +18,9 @@ class DetectionProducedNoOutput(Exception):
 class ClusteringFoundNoClusters(Exception):
     """The clustering subprocess succeeded but yielded zero clusters.
 
-    DBSCAN with the supplied ``min_prob`` threshold found no dense regions,
-    or hierarchical clustering produced no representatives. The user fix is
-    usually to lower ``min_prob``, lower the trajectory stride, or switch
-    clustering method.
+    DBSCAN with the supplied ``min_prob`` threshold found no dense regions.
+    The user fix is usually to lower ``min_prob`` or lower the trajectory
+    stride.
     """
 
 
